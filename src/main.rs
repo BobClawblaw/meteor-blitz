@@ -12,6 +12,7 @@ mod particles;
 mod play;
 mod progress;
 mod shyguy;
+mod snake;
 mod waves;
 
 use std::collections::HashMap;
@@ -433,6 +434,8 @@ async fn load_play_assets() -> PlayAssets {
         depot: load_sprite("depot").await,
         mine: load_sprite("mine").await,
         shy_guy: load_sprite("shyGuyFrames").await,
+        snake_head: load_sprite("pillHead.1").await,
+        snake_body: load_sprite("pillBody.1").await,
         boss: {
             let mut frames = Vec::new();
             for i in 1..=8 {

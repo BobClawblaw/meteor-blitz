@@ -177,6 +177,9 @@ pub struct PlayAssets {
     pub mine: Texture2D,
     /// shyGuyFrames.png: a 4x4 atlas of 32x32 frames.
     pub shy_guy: Texture2D,
+    /// pillHead.1.png and pillBody.1.png.
+    pub snake_head: Texture2D,
+    pub snake_body: Texture2D,
     /// bossInside.1-8 and ball.png (a boss piece).
     pub boss: Vec<Texture2D>,
     pub boss_piece: Texture2D,
@@ -729,6 +732,15 @@ impl Play {
                 hit = true;
             }
         }
+        // Snakes: a head loses its tail (or dies) when rammed; touching the
+        // head or body kills the ship unless it is boosting.
+        let (heads, body) = self.field.touching_snakes(self.ship.pos, SHIP_RADIUS);
+        let mut heads = heads;
+        heads.sort_unstable_by(|a, b| b.cmp(a));
+        hit |= (body || !heads.is_empty()) && !boosting;
+        for i in heads {
+            self.field.ram_snake(i);
+        }
         // Shy guys die on contact and take the ship with them unless boosting.
         let mut shy = self.field.touching_shy_guys(self.ship.pos, SHIP_RADIUS);
         shy.sort_unstable_by(|a, b| b.cmp(a));
@@ -973,6 +985,36 @@ impl Play {
                         self.effects.start(Kind::Point, 3, pos, away, false);
                     }
                 }
+                Event::SegmentDestroyed { pos, points, sound } => {
+                    if sound {
+                        self.sounds.push(SOUND_DEPOT_DESTROYED);
+                    }
+                    self.effects
+                        .start(Kind::Point, 7, pos, rand::gen_range(0.0, 360.0), false);
+                    self.score += (points * self.multiplier) as u64;
+                }
+                Event::SnakeDestroyed {
+                    pos,
+                    points,
+                    rings,
+                    sound,
+                    effects,
+                } => {
+                    if sound {
+                        self.sounds.push(SOUND_DEPOT_DESTROYED);
+                    }
+                    if effects {
+                        let a = rand::gen_range(0.0, 360.0);
+                        self.effects.start(Kind::Sprite, 7, pos, 0.0, false);
+                        for k in 0..4 {
+                            self.effects.start(Kind::Line, 7, pos, a + 90.0 * k as f32, false);
+                        }
+                        self.effects.start(Kind::Point, 7, pos, a, false);
+                    }
+                    self.score += (points * self.multiplier) as u64;
+                    self.pickups
+                        .drop(pos, MINE_RING_SPEED, rings, self.magnet > 0.0);
+                }
                 Event::ShyGuyDestroyed {
                     pos,
                     points,
@@ -1122,6 +1164,7 @@ impl Play {
             .chain(self.field.depots.iter().filter(|d| d.active()).map(|d| d.pos))
             .chain(self.field.mines.iter().filter(|m| m.active()).map(|m| m.pos))
             .chain(self.field.shy_guys.iter().filter(|g| g.active()).map(|g| g.pos))
+            .chain(self.field.snakes.iter().filter(|s| s.active()).map(|s| s.pos))
             .chain(self.field.pieces.iter().filter(|p| p.active()).map(|p| p.pos))
             .chain(self.field.boss.iter().filter(|b| b.active()).map(|b| b.pos))
             .map(|p| vec2(wrap_near(p.x, ship.x), wrap_near(p.y, ship.y)))
@@ -1280,6 +1323,26 @@ impl Play {
             let color = Color::new(1.0, 1.0, 1.0, m.alpha);
             let draw = || draw_sprite(&assets.mine, s.x, s.y, m.angle, self.z + m.z, color);
             if m.flash {
+                canvas.flashing(draw);
+            } else {
+                draw();
+            }
+        }
+        for sn in &self.field.snakes {
+            for seg in sn.segments.iter().rev() {
+                let s = self.to_screen(seg.pos);
+                let color = Color::new(1.0, 1.0, 1.0, seg.alpha);
+                let draw = || draw_sprite(&assets.snake_body, s.x, s.y, seg.angle, self.z + seg.z, color);
+                if seg.flash {
+                    canvas.flashing(draw);
+                } else {
+                    draw();
+                }
+            }
+            let s = self.to_screen(sn.pos);
+            let color = Color::new(1.0, 1.0, 1.0, sn.alpha);
+            let draw = || draw_sprite(&assets.snake_head, s.x, s.y, sn.angle, self.z + sn.z, color);
+            if sn.flash {
                 canvas.flashing(draw);
             } else {
                 draw();

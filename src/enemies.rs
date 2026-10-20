@@ -7,6 +7,7 @@ use crate::boss::{self, Boss, BossState, Piece, Request};
 use crate::depot::{self, Depot};
 use crate::mine::{self, Mine};
 use crate::shyguy::{self, ShyGuy};
+use crate::snake::{self, Hit, Snake};
 use crate::waves::{Wave, ARCADE};
 
 /// World::WIDTH / HEIGHT.
@@ -38,6 +39,11 @@ pub const ROCK_POINTS: u32 = 10;
 const KIND_DEPOT: i32 = 21;
 /// Wave kind for shy guys.
 const KIND_SHY_GUY: i32 = 13;
+/// Wave kind for snakes.
+const KIND_SNAKE: i32 = 16;
+const SNAKE_WEIGHT: u32 = 4;
+/// Snake::setState(10007): Enemy::activateBonuses(50, 8).
+const SNAKE_RINGS: u32 = 8;
 /// Wave kind for mines.
 const KIND_MINE: i32 = 17;
 /// WaveManager::getWaveRemaining weights.
@@ -334,6 +340,20 @@ pub enum Event {
         sound: bool,
         sparks: bool,
     },
+    /// SnakeBody::setState(10007).
+    SegmentDestroyed {
+        pos: Vec2,
+        points: u32,
+        sound: bool,
+    },
+    /// Snake::setState(10007).
+    SnakeDestroyed {
+        pos: Vec2,
+        points: u32,
+        rings: u32,
+        sound: bool,
+        effects: bool,
+    },
     /// ShyGuy::setState(10007).
     ShyGuyDestroyed {
         pos: Vec2,
@@ -377,6 +397,7 @@ pub struct Field {
     pub depots: Vec<Depot>,
     pub mines: Vec<Mine>,
     pub shy_guys: Vec<ShyGuy>,
+    pub snakes: Vec<Snake>,
     pub boss: Option<Boss>,
     pub pieces: Vec<Piece>,
     /// Animation frame counts by size: small atlas, medium, large, extra large.
@@ -393,6 +414,7 @@ impl Field {
             depots: Vec::new(),
             mines: Vec::new(),
             shy_guys: Vec::new(),
+            snakes: Vec::new(),
             boss: None,
             pieces: Vec::new(),
             frames,
@@ -424,7 +446,116 @@ impl Field {
             + self.depots.len() as u32
             + self.mines.len() as u32 * MINE_WEIGHT
             + self.shy_guys.len() as u32
+            + self.snakes.len() as u32 * SNAKE_WEIGHT
             + self.boss.is_some() as u32
+    }
+
+    fn spawn_snake(&mut self, pos: Vec2) {
+        if self.snakes.len() < snake::POOL {
+            self.snakes.push(Snake::new(pos));
+        }
+    }
+
+    /// Snake::setState(10007): the head and every remaining segment.
+    pub fn destroy_snake(&mut self, index: usize, score: bool, sound: bool, effects: bool) {
+        let s = self.snakes.swap_remove(index);
+        for seg in &s.segments {
+            self.events.push(Event::SegmentDestroyed {
+                pos: seg.pos,
+                points: if score { snake::SEGMENT_POINTS } else { 0 },
+                sound: false,
+            });
+        }
+        self.events.push(Event::SnakeDestroyed {
+            pos: s.pos,
+            points: if score { snake::POINTS } else { 0 },
+            rings: if score { SNAKE_RINGS } else { 0 },
+            sound,
+            effects,
+        });
+    }
+
+    /// Applies a hit or ram result to snake `index`.
+    fn snake_hit(&mut self, index: usize, hit: Hit, bullet: bool) {
+        match hit {
+            Hit::Hurt => self.events.push(Event::DepotHit),
+            Hit::LostTail(pos) => {
+                self.events.push(Event::SegmentDestroyed {
+                    pos,
+                    points: snake::SEGMENT_POINTS,
+                    sound: true,
+                });
+                if bullet {
+                    self.events.push(Event::DepotHit);
+                }
+            }
+            Hit::Dead => self.destroy_snake(index, true, true, true),
+        }
+    }
+
+    /// The ship touches a snake head: it loses its tail, or dies.
+    pub fn ram_snake(&mut self, index: usize) {
+        let hit = self.snakes[index].rammed();
+        self.snake_hit(index, hit, false);
+    }
+
+    /// Snake heads and active segments touching a circle (the ship):
+    /// (heads, any segment).
+    pub fn touching_snakes(&self, centre: Vec2, radius: f32) -> (Vec<usize>, bool) {
+        let near = |p: Vec2| {
+            let c = vec2(wrap_near(p.x, centre.x), wrap_near(p.y, centre.y));
+            c.distance_squared(centre) < (snake::RADIUS + radius).powi(2)
+        };
+        let heads = (0..self.snakes.len())
+            .filter(|&i| self.snakes[i].active() && near(self.snakes[i].pos))
+            .collect();
+        let body = self
+            .snakes
+            .iter()
+            .flat_map(|s| s.segments.iter())
+            .any(|seg| seg.active_now() && near(seg.pos));
+        (heads, body)
+    }
+
+    /// snakeCollision: heads push each other apart; rocks, mines, depots
+    /// and boss parts push heads away.
+    fn snake_collisions(&mut self) {
+        let n = self.snakes.len();
+        for i in 0..n {
+            if !self.snakes[i].active() {
+                continue;
+            }
+            for j in i + 1..n {
+                if !self.snakes[j].active() {
+                    continue;
+                }
+                let (left, right) = self.snakes.split_at_mut(j);
+                let (a, b) = (&mut left[i], &mut right[0]);
+                let bp = vec2(wrap_near(b.pos.x, a.pos.x), wrap_near(b.pos.y, a.pos.y));
+                let d = bp - a.pos;
+                let r = snake::RADIUS * 2.0;
+                if d != Vec2::ZERO && d.length_squared() < r * r {
+                    let push = d.normalize() * (r * r - d.length_squared()) * mine::REPEL;
+                    a.impulse -= push;
+                    b.impulse += push;
+                }
+            }
+            let mut others: Vec<(Vec2, f32, f32)> = Vec::new();
+            others.extend(self.rocks.iter().filter(|r| r.active()).map(|r| (r.pos, r.radius(), 2.0)));
+            others.extend(self.mines.iter().filter(|m| m.active()).map(|m| (m.pos, mine::RADIUS, 1.0)));
+            others.extend(self.depots.iter().filter(|d| d.active()).map(|d| (d.pos, depot::RADIUS, 2.0)));
+            others.extend(self.pieces.iter().filter(|p| p.active()).map(|p| (p.pos, boss::PIECE_RADIUS, 2.0)));
+            others.extend(self.boss.iter().filter(|b| b.active()).map(|b| (b.pos, boss::RADIUS, 2.0)));
+            let s = &mut self.snakes[i];
+            for (pos, radius, k) in others {
+                let c = vec2(wrap_near(pos.x, s.pos.x), wrap_near(pos.y, s.pos.y));
+                let d = s.pos - c;
+                let r = snake::RADIUS + radius;
+                if d != Vec2::ZERO && d.length_squared() < r * r {
+                    s.impulse += d.normalize() * (r * r - d.length_squared()) * mine::REPEL * k;
+                }
+            }
+        }
     }
 
     fn spawn_shy_guy(&mut self, pos: Vec2) {
@@ -620,6 +751,10 @@ impl Field {
         while !self.depots.is_empty() {
             self.destroy_depot(0, false);
         }
+        while !self.snakes.is_empty() {
+            let effects = visible(self.snakes[0].pos);
+            self.destroy_snake(0, false, false, effects);
+        }
         while !self.shy_guys.is_empty() {
             let effects = visible(self.shy_guys[0].pos);
             self.destroy_shy_guy(0, false, false, effects);
@@ -694,6 +829,7 @@ impl Field {
             None if kind == KIND_BOSS => self.boss.is_some() as usize,
             None if kind == KIND_MINE => self.mines.len(),
             None if kind == KIND_SHY_GUY => self.shy_guys.len(),
+            None if kind == KIND_SNAKE => self.snakes.len(),
             None => 0,
         }
     }
@@ -728,6 +864,10 @@ impl Field {
             g.update(dt, ship, centre);
         }
         self.shy_guy_collisions();
+        for s in &mut self.snakes {
+            s.update(dt, ship, centre);
+        }
+        self.snake_collisions();
         for d in &mut self.depots {
             d.update(dt, centre);
         }
@@ -826,6 +966,23 @@ impl Field {
                 } else {
                     self.destroy_depot(i, true);
                 }
+                return true;
+            }
+        }
+        for i in 0..self.snakes.len() {
+            let s = &self.snakes[i];
+            let head = vec2(wrap_near(s.pos.x, to.x), wrap_near(s.pos.y, to.y));
+            if s.active() && segment_distance(head, from, to) < snake::RADIUS + radius {
+                let hit = self.snakes[i].hit(damage);
+                self.snake_hit(i, hit, true);
+                return true;
+            }
+            // SnakeBody::handleEvent(0): segments stop bullets unharmed.
+            let blocked = s.segments.iter().any(|seg| {
+                let c = vec2(wrap_near(seg.pos.x, to.x), wrap_near(seg.pos.y, to.y));
+                seg.active_now() && segment_distance(c, from, to) < snake::RADIUS + radius
+            });
+            if blocked {
                 return true;
             }
         }
@@ -1067,6 +1224,15 @@ impl Script {
             world: world.min(5),
             stage: stage.clamp(1, 5) - 1,
         }
+        .skip_to_env_wave()
+    }
+
+    /// MB_WAVE=<n> starts the stage at wave n (0-based), for testing.
+    fn skip_to_env_wave(mut self) -> Script {
+        if let Some(n) = std::env::var("MB_WAVE").ok().and_then(|v| v.parse::<i32>().ok()) {
+            self.index = n.clamp(0, self.waves.len() as i32) - 1;
+        }
+        self
     }
 
     pub fn delay(&mut self) {
@@ -1168,6 +1334,9 @@ impl Script {
                     let p = self.origin + offset;
                     let p = vec2(wrap_near(p.x, ship.x), wrap_near(p.y, ship.y));
                     field.spawn_boss(p, self.world, self.stage, ship);
+                } else if wave.kind == KIND_SNAKE {
+                    let p = self.origin + offset;
+                    field.spawn_snake(vec2(wrap_near(p.x, ship.x), wrap_near(p.y, ship.y)));
                 } else if wave.kind == KIND_SHY_GUY {
                     let p = self.origin + offset;
                     field.spawn_shy_guy(vec2(wrap_near(p.x, ship.x), wrap_near(p.y, ship.y)));
