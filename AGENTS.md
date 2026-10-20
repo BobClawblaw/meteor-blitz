@@ -23,7 +23,7 @@
 ## Windows builds
 
 Run on `xamd4090` (local checkout `C:\src\meteor-blitz`, or SSH alias with key auth). Node 24.14, git 2.53, MSVC Build Tools and rustup (stable, MSVC) present.
-- Cargo lives in the rustup home and may not be on PATH in a fresh shell; prepend the `.cargobin` directory.
+- Cargo lives in the rustup home and may not be on PATH in a fresh shell; prepend `.cargo/bin` under the user profile.
 - Long paths break the MSVC linker; keep `CARGO_TARGET_DIR` short (build under `C:\src`).
 - This checkout has only the `origin` remote (GitHub); the NAS remote is not configured here.
 - Controller: Xbox Wireless Controller over Bluetooth LE (045e:0b13). It sleeps when idle and XInput then reports it as not connected; press the Xbox button to wake it.
