@@ -18,6 +18,7 @@ mod shyguy;
 mod snake;
 mod tower;
 mod waves;
+mod weapons;
 
 use std::collections::HashMap;
 
@@ -434,6 +435,8 @@ async fn load_play_assets() -> PlayAssets {
         shield: load_sprite("shield").await,
         aim: load_sprite("aim").await,
         cannon: load_sprite("fire100").await,
+        flame: load_sprite("fire").await,
+        laser: load_sprite("laser").await,
         spark: load_sprite("fire200").await,
         depot: load_sprite("depot").await,
         mine: load_sprite("mine").await,

@@ -18,6 +18,7 @@ use crate::gfx::{draw_atlas_sprite, draw_quad, draw_sprite, Canvas};
 use crate::bonus::{Power, Rings};
 use crate::boss::{self, BossState};
 use crate::tower;
+use crate::weapons::{self, FireGun, LaserGun};
 use crate::depot::{self, Depot};
 use crate::hud::{self, HudAssets, HudValues};
 use crate::particles::{Effects, Kind};
@@ -178,6 +179,9 @@ pub struct PlayAssets {
     pub shield: Texture2D,
     pub aim: Texture2D,
     pub cannon: Texture2D,
+    /// fire.png and laser.png.
+    pub flame: Texture2D,
+    pub laser: Texture2D,
     pub depot: Texture2D,
     pub mine: Texture2D,
     pub arrow: Texture2D,
@@ -277,6 +281,7 @@ struct Bullet {
     life: f32,
     /// Unit vector pointing back along the flight path, for the trail.
     back: Vec2,
+    weapon: Weapon,
 }
 
 /// Ship::setState: 1 spawning (shielded), 2 shield fading, 3 vulnerable,
@@ -318,10 +323,33 @@ struct Ship {
     alpha: f32,
     cannon_level: usize,
     cannon_timer: f32,
+    weapon: Weapon,
+    fire_gun: FireGun,
+    laser_gun: LaserGun,
     bullets: Vec<Bullet>,
 }
 
 impl Ship {
+    /// GameScreen::reset: weapon levels by world (survival starts at 1),
+    /// and world 2 starts on the fire weapon.
+    fn armed(world: usize) -> Ship {
+        let level = if world == SURVIVAL { 1 } else { world.min(5) };
+        let mut ship = Ship::new();
+        ship.cannon_level = level;
+        ship.cannon_timer = CANNON_INTERVAL[level];
+        ship.fire_gun = FireGun::new(level);
+        ship.laser_gun = LaserGun::new(level);
+        ship.weapon = if world == 1 { Weapon::Fire } else { Weapon::Cannon };
+        // MB_WEAPON=0|1|2 picks the starting weapon, for screenshot runs.
+        match std::env::var("MB_WEAPON").ok().as_deref() {
+            Some("0") => ship.weapon = Weapon::Cannon,
+            Some("1") => ship.weapon = Weapon::Fire,
+            Some("2") => ship.weapon = Weapon::Laser,
+            _ => {}
+        }
+        ship
+    }
+
     fn new() -> Ship {
         Ship {
             life: Life::Spawning(SPAWN_SHIELD),
@@ -347,6 +375,9 @@ impl Ship {
             alpha: 0.0,
             cannon_level: 0,
             cannon_timer: CANNON_INTERVAL[0],
+            weapon: Weapon::Cannon,
+            fire_gun: FireGun::new(0),
+            laser_gun: LaserGun::new(0),
             bullets: Vec::new(),
         }
     }
@@ -400,13 +431,47 @@ impl Ship {
                 vel,
                 life: CANNON_LIFE,
                 back: -vel.normalize(),
+                weapon: Weapon::Cannon,
             });
         }
+    }
+
+    /// Ship::fire with the current weapon (Global::bulletType).
+    fn shoot(&mut self, dt: f32, dir: Vec2) {
+        match self.weapon {
+            Weapon::Cannon => self.fire(dt, dir),
+            Weapon::Fire | Weapon::Laser => {
+                self.aiming = true;
+                self.aim_dir = dir;
+                let origin = self.pos + self.vel * dt;
+                let mut shots = Vec::new();
+                let (life, weapon) = if self.weapon == Weapon::Fire {
+                    self.fire_gun.fire(dt, origin, dir, &mut shots);
+                    (weapons::FIRE_LIFE, Weapon::Fire)
+                } else {
+                    self.laser_gun.fire(dt, origin, dir, &mut shots);
+                    (weapons::LASER_LIFE, Weapon::Laser)
+                };
+                for (pos, vel) in shots {
+                    self.bullets.push(Bullet { prev: pos, pos, vel, life, back: -vel.normalize(), weapon });
+                }
+            }
+        }
+    }
+
+    /// Ship::switchWeapon: cannon, fire, laser, round again.
+    fn switch_weapon(&mut self) {
+        self.weapon = match self.weapon {
+            Weapon::Cannon => Weapon::Fire,
+            Weapon::Fire => Weapon::Laser,
+            Weapon::Laser => Weapon::Cannon,
+        };
     }
 
     /// Ship::resetBullets: the next press fires at once.
     fn hold_fire(&mut self) {
         self.cannon_timer = CANNON_INTERVAL[self.cannon_level];
+        self.fire_gun.release();
         self.aiming = false;
     }
 
@@ -568,7 +633,7 @@ impl Play {
             z: START_Z,
             elapsed: 0.0,
             shaken: false,
-            ship: Ship::new(),
+            ship: Ship::armed(world),
             camera: Lead {
                 centre: Vec2::ZERO,
                 shake: Vec2::ZERO,
@@ -696,20 +761,23 @@ impl Play {
     fn collide(&mut self) {
         let field = &mut self.field;
         let effects = &mut self.effects;
+        let fire_damage = weapons::FIRE_DAMAGE[self.ship.fire_gun.level];
         self.ship.bullets.retain(|b| {
-            let hit = field.bullet(
-                b.prev,
-                b.pos,
-                CANNON_RADIUS,
-                Weapon::Cannon,
-                CANNON_DAMAGE,
-                CANNON_MASS,
-                b.vel,
-            );
+            let (radius, damage, mass) = match b.weapon {
+                Weapon::Cannon => (CANNON_RADIUS, CANNON_DAMAGE, CANNON_MASS),
+                Weapon::Fire => (weapons::FIRE_RADIUS, fire_damage, weapons::FIRE_MASS),
+                Weapon::Laser => (weapons::LASER_RADIUS, weapons::LASER_DAMAGE, weapons::LASER_MASS),
+            };
+            let hit = field.bullet(b.prev, b.pos, radius, b.weapon, damage, mass, b.vel);
             if hit {
-                // standardBulletCollision: a spark and a streak back along the shot.
+                // standard/fire/laserBulletCollision: a spark, and a streak
+                // back along the shot for the cannon (line 0) and laser (1).
                 effects.start(Kind::Sprite, 0, b.pos, 0.0, false);
-                effects.start(Kind::Line, 0, b.pos, heading(-b.vel), false);
+                match b.weapon {
+                    Weapon::Cannon => effects.start(Kind::Line, 0, b.pos, heading(-b.vel), false),
+                    Weapon::Laser => effects.start(Kind::Line, 1, b.pos, heading(-b.vel), false),
+                    Weapon::Fire => 0,
+                };
             }
             !hit
         });
@@ -1276,6 +1344,10 @@ impl Play {
         } else {
             self.ship.vel *= DRAG / (dt + DRAG);
         }
+        // The original's switch-weapon button: Q or the mouse wheel here.
+        if is_key_pressed(KeyCode::Q) || mouse_wheel().1 != 0.0 {
+            self.ship.switch_weapon();
+        }
         // Bombs: the original's on-screen bomb button; right mouse or B here.
         // MB_BOMB_AT=<seconds> drops one unattended, for screenshot runs.
         let auto_bomb = std::env::var("MB_BOMB_AT")
@@ -1306,12 +1378,12 @@ impl Play {
         if let Some(target) = auto {
             let dir = (target - self.ship.pos).normalize_or_zero();
             if dir != Vec2::ZERO {
-                self.ship.fire(dt, dir);
+                self.ship.shoot(dt, dir);
             }
         } else if is_mouse_button_down(MouseButton::Left) {
             let dir = (Canvas::mouse() - self.to_screen(self.ship.pos)).normalize_or_zero();
             if dir != Vec2::ZERO {
-                self.ship.fire(dt, dir);
+                self.ship.shoot(dt, dir);
             }
         } else {
             self.ship.hold_fire();
@@ -1359,6 +1431,28 @@ impl Play {
                     self.draw_rock(art, rock);
                 }
             }
+        }
+    }
+
+    /// Texture::drawMultiple2D / drawMultipleBlend2D for one weapon's shots.
+    fn draw_shots(&self, canvas: &Canvas, tex: &Texture2D, weapon: Weapon, back: f32, additive: bool) {
+        let (w, h) = (tex.width(), tex.height());
+        let mut verts = Vec::new();
+        let mut indices: Vec<u16> = Vec::new();
+        for b in self.ship.bullets.iter().filter(|b| b.weapon == weapon) {
+            let a = heading(b.vel).to_radians();
+            let fwd = vec2(a.sin(), -a.cos());
+            let side = vec2(a.cos(), a.sin());
+            let c = self.to_screen(b.pos) - fwd * h * back;
+            let n = verts.len() as u16;
+            for (sx, sy, u, v) in [(-0.5, -0.5, 0.0, 0.0), (0.5, -0.5, 1.0, 0.0), (0.5, 0.5, 1.0, 1.0), (-0.5, 0.5, 0.0, 1.0)] {
+                let p = c + side * (sx * w) - fwd * (sy * h);
+                verts.push(Vertex::new(p.x, p.y, self.z, u, v, WHITE));
+            }
+            indices.extend_from_slice(&[n, n + 1, n + 2, n, n + 2, n + 3]);
+        }
+        if !verts.is_empty() {
+            canvas.draw_triangles(verts, indices, Some(tex), additive);
         }
     }
 
@@ -1597,13 +1691,17 @@ impl Play {
 
         // Cannon fire: green additive point sprites trailing each bullet.
         let mut points = Vec::new();
-        for b in &self.ship.bullets {
+        for b in self.ship.bullets.iter().filter(|b| b.weapon == Weapon::Cannon) {
             let p = self.to_screen(b.pos);
             for (behind, size) in CANNON_TRAIL {
                 points.push((p + b.back * behind, size));
             }
         }
         canvas.draw_points(&assets.cannon, &points, self.z, GREEN);
+        // Ship::draw: laser bolts, then flames (additive), each drawn along
+        // its flight and set back a fraction of its length.
+        self.draw_shots(canvas, &assets.laser, Weapon::Laser, weapons::LASER_DRAW_BACK, false);
+        self.draw_shots(canvas, &assets.flame, Weapon::Fire, weapons::FIRE_DRAW_BACK, true);
 
         self.draw_ship(assets);
         self.effects
