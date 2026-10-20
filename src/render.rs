@@ -435,20 +435,6 @@ pub fn draw_hud(game: &Game) {
     text_center(&stage_label, w * 0.5, 40.0, 18.0, muted);
 }
 
-pub fn draw_title(world_best: u64) {
-    let w = screen_width();
-    let h = screen_height();
-    draw_rectangle(0.0, 0.0, w, h, Color::new(0.02, 0.03, 0.06, 0.55));
-    text_center("METEOR BLITZ", w * 0.5, h * 0.32, 72.0, Color::new(0.9, 1.0, 1.0, 1.0));
-    text_center("Survive the collapsing belt. Shatter rock. Sling it back.", w * 0.5, h * 0.40, 20.0, Color::new(0.55, 0.65, 0.75, 1.0));
-    if world_best > 0 {
-        text_center(&format!("BEST {}", world_best), w * 0.5, h * 0.46, 16.0, Color::new(1.0, 0.75, 0.25, 1.0));
-    }
-    text_center("WASD move · mouse aim · LMB fire · RMB gravity · Shift dash · 1/2/3/4 weapon · B bomb", w * 0.5, h * 0.56, 14.0, Color::new(0.55, 0.65, 0.75, 1.0));
-    text_center("LAUNCH", w * 0.5, h * 0.68, 28.0, Color::new(0.15, 0.85, 1.0, 1.0));
-    text_center("press ENTER", w * 0.5, h * 0.72, 14.0, Color::new(0.55, 0.65, 0.75, 1.0));
-}
-
 pub fn draw_stage_select(unlocked: usize) {
     let w = screen_width();
     let h = screen_height();

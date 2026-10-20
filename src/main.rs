@@ -1,6 +1,7 @@
 //! Meteor Blitz — modern port. Window, screens, input, audio, and loop.
 
 mod game;
+mod menu;
 mod progress;
 mod render;
 
@@ -8,6 +9,7 @@ use macroquad::prelude::*;
 use macroquad::audio::{load_sound, play_sound, PlaySoundParams, Sound};
 
 use game::{Event, Game, Input, Mode};
+use menu::{Canvas, MainButton, MenuAssets};
 use progress::Progress;
 use render::{Assets, Camera, Explosion, Particle, UiAssets};
 
@@ -51,6 +53,26 @@ async fn load_frames(start: usize, count: usize) -> Vec<Texture2D> {
 
 async fn load_ui(name: &str) -> Texture2D {
     load_texture(&format!("assets/ui/{}.png", name)).await.unwrap()
+}
+
+async fn load_menu_assets() -> MenuAssets {
+    let mut buttons = Vec::new();
+    for name in ["Play", "HighScores", "Settings", "Help"] {
+        let up = load_ui(&format!("button{}", name)).await;
+        let down = load_ui(&format!("button{}Down", name)).await;
+        buttons.push((up, down));
+    }
+    let menu = MenuAssets {
+        space: load_texture("original/textures/space4deep.png").await.unwrap(),
+        fog: load_texture("original/textures/fogRed.png").await.unwrap(),
+        horizon: load_ui("horizon").await,
+        title: load_ui("labelTitle").await,
+        buttons: buttons.try_into().ok().unwrap(),
+    };
+    for tex in [&menu.space, &menu.fog, &menu.horizon, &menu.title] {
+        tex.set_filter(FilterMode::Linear);
+    }
+    menu
 }
 
 async fn load_ui_assets() -> UiAssets {
@@ -120,6 +142,8 @@ async fn main() {
     };
     let mut particles: Vec<Particle> = Vec::new();
     let mut explosions: Vec<Explosion> = Vec::new();
+    let menu_assets = load_menu_assets().await;
+    let canvas = Canvas::new();
     let mut progress = Progress::load();
     let mut music_on = false;
     // Ore from the finished run is banked once, when the run ends.
@@ -130,7 +154,7 @@ async fn main() {
 
         match screen {
             Screen::Title => {
-                if is_key_pressed(KeyCode::Enter) {
+                if is_key_pressed(KeyCode::Enter) || menu::main_menu_click() == Some(MainButton::Play) {
                     screen = Screen::Select;
                 }
                 if is_key_pressed(KeyCode::S) {
@@ -262,7 +286,11 @@ async fn main() {
         }
 
         match screen {
-            Screen::Title => render::draw_title(progress.best),
+            Screen::Title => {
+                canvas.begin();
+                menu::draw_main_menu(&menu_assets);
+                canvas.end();
+            }
             Screen::Select => render::draw_stage_select(progress.unlocked),
             Screen::Upgrade { .. } => render::draw_upgrade(&assets.ui, &progress),
             Screen::Pause => render::draw_pause(),
