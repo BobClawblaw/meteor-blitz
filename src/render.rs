@@ -435,26 +435,6 @@ pub fn draw_hud(game: &Game) {
     text_center(&stage_label, w * 0.5, 40.0, 18.0, muted);
 }
 
-pub fn draw_stage_select(unlocked: usize) {
-    let w = screen_width();
-    let h = screen_height();
-    draw_rectangle(0.0, 0.0, w, h, Color::new(0.02, 0.03, 0.06, 0.85));
-    text_center("ARCADE", w * 0.5, 80.0, 40.0, Color::new(0.9, 1.0, 1.0, 1.0));
-    let start_x = w * 0.5 - 5.0 * 70.0 * 0.5;
-    for world in 0..6 {
-        for stage in 1..=5 {
-            let idx = world * 5 + stage - 1;
-            let x = start_x + (stage - 1) as f32 * 70.0;
-            let y = 120.0 + world as f32 * 70.0;
-            let locked = idx > unlocked;
-            let color = if locked { Color::new(0.2, 0.25, 0.3, 1.0) } else { Color::new(0.15, 0.85, 1.0, 1.0) };
-            draw_rectangle_lines(x, y, 60.0, 60.0, 2.0, color);
-            text_center(&format!("{}.{}", world + 1, stage), x + 30.0, y + 36.0, 18.0, color);
-        }
-    }
-    text_center("click a stage · U upgrade · ESC back", w * 0.5, h - 60.0, 14.0, Color::new(0.55, 0.65, 0.75, 1.0));
-}
-
 pub fn draw_pause() {
     let w = screen_width();
     let h = screen_height();

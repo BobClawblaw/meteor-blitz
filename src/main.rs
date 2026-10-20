@@ -1,15 +1,17 @@
-//! Meteor Blitz — modern port. Window, screens, input, audio, and loop.
+//! Meteor Blitz — port. Window, screens, input, audio, and loop.
 
 mod game;
 mod menu;
 mod progress;
 mod render;
 
+use std::collections::HashMap;
+
 use macroquad::prelude::*;
 use macroquad::audio::{load_sound, play_sound, PlaySoundParams, Sound};
 
 use game::{Event, Game, Input, Mode};
-use menu::{Canvas, MainButton, MenuAssets, ScreenFx};
+use menu::{Canvas, MenuAssets, MenuButton, MenuScreen};
 use progress::Progress;
 use render::{Assets, Camera, Explosion, Particle, UiAssets};
 
@@ -33,14 +35,33 @@ fn window_conf() -> Conf {
     }
 }
 
+/// The original's menu screens, by `Director` screen id.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MenuKind {
+    /// MainMenuScreen (2)
+    Main,
+    /// PlayScreen (3): arcade or survival
+    Mode,
+    /// LevelSelectScreen (4): world
+    World,
+    /// StageSelectScreen (14): stage of `world`
+    Stage(usize),
+}
+
 enum Screen {
-    Title,
-    Select,
+    Menu(MenuKind),
     Play,
     Pause,
     Over,
     /// Upgrade shop; `from_over` says whether DONE returns to the run summary.
     Upgrade { from_over: bool },
+}
+
+/// Where a menu goes once its fade-out finishes.
+#[derive(Clone, Copy)]
+enum Next {
+    Menu(MenuKind),
+    Game(Mode, usize, usize),
 }
 
 struct Audio {
@@ -52,6 +73,9 @@ struct Audio {
     boss: Sound,
 }
 
+/// Menu art by file stem (`assets/ui/<name>.png`).
+type Ui = HashMap<String, Texture2D>;
+
 async fn load_frames(start: usize, count: usize) -> Vec<Texture2D> {
     let mut out = Vec::new();
     for i in start..start + count {
@@ -61,24 +85,47 @@ async fn load_frames(start: usize, count: usize) -> Vec<Texture2D> {
 }
 
 async fn load_ui(name: &str) -> Texture2D {
-    load_texture(&format!("assets/ui/{}.png", name)).await.unwrap()
+    let tex = load_texture(&format!("assets/ui/{}.png", name)).await.unwrap();
+    tex.set_filter(FilterMode::Linear);
+    tex
+}
+
+async fn load_ui_set() -> Ui {
+    let mut names: Vec<String> = Vec::new();
+    for b in ["Play", "HighScores", "Settings", "Help", "Arcade", "Survival", "Back"] {
+        names.push(format!("button{}", b));
+        names.push(format!("button{}Down", b));
+    }
+    for label in ["labelTitle", "labelSelectMode", "labelSelectWorld", "labelSelectStage"] {
+        names.push(label.to_owned());
+    }
+    for world in 1..=6 {
+        names.push(format!("buttonArcade{}", world));
+        if world > 1 {
+            names.push(format!("buttonArcade{}Locked", world));
+        }
+        for stage in 1..=5 {
+            names.push(format!("buttonStage{}.{}", world, stage));
+            if stage > 1 {
+                names.push(format!("buttonStage{}.{}.Locked", world, stage));
+            }
+        }
+    }
+    let mut ui = Ui::new();
+    for name in names {
+        let tex = load_ui(&name).await;
+        ui.insert(name, tex);
+    }
+    ui
 }
 
 async fn load_menu_assets() -> MenuAssets {
-    let mut buttons = Vec::new();
-    for name in ["Play", "HighScores", "Settings", "Help"] {
-        let up = load_ui(&format!("button{}", name)).await;
-        let down = load_ui(&format!("button{}Down", name)).await;
-        buttons.push((up, down));
-    }
     let menu = MenuAssets {
         space: load_texture("original/textures/space4deep.png").await.unwrap(),
         fog: load_texture("original/textures/fogRed.png").await.unwrap(),
         horizon: load_ui("horizon").await,
-        title: load_ui("labelTitle").await,
-        buttons: buttons.try_into().ok().unwrap(),
     };
-    for tex in [&menu.space, &menu.fog, &menu.horizon, &menu.title] {
+    for tex in [&menu.space, &menu.fog] {
         tex.set_filter(FilterMode::Linear);
     }
     menu
@@ -97,6 +144,84 @@ async fn load_ui_assets() -> UiAssets {
         upgrade_icons_disabled,
         upgrade_background: load_ui("buttonUpgradeBackground").await,
         captions: load_ui("captions").await,
+    }
+}
+
+/// `Global::BACK_BUTTON_X/Y`: the back arrow sits at (2, 2).
+const BACK_XY: f32 = 2.0;
+
+fn button(ui: &Ui, up: &str, down: &str, x: f32, y: f32, w: f32, h: f32, event: u8) -> MenuButton {
+    MenuButton { up: ui[up].clone(), down: ui[down].clone(), rect: Rect::new(x, y, w, h), event }
+}
+
+/// Builds a menu screen with the original's layout (rects and events from
+/// the screen constructors in the iOS binary).
+fn build_menu(kind: MenuKind, ui: &Ui, progress: &Progress, fade_backdrop: bool) -> MenuScreen {
+    let back = |event| button(ui, "buttonBack", "buttonBackDown", BACK_XY, BACK_XY, 34.0, 34.0, event);
+    match kind {
+        MenuKind::Main => MenuScreen::new(
+            ui["labelTitle"].clone(),
+            15.0,
+            vec![
+                button(ui, "buttonPlay", "buttonPlayDown", 160.0, 176.0, 160.0, 128.0, 0),
+                button(ui, "buttonHighScores", "buttonHighScoresDown", 16.0, 176.0, 128.0, 128.0, 1),
+                button(ui, "buttonSettings", "buttonSettingsDown", 336.0, 176.0, 127.0, 57.0, 2),
+                button(ui, "buttonHelp", "buttonHelpDown", 336.0, 246.0, 127.0, 57.0, 3),
+            ],
+            fade_backdrop,
+        ),
+        MenuKind::Mode => MenuScreen::new(
+            ui["labelSelectMode"].clone(),
+            0.0,
+            vec![
+                back(2),
+                button(ui, "buttonArcade", "buttonArcadeDown", 47.0, 118.0, 175.0, 128.0, 0),
+                button(ui, "buttonSurvival", "buttonSurvivalDown", 258.0, 118.0, 175.0, 128.0, 1),
+            ],
+            fade_backdrop,
+        ),
+        MenuKind::World => {
+            // Columns at 30 / 176.5 / 320 (the middle one 127 wide), rows at 55 / 185.
+            let slots = [(30.0, 55.0, 130.0), (176.5, 54.0, 127.0), (320.0, 55.0, 130.0), (30.0, 185.0, 130.0), (176.5, 185.0, 127.0), (320.0, 185.0, 130.0)];
+            let mut buttons = vec![back(7)];
+            for (i, (x, y, w)) in slots.into_iter().enumerate() {
+                let world = i + 1;
+                let unlocked = i == 0 || progress.unlocked >= i * 5;
+                let name = if unlocked { format!("buttonArcade{}", world) } else { format!("buttonArcade{}Locked", world) };
+                buttons.push(button(ui, &name, &name, x, y, w, 114.0, if unlocked { world as u8 } else { 0 }));
+            }
+            MenuScreen::new(ui["labelSelectWorld"].clone(), -9.0, buttons, fade_backdrop)
+        }
+        MenuKind::Stage(world) => {
+            let slots = [(30.0, 55.0), (176.5, 54.0), (320.0, 55.0), (100.0, 185.0), (250.0, 185.0)];
+            let mut buttons = vec![back(6)];
+            for (i, (x, y)) in slots.into_iter().enumerate() {
+                let stage = i + 1;
+                let unlocked = i == 0 || progress.unlocked >= world * 5 + i;
+                let name = if unlocked {
+                    format!("buttonStage{}.{}", world + 1, stage)
+                } else {
+                    format!("buttonStage{}.{}.Locked", world + 1, stage)
+                };
+                buttons.push(button(ui, &name, &name, x, y, 127.0, 121.0, if unlocked { stage as u8 } else { 0 }));
+            }
+            MenuScreen::new(ui["labelSelectStage"].clone(), -9.0, buttons, fade_backdrop)
+        }
+    }
+}
+
+/// The screen a menu event leads to (`handleEvent` of each screen class).
+fn menu_event(kind: MenuKind, event: u8) -> Option<Next> {
+    match (kind, event) {
+        (MenuKind::Main, 0) => Some(Next::Menu(MenuKind::Mode)),
+        (MenuKind::Mode, 0) => Some(Next::Menu(MenuKind::World)),
+        (MenuKind::Mode, 1) => Some(Next::Game(Mode::Survival, 0, 1)),
+        (MenuKind::Mode, 2) => Some(Next::Menu(MenuKind::Main)),
+        (MenuKind::World, 7) => Some(Next::Menu(MenuKind::Mode)),
+        (MenuKind::World, w @ 1..=6) => Some(Next::Menu(MenuKind::Stage(w as usize - 1))),
+        (MenuKind::Stage(_), 6) => Some(Next::Menu(MenuKind::World)),
+        (MenuKind::Stage(world), s @ 1..=5) => Some(Next::Game(Mode::Arcade, world, s as usize)),
+        _ => None,
     }
 }
 
@@ -143,7 +268,14 @@ async fn main() {
         boss: load_sound("assets/sfx/boss.wav").await.unwrap(),
     };
 
-    let mut screen = Screen::Title;
+    let ui = load_ui_set().await;
+    let menu_assets = load_menu_assets().await;
+    let mut canvas = Canvas::new(&menu_assets);
+    let mut progress = Progress::load();
+
+    let mut screen = Screen::Menu(MenuKind::Main);
+    let mut menu_screen = build_menu(MenuKind::Main, &ui, &progress, true);
+    let mut menu_next: Option<Next> = None;
     let mut game: Option<Game> = None;
     let mut cam = Camera {
         x: game::WORLD_W * 0.5,
@@ -151,10 +283,6 @@ async fn main() {
     };
     let mut particles: Vec<Particle> = Vec::new();
     let mut explosions: Vec<Explosion> = Vec::new();
-    let menu_assets = load_menu_assets().await;
-    let mut canvas = Canvas::new(&menu_assets);
-    let mut title_fx = ScreenFx::enter(true);
-    let mut progress = Progress::load();
     let mut music_on = false;
     // Ore from the finished run is banked once, when the run ends.
     let mut banked = false;
@@ -164,59 +292,43 @@ async fn main() {
         let dt = get_frame_time().min(0.05);
 
         match screen {
-            Screen::Title => {
+            Screen::Menu(kind) => {
                 canvas.update(dt);
-                title_fx.update(dt, is_mouse_button_down(MouseButton::Left));
-                if title_fx.ready() && (is_key_pressed(KeyCode::Enter) || menu::main_menu_click() == Some(MainButton::Play)) {
-                    title_fx.leave();
-                }
-                if title_fx.done() {
-                    title_fx = ScreenFx::enter(true);
-                    screen = Screen::Select;
-                }
-                if is_key_pressed(KeyCode::S) {
-                    game = Some(Game::new(Mode::Survival, 0, 1, progress.upgrades));
-                    banked = false;
-                    cam.x = game::WORLD_W * 0.5;
-                    cam.y = game::WORLD_H * 0.5;
-                    particles.clear();
-                    screen = Screen::Play;
-                    if !music_on {
-                        play_sound(&audio.music, PlaySoundParams { looped: true, volume: 0.35 });
-                        music_on = true;
+                if let Some(event) = menu_screen.update(dt) {
+                    if let Some(next) = menu_event(kind, event) {
+                        menu_next = Some(next);
+                        menu_screen.fx.leave();
                     }
                 }
-            }
-            Screen::Select => {
-                if is_key_pressed(KeyCode::Escape) {
-                    screen = Screen::Title;
+                if kind == MenuKind::Main && menu_screen.fx.ready() && is_key_pressed(KeyCode::Enter) {
+                    menu_next = Some(Next::Menu(MenuKind::Mode));
+                    menu_screen.fx.leave();
                 }
-                if is_key_pressed(KeyCode::U) {
-                    screen = Screen::Upgrade { from_over: false };
+                if let MenuKind::Stage(_) = kind {
+                    if is_key_pressed(KeyCode::U) {
+                        screen = Screen::Upgrade { from_over: false };
+                    }
                 }
-                if is_mouse_button_pressed(MouseButton::Left) {
-                    let (mx, my) = mouse_position();
-                    let start_x = screen_width() * 0.5 - 5.0 * 70.0 * 0.5;
-                    for world in 0..6 {
-                        for stage in 1..=5 {
-                            let idx = world * 5 + stage - 1;
-                            if idx > progress.unlocked {
-                                continue;
+                if menu_screen.fx.done() {
+                    match menu_next.take() {
+                        Some(Next::Menu(next)) => {
+                            menu_screen = build_menu(next, &ui, &progress, false);
+                            screen = Screen::Menu(next);
+                        }
+                        Some(Next::Game(mode, world, stage)) => {
+                            game = Some(Game::new(mode, world, stage, progress.upgrades));
+                            banked = false;
+                            cam.x = game::WORLD_W * 0.5;
+                            cam.y = game::WORLD_H * 0.5;
+                            particles.clear();
+                            screen = Screen::Play;
+                            if !music_on {
+                                play_sound(&audio.music, PlaySoundParams { looped: true, volume: 0.35 });
+                                music_on = true;
                             }
-                            let x = start_x + (stage - 1) as f32 * 70.0;
-                            let y = 120.0 + world as f32 * 70.0;
-                            if mx >= x && mx <= x + 60.0 && my >= y && my <= y + 60.0 {
-                                game = Some(Game::new(Mode::Arcade, world, stage, progress.upgrades));
-                                banked = false;
-                                cam.x = game::WORLD_W * 0.5;
-                                cam.y = game::WORLD_H * 0.5;
-                                particles.clear();
-                                screen = Screen::Play;
-                                if !music_on {
-                                    play_sound(&audio.music, PlaySoundParams { looped: true, volume: 0.35 });
-                                    music_on = true;
-                                }
-                            }
+                        }
+                        None => {
+                            menu_screen = build_menu(kind, &ui, &progress, false);
                         }
                     }
                 }
@@ -261,7 +373,13 @@ async fn main() {
                     }
                 }
                 if is_key_pressed(KeyCode::Escape) {
-                    screen = Screen::Select;
+                    let kind = match game.as_ref() {
+                        Some(g) if g.mode == Mode::Arcade => MenuKind::Stage(g.world),
+                        _ => MenuKind::Mode,
+                    };
+                    game = None;
+                    menu_screen = build_menu(kind, &ui, &progress, true);
+                    screen = Screen::Menu(kind);
                 }
                 if is_key_pressed(KeyCode::U) {
                     screen = Screen::Upgrade { from_over: true };
@@ -286,7 +404,16 @@ async fn main() {
                     close |= done.contains(m);
                 }
                 if close {
-                    screen = if from_over { Screen::Over } else { Screen::Select };
+                    screen = if from_over {
+                        Screen::Over
+                    } else {
+                        let kind = match game.as_ref() {
+                            Some(g) if g.mode == Mode::Arcade => MenuKind::Stage(g.world),
+                            _ => MenuKind::Mode,
+                        };
+                        menu_screen = build_menu(kind, &ui, &progress, false);
+                        Screen::Menu(kind)
+                    };
                 }
             }
         }
@@ -303,12 +430,11 @@ async fn main() {
         }
 
         match screen {
-            Screen::Title => {
+            Screen::Menu(_) => {
                 canvas.begin();
-                menu::draw_main_menu(&canvas, &menu_assets, &title_fx);
+                menu_screen.draw(&canvas, &menu_assets);
                 canvas.end();
             }
-            Screen::Select => render::draw_stage_select(progress.unlocked),
             Screen::Upgrade { .. } => render::draw_upgrade(&assets.ui, &progress),
             Screen::Pause => render::draw_pause(),
             Screen::Over => {
@@ -316,7 +442,7 @@ async fn main() {
                     render::draw_over(g.score, g.won);
                 }
             }
-            _ => {}
+            Screen::Play => {}
         }
 
         // F12 saves the frame for pixel comparison against emulator frames;

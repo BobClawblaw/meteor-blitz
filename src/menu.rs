@@ -56,26 +56,56 @@ pub struct MenuAssets {
     pub space: Texture2D,
     pub fog: Texture2D,
     pub horizon: Texture2D,
-    pub title: Texture2D,
-    pub buttons: [(Texture2D, Texture2D); 4],
 }
 
-/// Main menu buttons, in the order the original constructs them.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum MainButton {
-    Play,
-    HighScores,
-    Settings,
-    Help,
+/// `Button`: an up/down texture pair, a rect, and the event it raises.
+pub struct MenuButton {
+    pub up: Texture2D,
+    pub down: Texture2D,
+    pub rect: Rect,
+    pub event: u8,
 }
 
-/// Button rects on the 480x320 canvas, from `MainMenuScreen` (x, y, w, h).
-const MAIN_BUTTONS: [(MainButton, Rect); 4] = [
-    (MainButton::Play, Rect { x: 160.0, y: 176.0, w: 160.0, h: 128.0 }),
-    (MainButton::HighScores, Rect { x: 16.0, y: 176.0, w: 128.0, h: 128.0 }),
-    (MainButton::Settings, Rect { x: 336.0, y: 176.0, w: 127.0, h: 57.0 }),
-    (MainButton::Help, Rect { x: 336.0, y: 246.0, w: 127.0, h: 57.0 }),
-];
+/// A `BasicScreen` with a centred label and buttons (the main menu and the
+/// mode, world and stage selections all have this shape).
+pub struct MenuScreen {
+    pub label: Texture2D,
+    pub label_y: f32,
+    pub buttons: Vec<MenuButton>,
+    pub fx: ScreenFx,
+    /// Index of the button whose down frame is showing (Button::update
+    /// advances the frame on press and only resets it on re-entry).
+    pressed: Option<usize>,
+}
+
+impl MenuScreen {
+    pub fn new(label: Texture2D, label_y: f32, buttons: Vec<MenuButton>, fade_backdrop: bool) -> MenuScreen {
+        MenuScreen { label, label_y, buttons, fx: ScreenFx::enter(fade_backdrop), pressed: None }
+    }
+
+    /// Advances the transition and returns the event of a button pressed
+    /// this frame. The original fires on touch start, not release.
+    pub fn update(&mut self, dt: f32) -> Option<u8> {
+        self.fx.update(dt, is_mouse_button_down(MouseButton::Left));
+        if !self.fx.ready() || !is_mouse_button_pressed(MouseButton::Left) {
+            return None;
+        }
+        let mouse = Canvas::mouse();
+        let hit = self.buttons.iter().position(|b| b.rect.contains(mouse))?;
+        self.pressed = Some(hit);
+        Some(self.buttons[hit].event)
+    }
+
+    pub fn draw(&self, canvas: &Canvas, assets: &MenuAssets) {
+        draw_backdrop(canvas, assets, &self.fx);
+        let color = self.fx.content_color();
+        draw_quad(&self.label, ((CANVAS_W - self.label.width()) * 0.5).floor(), self.label_y, 1.0, self.fx.z, color);
+        for (i, b) in self.buttons.iter().enumerate() {
+            let tex = if self.pressed == Some(i) { &b.down } else { &b.up };
+            draw_quad(tex, b.rect.x, b.rect.y, 1.0, self.fx.z, color);
+        }
+    }
+}
 
 /// `BasicScreen` state: the fade/fly-in on entry and fade-out on exit.
 pub struct ScreenFx {
@@ -165,7 +195,8 @@ fn backdrop_mesh(space: &Texture2D) -> Mesh {
             let x = ix as f32 * CELL - TOTAL * 0.5;
             let y = iy as f32 * CELL - TOTAL * 0.5;
             let z = -offset_z(-x, -y);
-            vertices.push(Vertex::new(x, y, z, x * TEXEL_PER_UNIT, y * TEXEL_PER_UNIT, WHITE));
+            // GL textures have their origin at the bottom, so v runs the other way.
+            vertices.push(Vertex::new(x, y, z, x * TEXEL_PER_UNIT, -y * TEXEL_PER_UNIT, WHITE));
         }
     }
     let mut indices = Vec::new();
@@ -278,7 +309,10 @@ impl Canvas {
         )
         .expect("backdrop shader");
         backdrop_material.set_texture("Fog", assets.fog.clone());
-        Canvas { target, backdrop: backdrop_mesh(&assets.space), backdrop_material, scroll: Vec2::ZERO }
+        // MB_SCROLL=<units> starts the backdrop scroll at a given phase, for
+        // matching an emulator frame taken at an unknown time.
+        let scroll_x = std::env::var("MB_SCROLL").ok().and_then(|v| v.parse().ok()).unwrap_or(0.0);
+        Canvas { target, backdrop: backdrop_mesh(&assets.space), backdrop_material, scroll: vec2(scroll_x, 0.0) }
     }
 
     /// `BasicScreen::update`: the menu backdrop drifts along x.
@@ -361,26 +395,4 @@ pub fn draw_backdrop(canvas: &Canvas, assets: &MenuAssets, fx: &ScreenFx) {
     draw_mesh(&mesh);
     gl_use_default_material();
     draw_quad(&assets.horizon, 0.0, 0.0, HORIZON_SCALE, 0.0, color);
-}
-
-/// The main menu button released this frame, if any.
-pub fn main_menu_click() -> Option<MainButton> {
-    if !is_mouse_button_released(MouseButton::Left) {
-        return None;
-    }
-    let mouse = Canvas::mouse();
-    MAIN_BUTTONS.iter().find(|(_, rect)| rect.contains(mouse)).map(|(button, _)| *button)
-}
-
-/// `MainMenuScreen::drawStateReady`: title centred at y=15, then the buttons.
-pub fn draw_main_menu(canvas: &Canvas, assets: &MenuAssets, fx: &ScreenFx) {
-    draw_backdrop(canvas, assets, fx);
-    let color = fx.content_color();
-    draw_quad(&assets.title, ((CANVAS_W - assets.title.width()) * 0.5).floor(), 15.0, 1.0, fx.z, color);
-    let mouse = Canvas::mouse();
-    for (i, (_, rect)) in MAIN_BUTTONS.iter().enumerate() {
-        let (up, down) = &assets.buttons[i];
-        let held = fx.ready() && rect.contains(mouse) && is_mouse_button_down(MouseButton::Left);
-        draw_quad(if held { down } else { up }, rect.x, rect.y, 1.0, fx.z, color);
-    }
 }
