@@ -2,6 +2,9 @@
 //! once per frame. The original was touch-only; this stands in for its
 //! two wheels and buttons. Not available in the web build.
 
+// The web build has no controller backend yet: the shared helpers sit idle.
+#![cfg_attr(target_arch = "wasm32", allow(dead_code))]
+
 use macroquad::prelude::*;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
