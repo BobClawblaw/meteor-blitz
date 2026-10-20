@@ -28,7 +28,15 @@ See `docs/port-plan.md`. Short version: Rust + macroquad, one codebase for web/m
 
 ```bash
 cargo run            # native window
-cargo build --release
+bash tools/build-web.sh   # web build into web/
+python3 -m http.server 8765   # then open http://localhost:8765/web.html
 ```
 
-Web build instructions land with the first Rust milestone.
+Controls: WASD move, mouse aim, LMB fire, RMB gravity grab/sling, E polarity, Shift dash, 1/2/3/4 weapon (plasma / flame / ice / gravity), U upgrade, B bomb, Esc pause.
+
+## Status
+
+Playable: title, 30-stage arcade with stage clear and unlock progression, survival mode, enemies (drone / turret / slinger), boss on stage 5, meteor kinds with the weakness matrix, persistent chunks, bombs, gravity grab/sling, original terrain and audio, HUD with radar.
+
+Verified: stage 1 clears at 30 s with a real run (STAGE CLEAR, score 22410); game over and retry work; web build runs in Chromium with no console errors.
+
