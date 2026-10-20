@@ -106,6 +106,8 @@ pub const SOUND_RING: usize = 9;
 /// BigBonus::setState(0): power-up pickup, and the slow-motion one.
 pub const SOUND_POWER: usize = 2;
 pub const SOUND_SLOW: usize = 16;
+/// Mine::setState(10007): Enemy::activateBonuses(50, 1).
+const MINE_RING_SPEED: f32 = 50.0;
 /// BossInside::setState(10006) and (10007).
 pub const SOUND_BOSS_DYING: usize = 6;
 pub const SOUND_BOSS_DEAD: usize = 7;
@@ -172,6 +174,7 @@ pub struct PlayAssets {
     pub aim: Texture2D,
     pub cannon: Texture2D,
     pub depot: Texture2D,
+    pub mine: Texture2D,
     /// bossInside.1-8 and ball.png (a boss piece).
     pub boss: Vec<Texture2D>,
     pub boss_piece: Texture2D,
@@ -724,6 +727,13 @@ impl Play {
                 hit = true;
             }
         }
+        // Mines blow up on contact and take the ship with them unless boosting.
+        let mut mines = self.field.touching_mines(self.ship.pos, SHIP_RADIUS);
+        mines.sort_unstable_by(|a, b| b.cmp(a));
+        for i in mines {
+            self.field.destroy_mine(i, true, true, true);
+            hit |= !boosting;
+        }
         // The core: ramming it costs it 7.5 once per life or per boost.
         if self.field.touching_boss(self.ship.pos, SHIP_RADIUS) {
             let id = if boosting { self.ship.boosts } else { self.ship.lives_used };
@@ -945,6 +955,36 @@ impl Play {
                 }
                 Event::WaveIncoming => self.sounds.push(SOUND_WAVE),
                 Event::DepotHit | Event::BossHit => self.sounds.push(SOUND_DEPOT_HIT),
+                Event::MineHit { pos, sound, sparks } => {
+                    if sound {
+                        self.sounds.push(SOUND_DEPOT_HIT);
+                    }
+                    if sparks {
+                        let away = self.towards_ship(pos) + 180.0;
+                        self.effects.start(Kind::Point, 3, pos, away, false);
+                    }
+                }
+                Event::MineDestroyed {
+                    pos,
+                    points,
+                    rings,
+                    sound,
+                    effects,
+                } => {
+                    if sound {
+                        self.sounds.push(SOUND_DEPOT_DESTROYED);
+                    }
+                    if effects {
+                        let away = self.towards_ship(pos) + 180.0;
+                        self.effects.start(Kind::Ring, 2, pos, 0.0, false);
+                        self.effects.start(Kind::Sprite, 1, pos, 0.0, false);
+                        self.effects.start(Kind::Point, 3, pos, away, false);
+                        self.effects.start(Kind::Diamond, 3, pos, away, false);
+                    }
+                    self.score += (points * self.multiplier) as u64;
+                    self.pickups
+                        .drop(pos, MINE_RING_SPEED, rings, self.magnet > 0.0);
+                }
                 Event::BossDying { pos } => {
                     // BossInside::setState(10006): a charge-up that follows the core.
                     self.camera.shake(0.75, 7.5);
@@ -1050,6 +1090,7 @@ impl Play {
             .filter(|r| r.active())
             .map(|r| r.pos)
             .chain(self.field.depots.iter().filter(|d| d.active()).map(|d| d.pos))
+            .chain(self.field.mines.iter().filter(|m| m.active()).map(|m| m.pos))
             .chain(self.field.pieces.iter().filter(|p| p.active()).map(|p| p.pos))
             .chain(self.field.boss.iter().filter(|b| b.active()).map(|b| b.pos))
             .map(|p| vec2(wrap_near(p.x, ship.x), wrap_near(p.y, ship.y)))
@@ -1203,6 +1244,16 @@ impl Play {
         }
         self.draw_rocks(assets);
         self.draw_depots(canvas, assets);
+        for m in &self.field.mines {
+            let s = self.to_screen(m.pos);
+            let color = Color::new(1.0, 1.0, 1.0, m.alpha);
+            let draw = || draw_sprite(&assets.mine, s.x, s.y, m.angle, self.z + m.z, color);
+            if m.flash {
+                canvas.flashing(draw);
+            } else {
+                draw();
+            }
+        }
         self.draw_boss(canvas, assets);
 
         // Cannon fire: green additive point sprites trailing each bullet.

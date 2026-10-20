@@ -7,6 +7,7 @@ mod enemies;
 mod gfx;
 mod hud;
 mod menu;
+mod mine;
 mod particles;
 mod play;
 mod progress;
@@ -429,6 +430,7 @@ async fn load_play_assets() -> PlayAssets {
         cannon: load_sprite("fire100").await,
         spark: load_sprite("fire200").await,
         depot: load_sprite("depot").await,
+        mine: load_sprite("mine").await,
         boss: {
             let mut frames = Vec::new();
             for i in 1..=8 {
