@@ -22,7 +22,7 @@
 
 ## Windows builds
 
-Run on `xamd4090` (SSH alias, key auth installed). Node 24.14 and git 2.53 present; Rust is not — install rustup before the first Windows build.
+Run on `xamd4090` (SSH alias, key auth installed). Node 24.14, git 2.53, MSVC Build Tools and rustup (stable, MSVC) present. Long paths break the MSVC linker; keep `CARGO_TARGET_DIR` short.
 
 ## Resume status (2026-10-20)
 
@@ -52,7 +52,8 @@ Next:
 - Tutorial and high-score screens.
 - Wire `PausePopup` settings save/load.
 - Pixel-diff the pause/results popups against emulator frames; replace the generic button art with the original pre-rendered/dynamic buttons.
-- Resolve controller input.
+- Resolve controller input on macOS.
+- Windows: confirm X, Y, LB, RB, LT, RT, View, Start and the right stick with `MB_PAD_LOG=1` (A, B, D-pad and left stick verified).
 
 Test hooks (env):
 - `MB_START=w.s` starts a stage; `MB_WAVE=n` starts at wave n.
