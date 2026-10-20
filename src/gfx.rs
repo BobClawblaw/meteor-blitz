@@ -185,6 +185,21 @@ fn backdrop_mesh(flipped: bool) -> Mesh {
     }
 }
 
+/// Background::draw: the base layer's texture shift per unit of travel,
+/// in 1024ths of the backdrop.
+const ORIGINAL_SCROLL: f32 = 2.0;
+/// GameScreen::draw: the planet sits this far behind the play plane.
+pub const BACKGROUND_DEPTH: f32 = 100.0;
+
+/// A base-layer scroll that keeps the ground under the rocks. The planet is
+/// drawn BACKGROUND_DEPTH behind the play plane, so it shows at
+/// EYE_Z / (EYE_Z + depth) of their scale; at the original's 2/1024 it
+/// moved at 79% of their speed and rocks slid across it.
+pub fn glued_scroll() -> f32 {
+    let scale = EYE_Z / (EYE_Z + BACKGROUND_DEPTH);
+    BACKDROP_SIZE * TEXEL_PER_UNIT / scale
+}
+
 /// macroquad draws at most this much per mesh; larger batches are split.
 pub const MAX_BATCH_VERTICES: usize = 8000;
 pub const MAX_BATCH_INDICES: usize = 4800;
@@ -353,8 +368,13 @@ impl Canvas {
             )
         };
         self.backdrop_material.set_texture("Decal", decal.clone());
-        self.backdrop_material.set_uniform("Scroll0", wrap(2.0));
-        self.backdrop_material.set_uniform("Scroll1", wrap(3.0));
+        // Background::draw scrolls the base layer by 2/1024 and the cloud
+        // decal by 3/1024 per unit. In game the base is set to keep pace
+        // with the play plane instead (see `glued_scroll`); clouds keep
+        // their 1.5x lead over it.
+        let k = if menu { ORIGINAL_SCROLL } else { glued_scroll() };
+        self.backdrop_material.set_uniform("Scroll0", wrap(k));
+        self.backdrop_material.set_uniform("Scroll1", wrap(k * 1.5));
         gl_use_material(&self.backdrop_material);
         draw_mesh(&mesh);
         gl_use_default_material();
@@ -485,4 +505,35 @@ pub fn draw_atlas_sprite(
         texture: Some(tex.clone()),
     };
     draw_mesh(&quad);
+}
+
+#[cfg(test)]
+mod backdrop_tests {
+    use super::*;
+
+    /// On-screen length of a 1-unit step at depth `z` near the canvas centre.
+    fn step(z: f32) -> f32 {
+        let proj = Mat4::perspective_rh_gl(FOV_Y_DEG.to_radians(), FB_W / FB_H, Z_NEAR, Z_FAR);
+        let view = Mat4::look_at_rh(vec3(FB_W * 0.5, FB_H * 0.5, EYE_Z), vec3(FB_W * 0.5, FB_H * 0.5, 0.0), vec3(0.0, 1.0, 0.0));
+        let rotate = Mat4::from_translation(vec3(FB_W * 0.5, FB_H * 0.5, 0.0))
+            * Mat4::from_rotation_z((-90.0f32).to_radians())
+            * Mat4::from_rotation_x(180.0f32.to_radians())
+            * Mat4::from_translation(vec3(-CANVAS_W * 0.5, -CANVAS_H * 0.5, 0.0));
+        let m = proj * view * rotate;
+        let c = vec3(CANVAS_W * 0.5, CANVAS_H * 0.5, z);
+        let p = |v: Vec3| {
+            let h = m * v.extend(1.0);
+            vec2(h.x / h.w, h.y / h.w)
+        };
+        (p(c + vec3(1.0, 0.0, 0.0)) - p(c)).length()
+    }
+
+    /// The glued scroll moves the ground at the rocks' speed on screen, at
+    /// the centre of the view.
+    #[test]
+    fn ground_keeps_pace_with_the_play_plane() {
+        let ratio = step(BACKGROUND_DEPTH) / step(0.0);
+        let ground_units_per_unit = glued_scroll() / BACKDROP_SIZE / TEXEL_PER_UNIT;
+        assert!((ground_units_per_unit * ratio - 1.0).abs() < 1e-4, "{}", ground_units_per_unit * ratio);
+    }
 }

@@ -638,6 +638,11 @@ async fn main() {
         let auto_shot = std::env::var("MB_SHOT")
             .ok()
             .filter(|_| frame_count == shot_frame);
+        if auto_shot.is_some() {
+            if let Some(g) = game.as_ref() {
+                eprintln!("shot: ship at {:?}", g.ship_pos());
+            }
+        }
         if is_key_pressed(KeyCode::F12) || auto_shot.is_some() {
             let _ = std::fs::create_dir_all("shots");
             let name = auto_shot

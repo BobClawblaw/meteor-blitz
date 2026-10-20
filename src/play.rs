@@ -32,7 +32,7 @@ const WORLD: f32 = 1024.0;
 
 // GameScreen: the backdrop sits BACKGROUND_Z towards the viewer; screens fly
 // in from GAME_SCREEN_START_Z, fading in at 0.6/s along a sine curve.
-const BACKGROUND_Z: f32 = 100.0;
+const BACKGROUND_Z: f32 = crate::gfx::BACKGROUND_DEPTH;
 const START_Z: f32 = 1000.0;
 const FADE_IN_SPEED: f32 = 0.6;
 const SCREEN_CENTRE: Vec2 = vec2(240.0, 160.0);
@@ -687,6 +687,11 @@ impl Play {
             wrap_near(p.y, self.ship.pos.y) - self.ship.pos.y,
         );
         SCREEN_CENTRE + self.camera.offset() + d
+    }
+
+    /// The ship's world position, for screenshot diagnostics.
+    pub fn ship_pos(&self) -> Vec2 {
+        self.ship.pos
     }
 
     pub fn update(&mut self, dt: f32) {
