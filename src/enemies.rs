@@ -260,6 +260,8 @@ pub enum Event {
         pos: Vec2,
         element: Element,
         points: u32,
+        /// Rings to drop (Enemy::activateBonuses).
+        rings: u32,
     },
     /// A hit that did not destroy the rock (sparks at most every 8 updates).
     RockHit {
@@ -401,6 +403,8 @@ impl Field {
             pos: rock.pos,
             element: rock.element,
             points: if score { rock.points } else { 0 },
+            // Rock::setState(10007): a scored small rock drops one ring.
+            rings: if score && rock.size == 0 { 1 } else { 0 },
         });
         if rock.size == 0 {
             return;

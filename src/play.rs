@@ -15,6 +15,7 @@ use macroquad::prelude::*;
 
 use crate::enemies::{wrap_near, Element, Event, Field, Rock, Script, Weapon};
 use crate::gfx::{draw_atlas_sprite, draw_quad, draw_sprite, Canvas};
+use crate::bonus::Rings;
 use crate::hud::{self, HudAssets, HudValues};
 use crate::particles::{Effects, Kind};
 
@@ -98,6 +99,13 @@ const SURVIVAL: usize = 6;
 pub const SOUND_BOOST: usize = 4;
 pub const SOUND_BOOST_READY: usize = 5;
 pub const SOUND_WAVE: usize = 11;
+/// Bonus::setState(0): the ring pickup chime.
+pub const SOUND_RING: usize = 9;
+/// Rock::setState(10007): Enemy::activateBonuses spread for a small rock.
+const RING_DROP_SPEED: f32 = 5.0;
+/// Hud::update: the multiplier steps up when the score since the last
+/// death passes each of these.
+const MULTIPLIER_STEPS: [u64; 9] = [4999, 19999, 49999, 89999, 139999, 199999, 269999, 349999, 439999];
 pub const SOUND_ROCK: [usize; 3] = [12, 13, 14];
 pub const SOUND_SHIP_DESTROYED: usize = 15;
 /// Ship::update: the boost-ready cue starts 1.3 to 0.65 s before the boost
@@ -427,6 +435,9 @@ pub struct Play {
     pub lives: u32,
     pub bombs: u32,
     pub rings: u32,
+    /// Global::multiplierBaseScore: the score at the last death.
+    multiplier_base: u64,
+    pickups: Rings,
     high_score: u64,
     /// `Audio::play` ids raised this update, for the caller to play.
     pub sounds: Vec<usize>,
@@ -464,6 +475,8 @@ impl Play {
             },
             bombs: BOMBS,
             rings: 0,
+            multiplier_base: 0,
+            pickups: Rings::default(),
             high_score,
             sounds: Vec::new(),
             effects: Effects::load(&assets.systems),
@@ -517,6 +530,7 @@ impl Play {
             State::Ready => self.step_ready(dt),
             State::Over { .. } => {
                 self.field.update(dt, self.ship.pos);
+                self.update_rings(dt);
                 self.camera.update(dt, Vec2::ZERO);
             }
         }
@@ -550,8 +564,10 @@ impl Play {
 
         self.script.update(dt, self.ship.pos, &mut self.field);
         self.field.update(dt, self.ship.pos);
+        self.update_rings(dt);
         self.collide();
         self.handle_events();
+        self.update_multiplier();
         if self.script.complete(&self.field) {
             self.state = State::Over { cleared: true };
         }
@@ -602,6 +618,9 @@ impl Play {
         self.camera.shake(0.75, 7.5);
         self.script.delay();
         self.sounds.push(SOUND_SHIP_DESTROYED);
+        // Ship::setState(4): the multiplier starts over from this score.
+        self.multiplier = 1;
+        self.multiplier_base = self.score;
         let p = self.ship.pos;
         self.effects.flash(Color::new(0.8, 0.8, 0.8, 1.0));
         self.effects.start(Kind::Ring, 1, p, 0.0, false);
@@ -609,6 +628,23 @@ impl Play {
         for _ in 0..3 {
             self.effects.start(Kind::Point, 2, p, 0.0, false);
         }
+    }
+
+    /// Bonus::update for every ring; Bonus::setState(0) for each collected.
+    fn update_rings(&mut self, dt: f32) {
+        let ship = (!matches!(self.ship.life, Life::Dead(_))).then_some(self.ship.pos);
+        for pos in self.pickups.update(dt, ship, self.ship.pos) {
+            self.sounds.push(SOUND_RING);
+            self.effects.start(Kind::Point, 15, pos, rand::gen_range(0.0, 360.0), false);
+            self.rings += 1;
+            self.score += self.multiplier as u64;
+        }
+    }
+
+    /// Hud::update: the multiplier from the score since the last death.
+    fn update_multiplier(&mut self) {
+        let since = self.score - self.multiplier_base;
+        self.multiplier = 1 + MULTIPLIER_STEPS.iter().filter(|&&t| since > t).count() as u32;
     }
 
     /// Enemy::rotationTowards the ship, in the original's degrees.
@@ -628,8 +664,10 @@ impl Play {
                     pos,
                     element,
                     points,
+                    rings,
                 } => {
                     self.score += (points * self.multiplier) as u64;
+                    self.pickups.drop(pos, RING_DROP_SPEED, rings);
                     self.sounds.push(SOUND_ROCK[rand::gen_range(0, 3)]);
                     // Rock::setState(10007): debris aimed away from the ship.
                     let away = self.towards_ship(pos) + 180.0;
@@ -789,6 +827,13 @@ impl Play {
             self.z + bg_z,
         );
         canvas.draw_backdrop(false, base, decal, origin, self.scroll, 1.0);
+        // EnemyManager::sharedDraw: rings first, under everything else.
+        for r in &self.pickups.rings {
+            let p = self.to_screen(r.pos);
+            // AnimationData(bonus, 4, 4): the 7x7 sprite anchored 4 units in.
+            let c = p + vec2(-0.5, -0.5);
+            draw_sprite(&assets.hud.ring, c.x, c.y, r.angle, self.z, Color::new(1.0, 1.0, 1.0, r.alpha));
+        }
         self.draw_rocks(assets);
 
         // Cannon fire: green additive point sprites trailing each bullet.

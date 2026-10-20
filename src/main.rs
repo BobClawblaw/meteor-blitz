@@ -1,5 +1,6 @@
 //! Meteor Blitz — a port of the 2009 iPhone game. Window, screens, and loop.
 
+mod bonus;
 mod enemies;
 mod gfx;
 mod hud;
