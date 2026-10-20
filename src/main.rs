@@ -143,7 +143,7 @@ async fn main() {
     let mut particles: Vec<Particle> = Vec::new();
     let mut explosions: Vec<Explosion> = Vec::new();
     let menu_assets = load_menu_assets().await;
-    let canvas = Canvas::new();
+    let canvas = Canvas::new(&menu_assets);
     let mut progress = Progress::load();
     let mut music_on = false;
     // Ore from the finished run is banked once, when the run ends.
@@ -288,7 +288,7 @@ async fn main() {
         match screen {
             Screen::Title => {
                 canvas.begin();
-                menu::draw_main_menu(&menu_assets);
+                menu::draw_main_menu(&canvas, &menu_assets);
                 canvas.end();
             }
             Screen::Select => render::draw_stage_select(progress.unlocked),
