@@ -7,7 +7,7 @@ use macroquad::prelude::*;
 use macroquad::audio::{load_sound, play_sound, PlaySoundParams, Sound};
 
 use game::{Event, Game, Input, Mode};
-use render::{Assets, Camera, Particle};
+use render::{Assets, Camera, Explosion, Particle};
 
 fn window_conf() -> Conf {
     Conf {
@@ -37,6 +37,14 @@ struct Audio {
     boss: Sound,
 }
 
+async fn load_frames(start: usize, count: usize) -> Vec<Texture2D> {
+    let mut out = Vec::new();
+    for i in start..start + count {
+        out.push(load_texture(&format!("original/sprites/frame_{:03}.png", i)).await.unwrap());
+    }
+    out
+}
+
 fn load_best() -> u64 {
     std::fs::read_to_string("best.txt")
         .ok()
@@ -58,6 +66,16 @@ async fn main() {
         fog_black_red: load_texture("assets/terrain/fogBlackRed.png").await.unwrap(),
         clouds: load_texture("assets/terrain/clouds.png").await.unwrap(),
         space: load_texture("assets/terrain/space4deep.png").await.unwrap(),
+        ship: load_texture("original/sprites/frame_380.png").await.unwrap(),
+        meteors: load_frames(0, 6).await,
+        debris: load_frames(40, 4).await,
+        explosion: load_frames(20, 4).await,
+        planets: load_frames(60, 4).await,
+        fire: load_frames(80, 4).await,
+        enemy_drone: load_texture("original/sprites/frame_435.png").await.unwrap(),
+        enemy_turret: load_texture("original/sprites/frame_450.png").await.unwrap(),
+        enemy_slinger: load_texture("original/sprites/frame_465.png").await.unwrap(),
+        bullet: load_texture("original/sprites/frame_300.png").await.unwrap(),
     };
     for tex in [
         &assets.crust,
@@ -87,6 +105,7 @@ async fn main() {
         y: game::WORLD_H * 0.5,
     };
     let mut particles: Vec<Particle> = Vec::new();
+    let mut explosions: Vec<Explosion> = Vec::new();
     let mut unlocked: usize = 0;
     let mut best = load_best();
     let mut music_on = false;
@@ -149,7 +168,7 @@ async fn main() {
                     let input = read_input(g);
                     g.update(dt, &input);
                     cam.follow(g.player.x, g.player.y, dt);
-                    handle_events(g, &audio, &mut particles);
+                    handle_events(g, &audio, &mut particles, &mut explosions);
                     if g.over {
                         if g.score > best {
                             best = g.score;
@@ -192,7 +211,9 @@ async fn main() {
 
         if let Some(g) = game.as_ref() {
             render::draw_terrain(&assets, &cam, g.world);
-            render::draw_entities(g, &cam);
+            render::draw_planets(&assets, &cam);
+            render::draw_entities(g, &cam, &assets);
+            render::draw_explosions(&mut explosions, &cam, &assets, dt);
             render::draw_particles(&mut particles, &cam, dt);
             render::draw_hud(g);
         }
@@ -247,7 +268,7 @@ fn read_input(g: &Game) -> Input {
     }
 }
 
-fn handle_events(g: &mut Game, audio: &Audio, particles: &mut Vec<Particle>) {
+fn handle_events(g: &mut Game, audio: &Audio, particles: &mut Vec<Particle>, explosions: &mut Vec<Explosion>) {
     for event in g.events.drain(..) {
         match event {
             Event::Fire(weapon, x, y) => {
@@ -262,6 +283,7 @@ fn handle_events(g: &mut Game, audio: &Audio, particles: &mut Vec<Particle>) {
                     _ => Color::new(1.0, 0.75, 0.25, 1.0),
                 };
                 render::burst(particles, x, y, 8 + (mass * 2.0) as usize, color, 220.0);
+                render::explosion_burst(explosions, x, y, 2, 0.6 + mass * 0.08);
             }
             Event::PlayerHit(_) => {
                 play_sound(&audio.hit, PlaySoundParams { looped: false, volume: 0.6 });
@@ -272,6 +294,7 @@ fn handle_events(g: &mut Game, audio: &Audio, particles: &mut Vec<Particle>) {
             Event::Bomb(x, y) => {
                 play_sound(&audio.bomb, PlaySoundParams { looped: false, volume: 0.7 });
                 render::burst(particles, x, y, 40, Color::new(1.0, 0.75, 0.25, 1.0), 420.0);
+                render::explosion_burst(explosions, x, y, 6, 1.4);
             }
             Event::Grab(x, y) => {
                 render::burst(particles, x, y, 4, Color::new(0.15, 0.85, 1.0, 1.0), 80.0);

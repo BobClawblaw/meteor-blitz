@@ -1,4 +1,4 @@
-//! Rendering: planet terrain, entities, effects, HUD, and screens.
+//! Rendering: planet terrain, original sprite entities, effects, HUD, screens.
 
 use macroquad::prelude::*;
 
@@ -12,6 +12,16 @@ pub struct Assets {
     pub fog_black_red: Texture2D,
     pub clouds: Texture2D,
     pub space: Texture2D,
+    pub ship: Texture2D,
+    pub meteors: Vec<Texture2D>,
+    pub debris: Vec<Texture2D>,
+    pub explosion: Vec<Texture2D>,
+    pub planets: Vec<Texture2D>,
+    pub fire: Vec<Texture2D>,
+    pub enemy_drone: Texture2D,
+    pub enemy_turret: Texture2D,
+    pub enemy_slinger: Texture2D,
+    pub bullet: Texture2D,
 }
 
 pub struct Particle {
@@ -23,6 +33,16 @@ pub struct Particle {
     pub max: f32,
     pub color: Color,
     pub size: f32,
+}
+
+pub struct Explosion {
+    pub x: f32,
+    pub y: f32,
+    pub life: f32,
+    pub max: f32,
+    pub tex: usize,
+    pub scale: f32,
+    pub rot: f32,
 }
 
 pub struct Camera {
@@ -96,7 +116,6 @@ pub fn draw_terrain(assets: &Assets, cam: &Camera, world: usize) {
             );
         }
     }
-    // Fog layer, tinted per world.
     let fog = match world {
         0 => &assets.fog_green,
         1 => &assets.fog_black_red,
@@ -125,28 +144,76 @@ pub fn draw_terrain(assets: &Assets, cam: &Camera, world: usize) {
     }
 }
 
+pub fn draw_planets(assets: &Assets, cam: &Camera) {
+    let spots = [
+        (900.0, 700.0, 0usize, 2.2),
+        (4200.0, 1200.0, 1, 2.6),
+        (1800.0, 2400.0, 2, 2.0),
+        (5000.0, 2600.0, 3, 2.4),
+    ];
+    for (x, y, idx, scale) in spots {
+        let (sx, sy) = screen_of(cam, x, y);
+        let size = 128.0 * scale;
+        if sx < -size || sx > screen_width() + size || sy < -size || sy > screen_height() + size {
+            continue;
+        }
+        draw_texture_ex(
+            &assets.planets[idx % assets.planets.len()],
+            sx - size * 0.5,
+            sy - size * 0.5,
+            Color::new(1.0, 1.0, 1.0, 0.85),
+            DrawTextureParams {
+                dest_size: Some(vec2(size, size)),
+                ..Default::default()
+            },
+        );
+    }
+}
+
 fn meteor_color(kind: u8) -> Color {
     match kind {
         1 => Color::new(0.55, 0.85, 1.0, 1.0),
         2 => Color::new(1.0, 0.55, 0.35, 1.0),
-        _ => Color::new(0.75, 0.75, 0.70, 1.0),
+        _ => Color::new(1.0, 1.0, 1.0, 1.0),
     }
 }
 
-pub fn draw_entities(game: &Game, cam: &Camera) {
+pub fn draw_entities(game: &Game, cam: &Camera, assets: &Assets) {
     for e in &game.entities {
         let (sx, sy) = screen_of(cam, e.x, e.y);
-        if sx < -80.0 || sx > screen_width() + 80.0 || sy < -80.0 || sy > screen_height() + 80.0 {
+        if sx < -120.0 || sx > screen_width() + 120.0 || sy < -120.0 || sy > screen_height() + 120.0 {
             continue;
         }
         match e.faction {
             Faction::Meteor => {
-                draw_poly(sx, sy, 7, e.radius, e.rot, meteor_color(e.kind));
-                draw_poly(sx, sy, 7, e.radius * 0.62, e.rot + 0.4, Color::new(0.0, 0.0, 0.0, 0.28));
-                draw_poly_lines(sx, sy, 7, e.radius, e.rot, 2.0, Color::new(1.0, 1.0, 1.0, 0.55));
+                let tex = &assets.meteors[e.id as usize % assets.meteors.len()];
+                let size = e.radius * 2.0 * 1.6;
+                draw_texture_ex(
+                    tex,
+                    sx - size * 0.5,
+                    sy - size * 0.5,
+                    meteor_color(e.kind),
+                    DrawTextureParams {
+                        dest_size: Some(vec2(size, size)),
+                        rotation: e.rot,
+                        ..Default::default()
+                    },
+                );
             }
             Faction::Debris => {
-                draw_poly(sx, sy, 5, e.radius, e.rot, meteor_color(e.kind));
+                let tex = &assets.debris[e.id as usize % assets.debris.len()];
+                let size = e.radius * 2.0 * 1.6;
+                draw_texture_ex(
+                    tex,
+                    sx - size * 0.5,
+                    sy - size * 0.5,
+                    meteor_color(e.kind),
+                    DrawTextureParams {
+                        dest_size: Some(vec2(size, size)),
+                        rotation: e.rot,
+                        ..Default::default()
+                    },
+                );
             }
             Faction::Projectile => {
                 let color = match e.weapon {
@@ -155,28 +222,51 @@ pub fn draw_entities(game: &Game, cam: &Camera) {
                     9 => Color::new(1.0, 0.35, 0.45, 1.0),
                     _ => Color::new(0.25, 0.85, 1.0, 1.0),
                 };
-                let len = 0.02;
-                draw_line(sx, sy, sx - e.vx * len, sy - e.vy * len, 3.0, color);
-                draw_circle(sx, sy, 2.5, Color::new(1.0, 1.0, 1.0, 0.9));
+                let size = 18.0;
+                draw_texture_ex(
+                    &assets.bullet,
+                    sx - size * 0.5,
+                    sy - size * 0.5,
+                    color,
+                    DrawTextureParams {
+                        dest_size: Some(vec2(size, size)),
+                        rotation: e.vy.atan2(e.vx),
+                        ..Default::default()
+                    },
+                );
             }
             Faction::Enemy => {
-                let color = Color::new(1.0, 0.35, 0.45, 1.0);
-                match e.enemy {
-                    crate::game::EnemyKind::Drone => {
-                        draw_poly(sx, sy, 3, e.radius, e.rot, color);
-                    }
-                    crate::game::EnemyKind::Turret => {
-                        draw_rectangle(sx - e.radius, sy - e.radius, e.radius * 2.0, e.radius * 2.0, color);
-                    }
-                    crate::game::EnemyKind::Slinger => {
-                        draw_poly(sx, sy, 4, e.radius, e.rot, color);
-                    }
-                }
+                let tex = match e.enemy {
+                    crate::game::EnemyKind::Drone => &assets.enemy_drone,
+                    crate::game::EnemyKind::Turret => &assets.enemy_turret,
+                    crate::game::EnemyKind::Slinger => &assets.enemy_slinger,
+                };
+                let size = e.radius * 2.0 * 1.6;
+                draw_texture_ex(
+                    tex,
+                    sx - size * 0.5,
+                    sy - size * 0.5,
+                    Color::new(1.0, 1.0, 1.0, 1.0),
+                    DrawTextureParams {
+                        dest_size: Some(vec2(size, size)),
+                        rotation: e.rot,
+                        ..Default::default()
+                    },
+                );
             }
             Faction::Boss => {
-                draw_circle(sx, sy, e.radius, Color::new(0.55, 0.15, 0.25, 1.0));
-                draw_circle_lines(sx, sy, e.radius, 4.0, Color::new(1.0, 0.55, 0.65, 1.0));
-                draw_circle(sx, sy, e.radius * 0.55, Color::new(1.0, 0.45, 0.55, 0.9));
+                let size = e.radius * 2.0 * 1.6;
+                draw_texture_ex(
+                    &assets.enemy_turret,
+                    sx - size * 0.5,
+                    sy - size * 0.5,
+                    Color::new(1.0, 0.55, 0.65, 1.0),
+                    DrawTextureParams {
+                        dest_size: Some(vec2(size, size)),
+                        rotation: e.rot,
+                        ..Default::default()
+                    },
+                );
                 let hp = (e.health / 600.0).max(0.0);
                 draw_rectangle(sx - 60.0, sy - e.radius - 18.0, 120.0, 6.0, Color::new(0.1, 0.1, 0.15, 0.8));
                 draw_rectangle(sx - 60.0, sy - e.radius - 18.0, 120.0 * hp, 6.0, Color::new(1.0, 0.35, 0.45, 1.0));
@@ -185,15 +275,55 @@ pub fn draw_entities(game: &Game, cam: &Camera) {
         }
     }
 
-    // Player ship.
     let (sx, sy) = screen_of(cam, game.player.x, game.player.y);
     let aim = game.player.aim_angle();
-    let nose = vec2(sx + aim.cos() * 22.0, sy + aim.sin() * 22.0);
-    let left = vec2(sx + (aim + 2.5).cos() * 14.0, sy + (aim + 2.5).sin() * 14.0);
-    let right = vec2(sx + (aim - 2.5).cos() * 14.0, sy + (aim - 2.5).sin() * 14.0);
-    draw_triangle(nose, left, right, Color::new(0.15, 0.85, 1.0, 1.0));
-    draw_triangle_lines(nose, left, right, 2.0, Color::new(0.85, 1.0, 1.0, 0.9));
-    draw_circle(sx, sy, 6.0, Color::new(0.85, 1.0, 1.0, 0.9));
+    let size = 48.0;
+    draw_texture_ex(
+        &assets.ship,
+        sx - size * 0.5,
+        sy - size * 0.5,
+        Color::new(1.0, 1.0, 1.0, 1.0),
+        DrawTextureParams {
+            dest_size: Some(vec2(size, size)),
+            rotation: aim,
+            ..Default::default()
+        },
+    );
+}
+
+pub fn draw_explosions(explosions: &mut Vec<Explosion>, cam: &Camera, assets: &Assets, dt: f32) {
+    for ex in explosions.iter_mut() {
+        ex.life -= dt;
+        let a = (ex.life / ex.max).max(0.0);
+        let (sx, sy) = screen_of(cam, ex.x, ex.y);
+        let size = 128.0 * ex.scale;
+        draw_texture_ex(
+            &assets.explosion[ex.tex % assets.explosion.len()],
+            sx - size * 0.5,
+            sy - size * 0.5,
+            Color::new(1.0, 1.0, 1.0, a),
+            DrawTextureParams {
+                dest_size: Some(vec2(size, size)),
+                rotation: ex.rot,
+                ..Default::default()
+            },
+        );
+    }
+    explosions.retain(|e| e.life > 0.0);
+}
+
+pub fn explosion_burst(explosions: &mut Vec<Explosion>, x: f32, y: f32, count: usize, scale: f32) {
+    for _ in 0..count {
+        explosions.push(Explosion {
+            x,
+            y,
+            life: rand::gen_range(0.25, 0.6),
+            max: 0.6,
+            tex: rand::gen_range(0, 4) as usize,
+            scale: scale * rand::gen_range(0.8, 1.4),
+            rot: rand::gen_range(0.0, 6.283),
+        });
+    }
 }
 
 pub fn draw_particles(particles: &mut Vec<Particle>, cam: &Camera, dt: f32) {
