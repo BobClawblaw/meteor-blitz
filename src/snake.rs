@@ -61,6 +61,8 @@ pub struct Snake {
     history: Vec<(f32, Vec2, f32)>,
     /// Head first, tail last.
     pub segments: Vec<Segment>,
+    /// Wave flag 2: moves with the ship while dropping in.
+    follow: bool,
 }
 
 /// What a hit on the head did.
@@ -83,7 +85,7 @@ fn heading(v: Vec2) -> f32 {
 
 impl Snake {
     /// Snake::reset, then Snake::activateBodies(8).
-    pub fn new(pos: Vec2) -> Snake {
+    pub fn new(pos: Vec2, follow: bool) -> Snake {
         let period = PERIOD + rand::gen_range(-1.0, 1.0) * PERIOD_JITTER;
         Snake {
             pos,
@@ -110,6 +112,7 @@ impl Snake {
                     flash: false,
                 })
                 .collect(),
+            follow,
         }
     }
 
@@ -135,8 +138,13 @@ impl Snake {
     }
 
     /// Snake::update and SnakeBody::update.
-    pub fn update(&mut self, dt: f32, ship: Vec2, centre: Vec2) {
+    /// `ship_moved` is the ship's displacement this update: with wave flag
+    /// 2 (`follow`), a dropping-in head moves with the ship (Enemy 0x4e).
+    pub fn update(&mut self, dt: f32, ship: Vec2, ship_moved: Vec2, centre: Vec2) {
         self.flash = false;
+        if !self.active && self.follow {
+            self.pos += ship_moved;
+        }
         if self.active {
             self.phase = (self.phase + dt) % self.period;
             let to = vec2(wrap_near(ship.x, self.pos.x), wrap_near(ship.y, self.pos.y)) - self.pos;

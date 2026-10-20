@@ -450,9 +450,9 @@ impl Field {
             + self.boss.is_some() as u32
     }
 
-    fn spawn_snake(&mut self, pos: Vec2) {
+    fn spawn_snake(&mut self, pos: Vec2, follow: bool) {
         if self.snakes.len() < snake::POOL {
-            self.snakes.push(Snake::new(pos));
+            self.snakes.push(Snake::new(pos, follow));
         }
     }
 
@@ -835,6 +835,10 @@ impl Field {
     }
 
     pub fn update(&mut self, dt: f32, centre: Vec2) {
+        let ship_moved = vec2(
+            wrap_near(centre.x, self.centre.x) - self.centre.x,
+            wrap_near(centre.y, self.centre.y) - self.centre.y,
+        );
         self.centre = centre;
         for rock in &mut self.rocks {
             rock.update(dt, centre);
@@ -865,7 +869,7 @@ impl Field {
         }
         self.shy_guy_collisions();
         for s in &mut self.snakes {
-            s.update(dt, ship, centre);
+            s.update(dt, ship, ship_moved, centre);
         }
         self.snake_collisions();
         for d in &mut self.depots {
@@ -1336,7 +1340,8 @@ impl Script {
                     field.spawn_boss(p, self.world, self.stage, ship);
                 } else if wave.kind == KIND_SNAKE {
                     let p = self.origin + offset;
-                    field.spawn_snake(vec2(wrap_near(p.x, ship.x), wrap_near(p.y, ship.y)));
+                    let follow = wave.flags & 2 != 0;
+                    field.spawn_snake(vec2(wrap_near(p.x, ship.x), wrap_near(p.y, ship.y)), follow);
                 } else if wave.kind == KIND_SHY_GUY {
                     let p = self.origin + offset;
                     field.spawn_shy_guy(vec2(wrap_near(p.x, ship.x), wrap_near(p.y, ship.y)));
