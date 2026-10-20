@@ -9,16 +9,25 @@ use macroquad::prelude::*;
 use macroquad::audio::{load_sound, play_sound, PlaySoundParams, Sound};
 
 use game::{Event, Game, Input, Mode};
-use menu::{Canvas, MainButton, MenuAssets};
+use menu::{Canvas, MainButton, MenuAssets, ScreenFx};
 use progress::Progress;
 use render::{Assets, Camera, Explosion, Particle, UiAssets};
 
 fn window_conf() -> Conf {
+    // MB_WINDOW=480x320 gives a 1:1 window for pixel comparisons with the
+    // original's frames (the F12 export is then exactly 480x320).
+    let (width, height, high_dpi) = match std::env::var("MB_WINDOW").ok().and_then(|v| {
+        let (w, h) = v.split_once('x')?;
+        Some((w.parse().ok()?, h.parse().ok()?))
+    }) {
+        Some((w, h)) => (w, h, false),
+        None => (1280, 720, true),
+    };
     Conf {
         window_title: "Meteor Blitz".to_owned(),
-        window_width: 1280,
-        window_height: 720,
-        high_dpi: true,
+        window_width: width,
+        window_height: height,
+        high_dpi,
         sample_count: 4,
         ..Default::default()
     }
@@ -143,18 +152,26 @@ async fn main() {
     let mut particles: Vec<Particle> = Vec::new();
     let mut explosions: Vec<Explosion> = Vec::new();
     let menu_assets = load_menu_assets().await;
-    let canvas = Canvas::new(&menu_assets);
+    let mut canvas = Canvas::new(&menu_assets);
+    let mut title_fx = ScreenFx::enter(true);
     let mut progress = Progress::load();
     let mut music_on = false;
     // Ore from the finished run is banked once, when the run ends.
     let mut banked = false;
+    let mut frame_count: u32 = 0;
 
     loop {
         let dt = get_frame_time().min(0.05);
 
         match screen {
             Screen::Title => {
-                if is_key_pressed(KeyCode::Enter) || menu::main_menu_click() == Some(MainButton::Play) {
+                canvas.update(dt);
+                title_fx.update(dt, is_mouse_button_down(MouseButton::Left));
+                if title_fx.ready() && (is_key_pressed(KeyCode::Enter) || menu::main_menu_click() == Some(MainButton::Play)) {
+                    title_fx.leave();
+                }
+                if title_fx.done() {
+                    title_fx = ScreenFx::enter(true);
                     screen = Screen::Select;
                 }
                 if is_key_pressed(KeyCode::S) {
@@ -288,7 +305,7 @@ async fn main() {
         match screen {
             Screen::Title => {
                 canvas.begin();
-                menu::draw_main_menu(&canvas, &menu_assets);
+                menu::draw_main_menu(&canvas, &menu_assets, &title_fx);
                 canvas.end();
             }
             Screen::Select => render::draw_stage_select(progress.unlocked),
@@ -302,6 +319,18 @@ async fn main() {
             _ => {}
         }
 
+        // F12 saves the frame for pixel comparison against emulator frames;
+        // MB_SHOT=<file> saves the 20th frame there and exits (for scripts).
+        frame_count += 1;
+        let auto_shot = std::env::var("MB_SHOT").ok().filter(|_| frame_count == 20);
+        if is_key_pressed(KeyCode::F12) || auto_shot.is_some() {
+            let _ = std::fs::create_dir_all("shots");
+            let name = auto_shot.clone().unwrap_or_else(|| format!("shots/port_{}.png", (get_time() * 1000.0) as u64));
+            get_screen_data().export_png(&name);
+            if auto_shot.is_some() {
+                std::process::exit(0);
+            }
+        }
         next_frame().await;
     }
 }

@@ -8,7 +8,7 @@
 //! module reproduces that pipeline, then blits the portrait target onto the
 //! window as a 480x320 landscape image.
 
-use macroquad::miniquad::{BlendFactor, BlendState, BlendValue, Comparison, CullFace, Equation, PipelineParams};
+use macroquad::miniquad::{BlendFactor, BlendState, BlendValue, Comparison, CullFace, Equation, PipelineParams, UniformDesc, UniformType};
 use macroquad::prelude::*;
 
 pub const CANVAS_W: f32 = 480.0;
@@ -29,7 +29,14 @@ const BACKDROP_X: f32 = 240.0;
 const BACKDROP_Y: f32 = 155.0;
 const BACKDROP_Z: f32 = 100.0;
 const HORIZON_SCALE: f32 = 1.25;
-const SCREEN_Z: f32 = 150.0;
+
+// BasicScreen::update: screens fade in at 6/s while flying from z=150 to 0
+// at 900/s, fade out at -6/s while flying on; the backdrop scrolls 50/s.
+const SCREEN_START_Z: f32 = 150.0;
+const SCREEN_Z_SPEED: f32 = -900.0;
+const FADE_IN_SPEED: f32 = 6.0;
+const FADE_OUT_SPEED: f32 = -6.0;
+const BACKDROP_SCROLL: f32 = 50.0;
 
 // Background: a 16x16 grid of 64-unit cells (1024x1024), texture
 // coordinates at 0.002 per unit, only the inner cells drawn.
@@ -69,6 +76,74 @@ const MAIN_BUTTONS: [(MainButton, Rect); 4] = [
     (MainButton::Settings, Rect { x: 336.0, y: 176.0, w: 127.0, h: 57.0 }),
     (MainButton::Help, Rect { x: 336.0, y: 246.0, w: 127.0, h: 57.0 }),
 ];
+
+/// `BasicScreen` state: the fade/fly-in on entry and fade-out on exit.
+pub struct ScreenFx {
+    state: u8,
+    pub alpha: f32,
+    pub z: f32,
+    /// Fade the backdrop in with the content (true when coming from the
+    /// splash or the game; menu-to-menu keeps the backdrop solid).
+    fade_backdrop: bool,
+}
+
+impl ScreenFx {
+    pub fn enter(fade_backdrop: bool) -> ScreenFx {
+        ScreenFx { state: 1, alpha: 0.0, z: SCREEN_START_Z, fade_backdrop }
+    }
+
+    pub fn update(&mut self, dt: f32, pointer_down: bool) {
+        match self.state {
+            1 => {
+                self.alpha += dt * FADE_IN_SPEED;
+                self.z = (self.z + dt * SCREEN_Z_SPEED).max(0.0);
+                if self.alpha >= 1.0 {
+                    self.alpha = 1.0;
+                    self.z = 0.0;
+                    self.state = 2;
+                }
+            }
+            2 => {
+                if !pointer_down {
+                    self.state = 3;
+                }
+            }
+            7 => {
+                self.z += dt * SCREEN_Z_SPEED;
+                self.alpha += dt * FADE_OUT_SPEED;
+                if self.alpha <= 0.0 {
+                    self.alpha = 0.0;
+                    self.state = 0;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Buttons only respond in the ready state.
+    pub fn ready(&self) -> bool {
+        self.state == 3
+    }
+
+    pub fn leave(&mut self) {
+        if self.state == 3 {
+            self.state = 7;
+        }
+    }
+
+    pub fn done(&self) -> bool {
+        self.state == 0
+    }
+
+    fn backdrop_color(&self) -> Color {
+        let a = if self.fade_backdrop { self.alpha } else { 1.0 };
+        Color::new(1.0, 1.0, 1.0, a)
+    }
+
+    fn content_color(&self) -> Color {
+        Color::new(1.0, 1.0, 1.0, self.alpha)
+    }
+}
 
 /// `World::getOffsetZ`: height of the planet surface below the plane at a
 /// point `(dx, dy)` from the world centre.
@@ -112,9 +187,11 @@ varying lowp vec4 color;
 varying lowp vec2 uv;
 uniform sampler2D Texture;
 uniform sampler2D Fog;
+uniform vec2 Scroll0;
+uniform vec2 Scroll1;
 void main() {
-    vec4 space = texture2D(Texture, fract(uv));
-    vec4 fog = texture2D(Fog, fract(uv));
+    vec4 space = texture2D(Texture, fract(uv + Scroll0));
+    vec4 fog = texture2D(Fog, fract(uv + Scroll1));
     gl_FragColor = vec4(mix(space.rgb, fog.rgb, fog.a) * color.rgb, space.a * color.a);
 }"#;
 
@@ -183,6 +260,8 @@ pub struct Canvas {
     target: RenderTarget,
     backdrop: Mesh,
     backdrop_material: Material,
+    /// `Background` scroll offset (x, y); layers scroll at 2x and 3x of it.
+    scroll: Vec2,
 }
 
 impl Canvas {
@@ -191,11 +270,20 @@ impl Canvas {
         target.texture.set_filter(FilterMode::Linear);
         let backdrop_material = load_material(
             ShaderSource::Glsl { vertex: DEFAULT_VERTEX, fragment: BACKDROP_FRAGMENT },
-            MaterialParams { pipeline_params: alpha_blend(), textures: vec!["Fog".to_owned()], ..Default::default() },
+            MaterialParams {
+                pipeline_params: alpha_blend(),
+                textures: vec!["Fog".to_owned()],
+                uniforms: vec![UniformDesc::new("Scroll0", UniformType::Float2), UniformDesc::new("Scroll1", UniformType::Float2)],
+            },
         )
         .expect("backdrop shader");
         backdrop_material.set_texture("Fog", assets.fog.clone());
-        Canvas { target, backdrop: backdrop_mesh(&assets.space), backdrop_material }
+        Canvas { target, backdrop: backdrop_mesh(&assets.space), backdrop_material, scroll: Vec2::ZERO }
+    }
+
+    /// `BasicScreen::update`: the menu backdrop drifts along x.
+    pub fn update(&mut self, dt: f32) {
+        self.scroll.x += dt * BACKDROP_SCROLL;
     }
 
     /// Where the landscape canvas lands in the window: largest 3:2 fit, centred.
@@ -236,15 +324,16 @@ impl Canvas {
     }
 }
 
-/// `Texture::draw(x, y, scale)`: a top-left anchored quad at depth `z`.
-fn draw_quad(tex: &Texture2D, x: f32, y: f32, scale: f32, z: f32) {
+/// `Texture::draw(x, y, scale)`: a top-left anchored quad at depth `z`,
+/// modulated by the current `DrawManager` colour.
+fn draw_quad(tex: &Texture2D, x: f32, y: f32, scale: f32, z: f32, color: Color) {
     let (w, h) = (tex.width() * scale, tex.height() * scale);
     let quad = Mesh {
         vertices: vec![
-            Vertex::new(x, y, z, 0.0, 0.0, WHITE),
-            Vertex::new(x + w, y, z, 1.0, 0.0, WHITE),
-            Vertex::new(x + w, y + h, z, 1.0, 1.0, WHITE),
-            Vertex::new(x, y + h, z, 0.0, 1.0, WHITE),
+            Vertex::new(x, y, z, 0.0, 0.0, color),
+            Vertex::new(x + w, y, z, 1.0, 0.0, color),
+            Vertex::new(x + w, y + h, z, 1.0, 1.0, color),
+            Vertex::new(x, y + h, z, 0.0, 1.0, color),
         ],
         indices: vec![0, 1, 2, 0, 2, 3],
         texture: Some(tex.clone()),
@@ -254,7 +343,8 @@ fn draw_quad(tex: &Texture2D, x: f32, y: f32, scale: f32, z: f32) {
 
 /// `BasicScreen::draw` up to the screen's own content: the curved backdrop
 /// at (240, 155, 100), then the horizon at the origin, scale 1.25.
-pub fn draw_backdrop(canvas: &Canvas, assets: &MenuAssets) {
+pub fn draw_backdrop(canvas: &Canvas, assets: &MenuAssets, fx: &ScreenFx) {
+    let color = fx.backdrop_color();
     let mut mesh = Mesh {
         vertices: canvas.backdrop.vertices.clone(),
         indices: canvas.backdrop.indices.clone(),
@@ -262,11 +352,15 @@ pub fn draw_backdrop(canvas: &Canvas, assets: &MenuAssets) {
     };
     for v in &mut mesh.vertices {
         v.position += vec3(BACKDROP_X, BACKDROP_Y, BACKDROP_Z);
+        v.color = [255, 255, 255, (color.a * 255.0) as u8];
     }
+    let wrap = |k: f32| vec2((canvas.scroll.x * k).rem_euclid(TOTAL) / TOTAL, (canvas.scroll.y * k).rem_euclid(TOTAL) / TOTAL);
+    canvas.backdrop_material.set_uniform("Scroll0", wrap(2.0));
+    canvas.backdrop_material.set_uniform("Scroll1", wrap(3.0));
     gl_use_material(&canvas.backdrop_material);
     draw_mesh(&mesh);
     gl_use_default_material();
-    draw_quad(&assets.horizon, 0.0, 0.0, HORIZON_SCALE, 0.0);
+    draw_quad(&assets.horizon, 0.0, 0.0, HORIZON_SCALE, 0.0, color);
 }
 
 /// The main menu button released this frame, if any.
@@ -279,13 +373,14 @@ pub fn main_menu_click() -> Option<MainButton> {
 }
 
 /// `MainMenuScreen::drawStateReady`: title centred at y=15, then the buttons.
-pub fn draw_main_menu(canvas: &Canvas, assets: &MenuAssets) {
-    draw_backdrop(canvas, assets);
-    draw_quad(&assets.title, ((CANVAS_W - assets.title.width()) * 0.5).floor(), 15.0, 1.0, SCREEN_Z);
+pub fn draw_main_menu(canvas: &Canvas, assets: &MenuAssets, fx: &ScreenFx) {
+    draw_backdrop(canvas, assets, fx);
+    let color = fx.content_color();
+    draw_quad(&assets.title, ((CANVAS_W - assets.title.width()) * 0.5).floor(), 15.0, 1.0, fx.z, color);
     let mouse = Canvas::mouse();
     for (i, (_, rect)) in MAIN_BUTTONS.iter().enumerate() {
         let (up, down) = &assets.buttons[i];
-        let held = rect.contains(mouse) && is_mouse_button_down(MouseButton::Left);
-        draw_quad(if held { down } else { up }, rect.x, rect.y, 1.0, SCREEN_Z);
+        let held = fx.ready() && rect.contains(mouse) && is_mouse_button_down(MouseButton::Left);
+        draw_quad(if held { down } else { up }, rect.x, rect.y, 1.0, fx.z, color);
     }
 }

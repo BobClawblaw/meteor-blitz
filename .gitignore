@@ -3,3 +3,4 @@ target/
 .DS_Store
 save.txt
 touchHLE_log.txt
+shots/
