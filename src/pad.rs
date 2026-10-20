@@ -134,8 +134,8 @@ mod raw {
     use std::mem::ManuallyDrop;
 
     // Never dropped: on Windows the thread-local destructors run inside
-    // ExitProcess, after the OS has killed gilrs's event thread, and its Drop
-    // then panics joining that thread (fail-fast on every window close).
+    // ExitProcess, after the OS has killed any backend thread. gilrs's WGI
+    // backend joined its thread in Drop and failed fast on every window close.
     thread_local! {
         static GILRS: RefCell<ManuallyDrop<Option<Gilrs>>> = RefCell::new(ManuallyDrop::new(Gilrs::new().ok()));
     }

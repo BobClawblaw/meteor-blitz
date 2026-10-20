@@ -10,7 +10,9 @@ macroquad = { version = "0.4", features = ["audio"] }
 opt-level = 3
 
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "macos")))'.dependencies]
-gilrs = "0.11.2"
+# XInput, not the default Windows.Gaming.Input: WGI dropped most inputs from
+# an Xbox Wireless Controller over Bluetooth LE that XInput reads fine.
+gilrs = { version = "0.11.2", default-features = false, features = ["xinput"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6.5"
