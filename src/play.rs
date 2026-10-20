@@ -178,6 +178,7 @@ pub struct PlayAssets {
     pub mine: Texture2D,
     pub arrow: Texture2D,
     pub tower: Texture2D,
+    pub seeker: Texture2D,
     /// shyGuyFrames.png: a 4x4 atlas of 32x32 frames.
     pub shy_guy: Texture2D,
     /// pillHead.1.png and pillBody.1.png.
@@ -763,6 +764,13 @@ impl Play {
         if !boosting && self.field.beam_hits(self.ship.pos, SHIP_RADIUS) {
             hit = true;
         }
+        // Seekers die on contact and take the ship with them unless boosting.
+        let mut seekers = self.field.touching_seekers(self.ship.pos, SHIP_RADIUS);
+        seekers.sort_unstable_by(|a, b| b.cmp(a));
+        for i in seekers {
+            self.field.destroy_seeker(i, true, true, true);
+            hit |= !boosting;
+        }
         // Arrows die on contact and take the ship with them unless boosting.
         let mut arrows = self.field.touching_arrows(self.ship.pos, SHIP_RADIUS);
         arrows.sort_unstable_by(|a, b| b.cmp(a));
@@ -1014,6 +1022,28 @@ impl Play {
                         self.effects.start(Kind::Point, 3, pos, away, false);
                     }
                 }
+                Event::SeekerDestroyed {
+                    pos,
+                    points,
+                    rings,
+                    sound,
+                    effects,
+                } => {
+                    if sound {
+                        self.sounds.push(SOUND_DEPOT_DESTROYED);
+                    }
+                    if effects {
+                        let a = rand::gen_range(0.0, 360.0);
+                        for k in 0..4 {
+                            self.effects.start(Kind::Line, 6, pos, a + 90.0 * k as f32, false);
+                        }
+                        self.effects.start(Kind::Point, 6, pos, 0.0, false);
+                        self.effects.start(Kind::Sprite, 1, pos, 0.0, false);
+                    }
+                    self.score += (points * self.multiplier) as u64;
+                    self.pickups
+                        .drop(pos, MINE_RING_SPEED, rings, self.magnet > 0.0);
+                }
                 Event::TowerDestroyed {
                     pos,
                     points,
@@ -1235,6 +1265,7 @@ impl Play {
             .chain(self.field.snakes.iter().filter(|s| s.active()).map(|s| s.pos))
             .chain(self.field.arrows.iter().filter(|a| a.active()).map(|a| a.pos))
             .chain(self.field.towers.iter().filter(|t| t.active()).map(|t| t.pos))
+            .chain(self.field.seekers.iter().filter(|k| k.active()).map(|k| k.pos))
             .chain(self.field.pieces.iter().filter(|p| p.active()).map(|p| p.pos))
             .chain(self.field.boss.iter().filter(|b| b.active()).map(|b| b.pos))
             .map(|p| vec2(wrap_near(p.x, ship.x), wrap_near(p.y, ship.y)))
@@ -1421,6 +1452,16 @@ impl Play {
             let color = Color::new(1.0, 1.0, 1.0, t.alpha);
             let draw = || draw_sprite(&assets.tower, c.x, c.y, t.angle, self.z + t.z, color);
             if t.flash {
+                canvas.flashing(draw);
+            } else {
+                draw();
+            }
+        }
+        for k in &self.field.seekers {
+            let s = self.to_screen(k.pos);
+            let color = Color::new(1.0, 1.0, 1.0, k.alpha);
+            let draw = || draw_sprite(&assets.seeker, s.x, s.y, k.angle, self.z + k.z, color);
+            if k.flash {
                 canvas.flashing(draw);
             } else {
                 draw();

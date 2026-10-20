@@ -7,6 +7,7 @@ use crate::arrow::{self, Arrow};
 use crate::boss::{self, Boss, BossState, Piece, Request};
 use crate::depot::{self, Depot};
 use crate::mine::{self, Mine};
+use crate::seeker::{self, Seeker};
 use crate::shyguy::{self, ShyGuy};
 use crate::snake::{self, Hit, Snake};
 use crate::tower::{self, Tower};
@@ -41,6 +42,11 @@ pub const ROCK_POINTS: u32 = 10;
 const KIND_DEPOT: i32 = 21;
 /// Wave kind for shy guys.
 const KIND_SHY_GUY: i32 = 13;
+/// Wave kind for seekers.
+const KIND_SEEKER: i32 = 18;
+const SEEKER_WEIGHT: u32 = 2;
+/// Seeker::setState(10007): Enemy::activateBonuses(50, 3).
+const SEEKER_RINGS: u32 = 3;
 /// Wave kind for towers.
 const KIND_TOWER: i32 = 19;
 const TOWER_WEIGHT: u32 = 4;
@@ -349,6 +355,14 @@ pub enum Event {
         sound: bool,
         sparks: bool,
     },
+    /// Seeker::setState(10007).
+    SeekerDestroyed {
+        pos: Vec2,
+        points: u32,
+        rings: u32,
+        sound: bool,
+        effects: bool,
+    },
     /// Tower::setState(10007).
     TowerDestroyed {
         pos: Vec2,
@@ -425,6 +439,7 @@ pub struct Field {
     pub snakes: Vec<Snake>,
     pub arrows: Vec<Arrow>,
     pub towers: Vec<Tower>,
+    pub seekers: Vec<Seeker>,
     pub boss: Option<Boss>,
     pub pieces: Vec<Piece>,
     /// Animation frame counts by size: small atlas, medium, large, extra large.
@@ -444,6 +459,7 @@ impl Field {
             snakes: Vec::new(),
             arrows: Vec::new(),
             towers: Vec::new(),
+            seekers: Vec::new(),
             boss: None,
             pieces: Vec::new(),
             frames,
@@ -478,7 +494,75 @@ impl Field {
             + self.snakes.len() as u32 * SNAKE_WEIGHT
             + self.arrows.len() as u32
             + self.towers.len() as u32 * TOWER_WEIGHT
+            + self.seekers.len() as u32 * SEEKER_WEIGHT
             + self.boss.is_some() as u32
+    }
+
+    fn spawn_seeker(&mut self, pos: Vec2) {
+        if self.seekers.len() < seeker::POOL {
+            self.seekers.push(Seeker::new(pos));
+        }
+    }
+
+    /// Seeker::setState(10007).
+    pub fn destroy_seeker(&mut self, index: usize, score: bool, sound: bool, effects: bool) {
+        let k = self.seekers.swap_remove(index);
+        self.events.push(Event::SeekerDestroyed {
+            pos: k.pos,
+            points: if score { seeker::POINTS } else { 0 },
+            rings: if score { SEEKER_RINGS } else { 0 },
+            sound,
+            effects,
+        });
+    }
+
+    /// Active seekers touching a circle (the ship).
+    pub fn touching_seekers(&self, centre: Vec2, radius: f32) -> Vec<usize> {
+        (0..self.seekers.len())
+            .filter(|&i| {
+                let k = &self.seekers[i];
+                let c = vec2(wrap_near(k.pos.x, centre.x), wrap_near(k.pos.y, centre.y));
+                k.active() && c.distance_squared(centre) < (seeker::RADIUS + radius).powi(2)
+            })
+            .collect()
+    }
+
+    /// seekerCollision: seekers push each other and snake heads apart;
+    /// rocks, mines and fixed obstacles push them away.
+    fn seeker_collisions(&mut self) {
+        let n = self.seekers.len();
+        for i in 0..n {
+            if !self.seekers[i].active() {
+                continue;
+            }
+            for j in i + 1..n {
+                if !self.seekers[j].active() {
+                    continue;
+                }
+                let (left, right) = self.seekers.split_at_mut(j);
+                let (a, b) = (&mut left[i], &mut right[0]);
+                let bp = vec2(wrap_near(b.pos.x, a.pos.x), wrap_near(b.pos.y, a.pos.y));
+                let d = bp - a.pos;
+                let r = seeker::RADIUS * 2.0;
+                if d != Vec2::ZERO && d.length_squared() < r * r {
+                    let push = d.normalize() * (r * r - d.length_squared()) * mine::REPEL;
+                    a.impulse -= push;
+                    b.impulse += push;
+                }
+            }
+            let mut others: Vec<(Vec2, f32, f32)> = Vec::new();
+            others.extend(self.rocks.iter().filter(|r| r.active()).map(|r| (r.pos, r.radius(), 2.0)));
+            others.extend(self.mines.iter().filter(|m| m.active()).map(|m| (m.pos, mine::RADIUS, 1.0)));
+            others.extend(self.snakes.iter().filter(|s| s.active()).map(|s| (s.pos, snake::RADIUS, 1.0)));
+            others.extend(self.obstacles().into_iter().map(|(p, r)| (p, r, 2.0)));
+            let k = &mut self.seekers[i];
+            for (pos, radius, f) in others {
+                let c = vec2(wrap_near(pos.x, k.pos.x), wrap_near(pos.y, k.pos.y));
+                if c.distance_squared(k.pos) < (seeker::RADIUS + radius).powi(2) {
+                    k.push_from(c, radius, mine::REPEL * f);
+                }
+            }
+        }
     }
 
     fn spawn_tower(&mut self, pos: Vec2) {
@@ -842,6 +926,10 @@ impl Field {
         while !self.depots.is_empty() {
             self.destroy_depot(0, false);
         }
+        while !self.seekers.is_empty() {
+            let effects = visible(self.seekers[0].pos);
+            self.destroy_seeker(0, false, false, effects);
+        }
         while !self.towers.is_empty() {
             let effects = visible(self.towers[0].pos);
             self.destroy_tower(0, false, false, effects);
@@ -931,6 +1019,7 @@ impl Field {
             None if kind == KIND_SNAKE => self.snakes.len(),
             None if kind == KIND_ARROW => self.arrows.len(),
             None if kind == KIND_TOWER => self.towers.len(),
+            None if kind == KIND_SEEKER => self.seekers.len(),
             None => 0,
         }
     }
@@ -978,6 +1067,10 @@ impl Field {
         for t in &mut self.towers {
             t.update(dt, ship, centre);
         }
+        for k in &mut self.seekers {
+            k.update(dt, ship, centre);
+        }
+        self.seeker_collisions();
         // towerCollision: towers never move, but push depots (repelOther),
         // and rocks bounce off them (Enemy::bounceThis).
         let towers: Vec<Vec2> = self.towers.iter().filter(|t| t.active()).map(|t| t.pos).collect();
@@ -1093,6 +1186,18 @@ impl Field {
                     self.events.push(Event::DepotHit);
                 } else {
                     self.destroy_depot(i, true);
+                }
+                return true;
+            }
+        }
+        for i in 0..self.seekers.len() {
+            let k = &self.seekers[i];
+            let c = vec2(wrap_near(k.pos.x, to.x), wrap_near(k.pos.y, to.y));
+            if k.active() && segment_distance(c, from, to) < seeker::RADIUS + radius {
+                if self.seekers[i].hit(damage) {
+                    self.destroy_seeker(i, true, true, true);
+                } else {
+                    self.events.push(Event::DepotHit);
                 }
                 return true;
             }
@@ -1486,6 +1591,9 @@ impl Script {
                     let p = self.origin + offset;
                     let p = vec2(wrap_near(p.x, ship.x), wrap_near(p.y, ship.y));
                     field.spawn_boss(p, self.world, self.stage, ship);
+                } else if wave.kind == KIND_SEEKER {
+                    let p = self.origin + offset;
+                    field.spawn_seeker(vec2(wrap_near(p.x, ship.x), wrap_near(p.y, ship.y)));
                 } else if wave.kind == KIND_TOWER {
                     let p = self.origin + offset;
                     field.spawn_tower(vec2(wrap_near(p.x, ship.x), wrap_near(p.y, ship.y)));

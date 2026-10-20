@@ -12,6 +12,7 @@ mod mine;
 mod particles;
 mod play;
 mod progress;
+mod seeker;
 mod shyguy;
 mod snake;
 mod tower;
@@ -437,6 +438,7 @@ async fn load_play_assets() -> PlayAssets {
         mine: load_sprite("mine").await,
         arrow: load_sprite("arrow").await,
         tower: load_sprite("tower.1").await,
+        seeker: load_sprite("seeker").await,
         shy_guy: load_sprite("shyGuyFrames").await,
         snake_head: load_sprite("pillHead.1").await,
         snake_body: load_sprite("pillBody.1").await,
