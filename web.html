@@ -14,9 +14,17 @@
     <script src="./web/mq_js_bundle.js"></script>
     <script>
       // miniquad reads keys from canvas.onkeydown, so the canvas must hold focus.
-      const canvas = document.getElementById("glcanvas");
-      canvas.focus();
-      canvas.addEventListener("mousedown", () => canvas.focus());
+      const gameCanvas = document.getElementById("glcanvas");
+      gameCanvas.focus();
+      gameCanvas.addEventListener("mousedown", () => gameCanvas.focus());
+      // Keys pressed while the canvas is not focused still reach the game.
+      for (const type of ["keydown", "keyup"]) {
+        window.addEventListener(type, (e) => {
+          if (document.activeElement !== gameCanvas && gameCanvas["on" + type]) {
+            gameCanvas["on" + type](e);
+          }
+        });
+      }
       load("./web/meteor-blitz.wasm");
     </script>
   </body>
