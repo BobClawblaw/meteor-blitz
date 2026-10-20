@@ -113,6 +113,8 @@ pub struct Boss {
     last_boost: Option<u32>,
     /// Handle of the dying charge-up effect.
     pub death_effect: u64,
+    /// Killed by a bomb: worth half (BossInside::handleEvent(10)).
+    pub bombed: bool,
 }
 
 pub struct Piece {
@@ -319,6 +321,7 @@ impl Boss {
             last_ram: None,
             last_boost: None,
             death_effect: 0,
+            bombed: false,
         }
     }
 

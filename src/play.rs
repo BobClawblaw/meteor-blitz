@@ -102,6 +102,8 @@ const SURVIVAL: usize = 6;
 pub const SOUND_BOOST: usize = 4;
 pub const SOUND_BOOST_READY: usize = 5;
 pub const SOUND_WAVE: usize = 11;
+/// Ship::bomb.
+pub const SOUND_BOMB: usize = 3;
 /// Bonus::setState(0): the ring pickup chime.
 pub const SOUND_RING: usize = 9;
 /// BigBonus::setState(0): power-up pickup, and the slow-motion one.
@@ -951,6 +953,22 @@ impl Play {
         }
     }
 
+    /// Ship::bomb.
+    fn bomb(&mut self) {
+        if self.bombs == 0 || matches!(self.ship.life, Life::Dead(_)) {
+            return;
+        }
+        self.bombs -= 1;
+        self.sounds.push(SOUND_BOMB);
+        self.field.bomb();
+        self.effects.flash(Color::new(0.8, 0.8, 0.8, 1.0));
+        self.camera.shake(0.75, 7.5);
+        let p = self.ship.pos;
+        self.effects.start(Kind::Ring, 5, p, 0.0, false);
+        self.effects.start(Kind::Sprite, 8, p, 0.0, false);
+        self.script.delay();
+    }
+
     /// Ship::deactivateShield.
     fn break_shield(&mut self) {
         self.ship.shield = false;
@@ -1257,6 +1275,15 @@ impl Play {
             self.ship.vel = stick.normalize() * WHEEL_MAX * SHIP_SPEED;
         } else {
             self.ship.vel *= DRAG / (dt + DRAG);
+        }
+        // Bombs: the original's on-screen bomb button; right mouse or B here.
+        // MB_BOMB_AT=<seconds> drops one unattended, for screenshot runs.
+        let auto_bomb = std::env::var("MB_BOMB_AT")
+            .ok()
+            .and_then(|v| v.parse::<f32>().ok())
+            .is_some_and(|t| self.elapsed >= t && self.elapsed - dt < t);
+        if auto_bomb || is_mouse_button_pressed(MouseButton::Right) || is_key_pressed(KeyCode::B) {
+            self.bomb();
         }
         if is_key_pressed(KeyCode::Space) && self.ship.can_boost() {
             self.ship.boost(dt);

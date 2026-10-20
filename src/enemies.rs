@@ -41,6 +41,9 @@ const MAX_BREAK_SPEED: f32 = 50.0;
 pub const ROCK_POINTS: u32 = 10;
 /// Wave kind for depots.
 const KIND_DEPOT: i32 = 21;
+/// Global::BOMB_RADIUS, and BossOutside::handleEvent(10) damage.
+const BOMB_RADIUS: f32 = 250.0;
+const PIECE_BOMB_DAMAGE: f32 = 10.0;
 /// Wave kind for shy guys.
 const KIND_SHY_GUY: i32 = 13;
 /// Wave kind for lobbers.
@@ -464,6 +467,9 @@ pub struct Field {
     pub events: Vec<Event>,
     /// The ship's position at the last update.
     centre: Vec2,
+    /// Inside Field::bomb: kills score nothing (Enemy 0x74 = 0), but rings
+    /// still drop.
+    bombing: bool,
 }
 
 impl Field {
@@ -483,6 +489,7 @@ impl Field {
             frames,
             events: Vec::new(),
             centre: Vec2::ZERO,
+            bombing: false,
         }
     }
 
@@ -528,7 +535,7 @@ impl Field {
         let l = self.lobbers.swap_remove(index);
         self.events.push(Event::LobberDestroyed {
             pos: l.pos,
-            points: if score { lobber::POINTS } else { 0 },
+            points: if score && !self.bombing { lobber::POINTS } else { 0 },
             rings: if score { LOBBER_RINGS } else { 0 },
             sound,
             effects,
@@ -634,7 +641,7 @@ impl Field {
         let k = self.seekers.swap_remove(index);
         self.events.push(Event::SeekerDestroyed {
             pos: k.pos,
-            points: if score { seeker::POINTS } else { 0 },
+            points: if score && !self.bombing { seeker::POINTS } else { 0 },
             rings: if score { SEEKER_RINGS } else { 0 },
             sound,
             effects,
@@ -701,7 +708,7 @@ impl Field {
         let t = self.towers.swap_remove(index);
         self.events.push(Event::TowerDestroyed {
             pos: t.pos,
-            points: if score { tower::POINTS } else { 0 },
+            points: if score && !self.bombing { tower::POINTS } else { 0 },
             rings: if score { TOWER_RINGS } else { 0 },
             sound,
             effects,
@@ -739,7 +746,7 @@ impl Field {
         let a = self.arrows.swap_remove(index);
         self.events.push(Event::ArrowDestroyed {
             pos: a.pos,
-            points: if score { arrow::POINTS } else { 0 },
+            points: if score && !self.bombing { arrow::POINTS } else { 0 },
             rings: score as u32,
             sound,
             effects,
@@ -775,7 +782,7 @@ impl Field {
         }
         self.events.push(Event::SnakeDestroyed {
             pos: s.pos,
-            points: if score { snake::POINTS } else { 0 },
+            points: if score && !self.bombing { snake::POINTS } else { 0 },
             rings: if score { SNAKE_RINGS } else { 0 },
             sound,
             effects,
@@ -874,7 +881,7 @@ impl Field {
         let g = self.shy_guys.swap_remove(index);
         self.events.push(Event::ShyGuyDestroyed {
             pos: g.pos,
-            points: if score { shyguy::POINTS } else { 0 },
+            points: if score && !self.bombing { shyguy::POINTS } else { 0 },
             rings: score as u32,
             sound,
             effects,
@@ -940,7 +947,7 @@ impl Field {
         let m = self.mines.swap_remove(index);
         self.events.push(Event::MineDestroyed {
             pos: m.pos,
-            points: if score { mine::POINTS } else { 0 },
+            points: if score && !self.bombing { mine::POINTS } else { 0 },
             rings: score as u32,
             sound,
             effects,
@@ -1089,7 +1096,69 @@ impl Field {
     /// The death effect has finished: BossInside::setState(10007).
     pub fn boss_dead(&mut self) {
         if let Some(b) = self.boss.take() {
-            self.events.push(Event::BossDead { pos: b.pos, points: boss::POINTS });
+            let points = if b.bombed { boss::POINTS / 2 } else { boss::POINTS };
+            self.events.push(Event::BossDead { pos: b.pos, points });
+        }
+    }
+
+    /// EnemyManager::sharedHandleEvent(10) from Ship::bomb: every enemy
+    /// dropping in or active within 250 units of the ship dies without
+    /// score or sound; the boss loses 7.5 health and every boss piece 10.
+    pub fn bomb(&mut self) {
+        let ship = self.centre;
+        let near = |p: Vec2| vec2(wrap_near(p.x, ship.x), wrap_near(p.y, ship.y)).distance(ship) < BOMB_RADIUS;
+        self.bombing = true;
+        while let Some(i) = (0..self.rocks.len()).filter(|&i| near(self.rocks[i].pos)).max_by_key(|&i| self.rocks[i].size) {
+            self.destroy_rock(i, true, false, true);
+        }
+        while let Some(i) = (0..self.depots.len()).find(|&i| near(self.depots[i].pos)) {
+            self.destroy_depot(i, true);
+        }
+        while let Some(i) = (0..self.mines.len()).find(|&i| near(self.mines[i].pos)) {
+            self.destroy_mine(i, true, false, true);
+        }
+        while let Some(i) = (0..self.shy_guys.len()).find(|&i| near(self.shy_guys[i].pos)) {
+            self.destroy_shy_guy(i, true, false, true);
+        }
+        while let Some(i) = (0..self.snakes.len()).find(|&i| near(self.snakes[i].pos)) {
+            self.destroy_snake(i, true, false, true);
+        }
+        while let Some(i) = (0..self.arrows.len()).find(|&i| near(self.arrows[i].pos)) {
+            self.destroy_arrow(i, true, false, true);
+        }
+        while let Some(i) = (0..self.towers.len()).find(|&i| near(self.towers[i].pos)) {
+            self.destroy_tower(i, true, false, true);
+        }
+        while let Some(i) = (0..self.seekers.len()).find(|&i| near(self.seekers[i].pos)) {
+            self.destroy_seeker(i, true, false, true);
+        }
+        while let Some(i) = (0..self.lobbers.len()).find(|&i| near(self.lobbers[i].pos)) {
+            self.destroy_lobber(i, true, false, true);
+        }
+        self.bombing = false;
+        let mut i = 0;
+        while i < self.pieces.len() {
+            if self.pieces[i].hit(PIECE_BOMB_DAMAGE) {
+                self.destroy_piece(i, true, true);
+            } else {
+                i += 1;
+            }
+        }
+        for i in 0..self.lobbers.len() {
+            if self.lobbers[i].ball.as_mut().is_some_and(|b| b.hit(PIECE_BOMB_DAMAGE)) {
+                self.destroy_held_ball(i);
+            }
+        }
+        let dying = self.boss.as_mut().is_some_and(|b| {
+            if b.state == BossState::Dying || !near(b.pos) {
+                return false;
+            }
+            let dead = b.hit(boss::RAM_DAMAGE);
+            b.bombed |= dead;
+            dead
+        });
+        if dying {
+            self.boss_dying();
         }
     }
 
@@ -1123,7 +1192,7 @@ impl Field {
         let d = self.depots.swap_remove(index);
         self.events.push(Event::DepotDestroyed {
             pos: d.pos,
-            points: if score { depot::POINTS } else { 0 },
+            points: if score && !self.bombing { depot::POINTS } else { 0 },
         });
     }
 
@@ -1213,6 +1282,23 @@ impl Field {
         // towerCollision: towers never move, but push depots (repelOther),
         // and rocks bounce off them (Enemy::bounceThis).
         let towers: Vec<Vec2> = self.towers.iter().filter(|t| t.active()).map(|t| t.pos).collect();
+        // towerGunCollision: a live beam destroys rocks it touches, scored
+        // (Rock::handleEvent(12)).
+        let beams: Vec<(Vec2, Vec2)> = self
+            .towers
+            .iter()
+            .filter(|t| t.firing())
+            .map(|t| (t.pos, t.pos + t.aim * tower::BEAM_LENGTH))
+            .collect();
+        for (a, b) in beams {
+            while let Some(i) = (0..self.rocks.len()).find(|&i| {
+                let r = &self.rocks[i];
+                let c = vec2(wrap_near(r.pos.x, a.x), wrap_near(r.pos.y, a.y));
+                r.active() && segment_distance(c, a, b) < r.radius() + tower::BEAM_RADIUS
+            }) {
+                self.destroy(i, true);
+            }
+        }
         for &tp in &towers {
             for d in self.depots.iter_mut().filter(|d| d.active()) {
                 let c = vec2(wrap_near(tp.x, d.pos.x), wrap_near(tp.y, d.pos.y));
@@ -1536,7 +1622,7 @@ impl Field {
         self.events.push(Event::RockDestroyed {
             pos: rock.pos,
             element: rock.element,
-            points: if score { rock.points } else { 0 },
+            points: if score && !self.bombing { rock.points } else { 0 },
             // Rock::setState(10007): a scored small rock drops one ring.
             rings: if score && rock.size == 0 { 1 } else { 0 },
             sound,
