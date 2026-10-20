@@ -571,3 +571,58 @@ impl Boss {
 fn heading(v: Vec2) -> f32 {
     90.0 + v.y.atan2(v.x).to_degrees()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Runs one stage's boss for `seconds` with the ship parked 150 units
+    /// away; returns (pieces thrown, attacks started, rocks requested).
+    fn run(world: usize, stage: usize, seconds: f32) -> (usize, usize, usize) {
+        let ship = vec2(150.0, 0.0);
+        let mut boss = Boss::new(Vec2::ZERO, world, stage);
+        let mut pieces = Vec::new();
+        let mut out = Vec::new();
+        boss.start(&mut pieces, ship, &mut out);
+        let (mut thrown, mut created) = (0, pieces.len());
+        let dt = 1.0 / 60.0;
+        for _ in 0..(seconds / dt) as usize {
+            let before = pieces.iter().filter(|p| p.attached).count();
+            let len_before = pieces.len();
+            boss.update(dt, &mut pieces, ship, Vec2::ZERO, &mut out);
+            created += pieces.len() - len_before;
+            let mut i = 0;
+            while i < pieces.len() {
+                if pieces[i].update(dt, Vec2::ZERO) {
+                    let len = pieces.len();
+                    pieces.swap_remove(i);
+                    boss.renumber(i, len);
+                } else {
+                    i += 1;
+                }
+            }
+            let after = pieces.iter().filter(|p| p.attached).count();
+            thrown += before.saturating_sub(after);
+            assert!(boss.attached.iter().all(|&i| i < pieces.len() && pieces[i].attached));
+        }
+        (thrown, created, out.len())
+    }
+
+    #[test]
+    fn pattern_zero_keeps_its_pieces() {
+        let (thrown, created, rocks) = run(0, 0, 12.0);
+        assert_eq!((thrown, created, rocks), (0, 1, 0));
+    }
+
+    #[test]
+    fn throwing_patterns_cycle() {
+        // World 2 (index 1): stages 2-5 use patterns 3, 2, 1 and 4 with 5 rocks.
+        for stage in 1..5 {
+            let (thrown, created, rocks) = run(1, stage, 12.0);
+            let n = CONFIG[1][stage].pieces;
+            assert!(thrown >= n, "stage {stage}: thrown {thrown}");
+            assert!(created > n, "stage {stage}: no second wave of pieces");
+            assert!(rocks >= 5, "stage {stage}: rocks {rocks}");
+        }
+    }
+}
