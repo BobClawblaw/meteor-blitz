@@ -3,6 +3,7 @@
 
 use macroquad::prelude::*;
 
+use crate::boss::{self, Boss, BossState, Piece, Request};
 use crate::depot::{self, Depot};
 use crate::waves::{Wave, ARCADE};
 
@@ -33,6 +34,11 @@ const MAX_BREAK_SPEED: f32 = 50.0;
 pub const ROCK_POINTS: u32 = 10;
 /// Wave kind for depots.
 const KIND_DEPOT: i32 = 21;
+/// Wave kind for the boss.
+const KIND_BOSS: i32 = 22;
+/// Enemy::isWithin(ship, 600): enemies cleared by the boss's death only
+/// show their explosions this close to the ship.
+const CLEAR_VISIBLE: f32 = 600.0;
 /// Rock::handleEvent: hit sparks at most every 8 updates.
 const HIT_SPARK_UPDATES: i32 = 8;
 
@@ -113,6 +119,8 @@ pub struct Rock {
     /// Set by `hit` when this hit should show sparks.
     sparked: bool,
     pub points: u32,
+    /// Enemy 0x4d: scores and drops rings (not the boss's rocks).
+    scored: bool,
 }
 
 impl Rock {
@@ -138,6 +146,7 @@ impl Rock {
             spark_cooldown: 0,
             sparked: false,
             points: ROCK_POINTS,
+            scored: true,
         };
         // Animation::setRandomFrame.
         rock.frame = rand::gen_range(0, frames.max(1));
@@ -269,6 +278,19 @@ fn bounce_off(rock: &mut Rock, other: Vec2, other_mass: f32) {
     rock.vel = (rock.vel - n * j) * RESTITUTION;
 }
 
+/// Enemy::bounceBoth without restitution: new velocities of two bodies.
+/// The first body's restitution is applied by the caller where it has one
+/// (bounceOther applies only the second body's).
+fn bounced(pa: Vec2, va: Vec2, ma: f32, pb: Vec2, vb: Vec2, mb: f32) -> (Vec2, Vec2) {
+    let d = pa - pb;
+    if d.dot(vb) - d.dot(va) <= 0.0 {
+        return (va, vb);
+    }
+    let n = d.normalize_or_zero();
+    let k = 2.0 * (n.dot(va) - n.dot(vb)) / (ma + mb);
+    (va - n * (mb * k), vb + n * (ma * k))
+}
+
 /// What happened during an update, for effects, sounds and scoring.
 pub enum Event {
     RockDestroyed {
@@ -277,6 +299,9 @@ pub enum Event {
         points: u32,
         /// Rings to drop (Enemy::activateBonuses).
         rings: u32,
+        /// Rock 0x78 / 0x79: whether it plays a sound and shows effects.
+        sound: bool,
+        effects: bool,
     },
     /// A hit that did not destroy the rock (sparks at most every 8 updates).
     RockHit {
@@ -295,6 +320,24 @@ pub enum Event {
         pos: Vec2,
         points: u32,
     },
+    /// A bullet hit the boss core or a piece without destroying it.
+    BossHit,
+    /// BossInside::setState(10006): the core starts its death throes.
+    BossDying {
+        pos: Vec2,
+    },
+    /// BossInside::setState(10007).
+    BossDead {
+        pos: Vec2,
+        points: u32,
+    },
+    /// BossOutside::setState(10007).
+    PieceDestroyed {
+        pos: Vec2,
+        sound: bool,
+        effects: bool,
+        attached: bool,
+    },
     WaveIncoming,
 }
 
@@ -302,9 +345,13 @@ pub enum Event {
 pub struct Field {
     pub rocks: Vec<Rock>,
     pub depots: Vec<Depot>,
+    pub boss: Option<Boss>,
+    pub pieces: Vec<Piece>,
     /// Animation frame counts by size: small atlas, medium, large, extra large.
     frames: [usize; 4],
     pub events: Vec<Event>,
+    /// The ship's position at the last update.
+    centre: Vec2,
 }
 
 impl Field {
@@ -312,8 +359,11 @@ impl Field {
         Field {
             rocks: Vec::new(),
             depots: Vec::new(),
+            boss: None,
+            pieces: Vec::new(),
             frames,
             events: Vec::new(),
+            centre: Vec2::ZERO,
         }
     }
 
@@ -336,7 +386,99 @@ impl Field {
 
     /// WaveManager::getWaveRemaining: everything left, in small-rock units.
     pub fn weighted_remaining(&self) -> u32 {
-        self.rocks.iter().map(|r| WEIGHT[r.size]).sum::<u32>() + self.depots.len() as u32
+        self.rocks.iter().map(|r| WEIGHT[r.size]).sum::<u32>()
+            + self.depots.len() as u32
+            + self.boss.is_some() as u32
+    }
+
+    /// WaveManager::updateWave for kind 22.
+    fn spawn_boss(&mut self, pos: Vec2, world: usize, stage: usize, ship: Vec2) {
+        if self.boss.is_some() {
+            return;
+        }
+        let mut b = Boss::new(pos, world, stage);
+        let mut requests = Vec::new();
+        b.start(&mut self.pieces, ship, &mut requests);
+        self.boss = Some(b);
+        self.run(requests);
+    }
+
+    fn run(&mut self, requests: Vec<Request>) {
+        for r in requests {
+            match r {
+                Request::Rock(element, pos) => {
+                    if let Some(i) = self.spawn(element, 0, pos) {
+                        self.rocks[i].scored = false;
+                    }
+                }
+            }
+        }
+    }
+
+    /// BossOutside::setState(10007).
+    pub fn destroy_piece(&mut self, index: usize, sound: bool, effects: bool) {
+        let len = self.pieces.len();
+        let p = self.pieces.swap_remove(index);
+        if let Some(b) = &mut self.boss {
+            b.renumber(index, len);
+        }
+        self.events.push(Event::PieceDestroyed {
+            pos: p.pos,
+            sound: sound && p.free_with_time(),
+            effects,
+            attached: p.attached,
+        });
+    }
+
+    /// BossInside::setState(10006): the core starts dying and every other
+    /// enemy is destroyed without score (EnemyManager::sharedHandleEvent(13)).
+    pub fn boss_dying(&mut self) {
+        let Some(b) = &mut self.boss else { return };
+        if b.state == BossState::Dying {
+            return;
+        }
+        b.state = BossState::Dying;
+        let (pos, ship) = (b.pos, self.centre);
+        self.events.push(Event::BossDying { pos });
+        let visible = |p: Vec2| vec2(wrap_near(p.x, ship.x), wrap_near(p.y, ship.y)).distance(ship) < CLEAR_VISIBLE;
+        // Larger rocks go first, so their fragments are cleared too.
+        while let Some(i) = (0..self.rocks.len()).max_by_key(|&i| self.rocks[i].size) {
+            let effects = visible(self.rocks[i].pos);
+            self.destroy_rock(i, false, false, effects);
+        }
+        while !self.depots.is_empty() {
+            self.destroy_depot(0, false);
+        }
+        while !self.pieces.is_empty() {
+            let effects = visible(self.pieces[0].pos);
+            self.destroy_piece(0, false, effects);
+        }
+    }
+
+    /// The death effect has finished: BossInside::setState(10007).
+    pub fn boss_dead(&mut self) {
+        if let Some(b) = self.boss.take() {
+            self.events.push(Event::BossDead { pos: b.pos, points: boss::POINTS });
+        }
+    }
+
+    /// Active pieces touching a circle (the ship).
+    pub fn touching_pieces(&self, centre: Vec2, radius: f32) -> Vec<usize> {
+        (0..self.pieces.len())
+            .filter(|&i| {
+                let p = &self.pieces[i];
+                let c = vec2(wrap_near(p.pos.x, centre.x), wrap_near(p.pos.y, centre.y));
+                p.active() && c.distance_squared(centre) < (boss::PIECE_RADIUS + radius).powi(2)
+            })
+            .collect()
+    }
+
+    /// Whether the active boss core touches a circle (the ship).
+    pub fn touching_boss(&self, centre: Vec2, radius: f32) -> bool {
+        self.boss.as_ref().is_some_and(|b| {
+            let c = vec2(wrap_near(b.pos.x, centre.x), wrap_near(b.pos.y, centre.y));
+            b.active() && c.distance_squared(centre) < (boss::RADIUS + radius).powi(2)
+        })
     }
 
     fn spawn_depot(&mut self, pos: Vec2) {
@@ -370,14 +512,32 @@ impl Field {
         match rock_kind(kind) {
             Some((element, size)) => self.count(element, size),
             None if kind == KIND_DEPOT => self.depots.len(),
+            None if kind == KIND_BOSS => self.boss.is_some() as usize,
             None => 0,
         }
     }
 
     pub fn update(&mut self, dt: f32, centre: Vec2) {
+        self.centre = centre;
         for rock in &mut self.rocks {
             rock.update(dt, centre);
         }
+        if let Some(mut b) = self.boss.take() {
+            let mut requests = Vec::new();
+            b.update(dt, &mut self.pieces, centre, centre, &mut requests);
+            self.boss = Some(b);
+            self.run(requests);
+        }
+        let mut i = 0;
+        while i < self.pieces.len() {
+            if self.pieces[i].update(dt, centre) {
+                // A thrown piece ran out of time: no whoosh, but it bursts.
+                self.destroy_piece(i, false, true);
+            } else {
+                i += 1;
+            }
+        }
+        self.boss_collisions();
         for d in &mut self.depots {
             d.update(dt, centre);
         }
@@ -479,7 +639,80 @@ impl Field {
                 return true;
             }
         }
+        for i in 0..self.pieces.len() {
+            let p = &self.pieces[i];
+            if !p.active() {
+                continue;
+            }
+            let c = vec2(wrap_near(p.pos.x, to.x), wrap_near(p.pos.y, to.y));
+            if segment_distance(c, from, to) < boss::PIECE_RADIUS + radius {
+                if self.pieces[i].hit(damage) {
+                    self.destroy_piece(i, true, true);
+                } else {
+                    self.events.push(Event::BossHit);
+                }
+                return true;
+            }
+        }
+        if let Some(b) = &mut self.boss {
+            let c = vec2(wrap_near(b.pos.x, to.x), wrap_near(b.pos.y, to.y));
+            if b.active() && segment_distance(c, from, to) < boss::RADIUS + radius {
+                if b.hit(damage) {
+                    self.boss_dying();
+                } else {
+                    self.events.push(Event::BossHit);
+                }
+                return true;
+            }
+        }
         false
+    }
+
+    /// bossInsideCollision, bossOutsideCollision and Rock::handleCollision
+    /// against boss parts: rocks and pieces bounce off the core, rocks
+    /// bounce off pieces, pieces bounce off each other.
+    fn boss_collisions(&mut self) {
+        let core = self.boss.as_ref().filter(|b| b.active()).map(|b| b.pos);
+        for rock in self.rocks.iter_mut().filter(|r| r.active()) {
+            if let Some(c) = core {
+                let c = vec2(wrap_near(c.x, rock.pos.x), wrap_near(c.y, rock.pos.y));
+                if c.distance_squared(rock.pos) < (rock.radius() + boss::RADIUS).powi(2) {
+                    bounce_off(rock, c, boss::MASS);
+                }
+            }
+            for p in self.pieces.iter().filter(|p| p.active()) {
+                let c = vec2(wrap_near(p.pos.x, rock.pos.x), wrap_near(p.pos.y, rock.pos.y));
+                if c.distance_squared(rock.pos) < (rock.radius() + boss::PIECE_RADIUS).powi(2) {
+                    bounce_off(rock, c, boss::PIECE_MASS);
+                }
+            }
+        }
+        let n = self.pieces.len();
+        for i in 0..n {
+            if !self.pieces[i].active() {
+                continue;
+            }
+            if let Some(c) = core {
+                let p = &mut self.pieces[i];
+                let c = vec2(wrap_near(c.x, p.pos.x), wrap_near(c.y, p.pos.y));
+                if c.distance_squared(p.pos) < (boss::PIECE_RADIUS + boss::RADIUS).powi(2) {
+                    p.vel = bounced(p.pos, p.vel, boss::PIECE_MASS, c, Vec2::ZERO, boss::MASS).0 * boss::RESTITUTION;
+                }
+            }
+            for j in i + 1..n {
+                if !self.pieces[j].active() {
+                    continue;
+                }
+                let (left, right) = self.pieces.split_at_mut(j);
+                let (a, b) = (&mut left[i], &mut right[0]);
+                let bp = vec2(wrap_near(b.pos.x, a.pos.x), wrap_near(b.pos.y, a.pos.y));
+                if bp.distance_squared(a.pos) < (boss::PIECE_RADIUS * 2.0).powi(2) {
+                    let (va, vb) = bounced(a.pos, a.vel, boss::PIECE_MASS, bp, b.vel, boss::PIECE_MASS);
+                    a.vel = va * boss::RESTITUTION;
+                    b.vel = vb * boss::RESTITUTION;
+                }
+            }
+        }
     }
 
     /// Active rocks touching a circle (the ship), for collision handling.
@@ -496,13 +729,20 @@ impl Field {
     /// Rock::setState(10007): remove the rock, score it, and break it into
     /// three of the next size down.
     pub fn destroy(&mut self, index: usize, score: bool) {
+        self.destroy_rock(index, score, true, true);
+    }
+
+    fn destroy_rock(&mut self, index: usize, score: bool, sound: bool, effects: bool) {
         let rock = self.rocks.swap_remove(index);
+        let score = score && rock.scored;
         self.events.push(Event::RockDestroyed {
             pos: rock.pos,
             element: rock.element,
             points: if score { rock.points } else { 0 },
             // Rock::setState(10007): a scored small rock drops one ring.
             rings: if score && rock.size == 0 { 1 } else { 0 },
+            sound,
+            effects,
         });
         if rock.size == 0 {
             return;
@@ -583,6 +823,9 @@ pub struct Script {
     /// One-second waits queued by a ship death (WaveManager::delay).
     delays: i32,
     delay_timer: f32,
+    /// Global::level and Global::stage (0-based) for the boss.
+    world: usize,
+    stage: usize,
 }
 
 impl Script {
@@ -600,6 +843,8 @@ impl Script {
             tracked_kind: -1,
             delays: 0,
             delay_timer: 0.0,
+            world: world.min(5),
+            stage: stage.clamp(1, 5) - 1,
         }
     }
 
@@ -698,7 +943,11 @@ impl Script {
                     let a = (wave.offset_angle + self.rotation).to_radians();
                     offset += vec2(a.sin(), -a.cos()) * wave.offset_distance;
                 }
-                if wave.kind == KIND_DEPOT {
+                if wave.kind == KIND_BOSS {
+                    let p = self.origin + offset;
+                    let p = vec2(wrap_near(p.x, ship.x), wrap_near(p.y, ship.y));
+                    field.spawn_boss(p, self.world, self.stage, ship);
+                } else if wave.kind == KIND_DEPOT {
                     let p = self.origin + offset;
                     field.spawn_depot(vec2(wrap_near(p.x, ship.x), wrap_near(p.y, ship.y)));
                 } else if let Some((element, size)) = rock_kind(wave.kind) {

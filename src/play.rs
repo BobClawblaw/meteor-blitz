@@ -16,6 +16,7 @@ use macroquad::prelude::*;
 use crate::enemies::{wrap_near, Element, Event, Field, Rock, Script, Weapon};
 use crate::gfx::{draw_atlas_sprite, draw_quad, draw_sprite, Canvas};
 use crate::bonus::{Power, Rings};
+use crate::boss::{self, BossState};
 use crate::depot::{self, Depot};
 use crate::hud::{self, HudAssets, HudValues};
 use crate::particles::{Effects, Kind};
@@ -105,6 +106,12 @@ pub const SOUND_RING: usize = 9;
 /// BigBonus::setState(0): power-up pickup, and the slow-motion one.
 pub const SOUND_POWER: usize = 2;
 pub const SOUND_SLOW: usize = 16;
+/// BossInside::setState(10006) and (10007).
+pub const SOUND_BOSS_DYING: usize = 6;
+pub const SOUND_BOSS_DEAD: usize = 7;
+/// BossInside::setState(10007): Enemy::activateBonuses(150, 20).
+const BOSS_RINGS: u32 = 20;
+const BOSS_RING_SPEED: f32 = 150.0;
 /// Depot::handleEvent(0) and Depot::setState(10007).
 pub const SOUND_DEPOT_HIT: usize = 8;
 pub const SOUND_DEPOT_DESTROYED: usize = 10;
@@ -165,6 +172,9 @@ pub struct PlayAssets {
     pub aim: Texture2D,
     pub cannon: Texture2D,
     pub depot: Texture2D,
+    /// bossInside.1-8 and ball.png (a boss piece).
+    pub boss: Vec<Texture2D>,
+    pub boss_piece: Texture2D,
     /// depot.png's "BONUS" label.
     pub depot_label: Texture2D,
     /// bigBonus.png: five 16x16 power-up icons.
@@ -202,6 +212,21 @@ impl TimeScale {
         let next = self.factor + 2.0 * dt * (goal - self.factor);
         self.factor = if self.factor < goal { next.min(goal) } else { next.max(goal) };
     }
+}
+
+/// Primitives::fillRect: an untextured rectangle at depth `z`.
+fn fill_rect(at: Vec2, size: Vec2, z: f32, color: Color) {
+    let (x, y, w, h) = (at.x, at.y, size.x, size.y);
+    draw_mesh(&Mesh {
+        vertices: vec![
+            Vertex::new(x, y, z, 0.0, 0.0, color),
+            Vertex::new(x + w, y, z, 1.0, 0.0, color),
+            Vertex::new(x + w, y + h, z, 1.0, 1.0, color),
+            Vertex::new(x, y + h, z, 0.0, 1.0, color),
+        ],
+        indices: vec![0, 1, 2, 0, 2, 3],
+        texture: None,
+    });
 }
 
 /// Ship::update keeps the ship itself in [-512, 512].
@@ -259,6 +284,10 @@ struct Ship {
     invincible: f32,
     /// Ship 0x94: the shield power-up absorbs the next hit.
     shield: bool,
+    /// Ship 0xb8 and 0xe0: ships spawned and boosts used, so the boss
+    /// counts each ram once.
+    lives_used: u32,
+    boosts: u32,
     /// Ship 0xfc: no death for a moment after the shield breaks.
     grace: f32,
     boost_charge: f32,
@@ -287,6 +316,8 @@ impl Ship {
             boost_time: 0.0,
             invincible: 0.0,
             shield: false,
+            lives_used: 0,
+            boosts: 0,
             grace: 0.0,
             boost_charge: BOOST_RECHARGE,
             angle: 0.0,
@@ -306,6 +337,7 @@ impl Ship {
     /// Ship::reset: a fresh ship where the last one died.
     fn respawn(&mut self) {
         self.life = Life::Spawning(SPAWN_SHIELD);
+        self.lives_used += 1;
         self.vel = Vec2::ZERO;
         self.boost_vel = Vec2::ZERO;
         self.boost_time = 0.0;
@@ -322,6 +354,7 @@ impl Ship {
     fn boost(&mut self, dt: f32) {
         self.boost_charge = 0.0;
         self.boost_cued = false;
+        self.boosts += 1;
         self.boost_time = BOOST_SECONDS;
         self.invincible = BOOST_INVINCIBLE;
         self.boost_dir = self.vel.normalize_or_zero();
@@ -631,6 +664,7 @@ impl Play {
         self.script.update(dt, self.ship.pos, &mut self.field);
         self.time.update(dt);
         self.field.update(dt * self.time.factor, self.ship.pos);
+        self.follow_boss_death();
         self.update_rings(dt);
         self.magnet = (self.magnet - dt).max(0.0);
         self.collide();
@@ -678,14 +712,36 @@ impl Play {
                 d.repel_from(other, SHIP_RADIUS, depot::REPEL);
             }
         }
+        let boosting = self.ship.invincible > 0.0;
+        let mut hit = false;
+        // Boss pieces: smashed by a boost, deadly otherwise.
+        let mut pieces = self.field.touching_pieces(self.ship.pos, SHIP_RADIUS);
+        pieces.sort_unstable_by(|a, b| b.cmp(a));
+        for i in pieces {
+            if boosting {
+                self.field.destroy_piece(i, true, true);
+            } else {
+                hit = true;
+            }
+        }
+        // The core: ramming it costs it 7.5 once per life or per boost.
+        if self.field.touching_boss(self.ship.pos, SHIP_RADIUS) {
+            let id = if boosting { self.ship.boosts } else { self.ship.lives_used };
+            let dead = self.field.boss.as_mut().is_some_and(|b| b.ram(boosting, id));
+            if dead {
+                self.field.boss_dying();
+            }
+            hit |= !boosting;
+        }
         self.handle_events();
         let mut touching = self.field.touching(self.ship.pos, SHIP_RADIUS);
-        if touching.is_empty() {
-            return;
-        }
         touching.sort_unstable_by(|a, b| b.cmp(a));
+        hit |= !touching.is_empty();
         for i in touching {
             self.field.destroy(i, true);
+        }
+        if !hit {
+            return;
         }
         if self.ship.life == Life::Alive && self.ship.invincible <= 0.0 {
             if self.ship.shield {
@@ -713,6 +769,21 @@ impl Play {
         self.effects.start(Kind::Line, 3, p, 0.0, false);
         for _ in 0..3 {
             self.effects.start(Kind::Point, 2, p, 0.0, false);
+        }
+    }
+
+    /// BossInside::update in 10006: the charge-up follows the core, and the
+    /// core explodes when it ends.
+    fn follow_boss_death(&mut self) {
+        let Some(b) = &self.field.boss else { return };
+        if b.state != BossState::Dying || b.death_effect == 0 {
+            return;
+        }
+        let (id, pos) = (b.death_effect, b.pos);
+        if self.effects.is_running(id) {
+            self.effects.follow(id, pos);
+        } else {
+            self.field.boss_dead();
         }
     }
 
@@ -830,11 +901,18 @@ impl Play {
                     element,
                     points,
                     rings,
+                    sound,
+                    effects,
                 } => {
                     self.score += (points * self.multiplier) as u64;
                     self.pickups
                         .drop(pos, RING_DROP_SPEED, rings, self.magnet > 0.0);
-                    self.sounds.push(SOUND_ROCK[rand::gen_range(0, 3)]);
+                    if sound {
+                        self.sounds.push(SOUND_ROCK[rand::gen_range(0, 3)]);
+                    }
+                    if !effects {
+                        continue;
+                    }
                     // Rock::setState(10007): debris aimed away from the ship.
                     let away = self.towards_ship(pos) + 180.0;
                     let (point, diamond) = match element {
@@ -866,7 +944,50 @@ impl Play {
                     self.effects.start(Kind::Point, front, pos, towards, false);
                 }
                 Event::WaveIncoming => self.sounds.push(SOUND_WAVE),
-                Event::DepotHit => self.sounds.push(SOUND_DEPOT_HIT),
+                Event::DepotHit | Event::BossHit => self.sounds.push(SOUND_DEPOT_HIT),
+                Event::BossDying { pos } => {
+                    // BossInside::setState(10006): a charge-up that follows the core.
+                    self.camera.shake(0.75, 7.5);
+                    self.sounds.push(SOUND_BOSS_DYING);
+                    let id = self.effects.start(Kind::Line, 10, pos, 0.0, true);
+                    if let Some(b) = &mut self.field.boss {
+                        b.death_effect = id;
+                    }
+                    self.effects.start(Kind::Point, 17, pos, 0.0, false);
+                    self.effects.flash(Color::new(0.8, 0.8, 0.8, 1.0));
+                }
+                Event::BossDead { pos, points } => {
+                    self.sounds.push(SOUND_BOSS_DEAD);
+                    self.camera.shake(0.75, 7.5);
+                    self.effects.flash(Color::new(0.8, 0.8, 0.8, 1.0));
+                    self.effects.start(Kind::Ring, 6, pos, 0.0, false);
+                    self.effects.start(Kind::Line, 8, pos, 0.0, false);
+                    self.effects.start(Kind::Point, 9, pos, 0.0, false);
+                    self.effects.start(Kind::Point, 9, pos, 180.0, false);
+                    self.score += (points * self.multiplier) as u64;
+                    self.pickups
+                        .drop(pos, BOSS_RING_SPEED, BOSS_RINGS, self.magnet > 0.0);
+                }
+                Event::PieceDestroyed {
+                    pos,
+                    sound,
+                    effects,
+                    attached,
+                } => {
+                    if attached {
+                        self.camera.shake(0.75, 7.5);
+                    }
+                    if sound {
+                        self.sounds.push(SOUND_ROCK[0]);
+                    }
+                    if effects {
+                        let a = rand::gen_range(0.0, 360.0);
+                        for k in 0..4 {
+                            self.effects.start(Kind::Line, 9, pos, a + 90.0 * k as f32, false);
+                        }
+                        self.effects.start(Kind::Sprite, 9, pos, 0.0, false);
+                    }
+                }
                 Event::DepotDestroyed { pos, points } => {
                     self.sounds.push(SOUND_DEPOT_DESTROYED);
                     self.effects.start(Kind::Point, 17, pos, 0.0, false);
@@ -929,6 +1050,8 @@ impl Play {
             .filter(|r| r.active())
             .map(|r| r.pos)
             .chain(self.field.depots.iter().filter(|d| d.active()).map(|d| d.pos))
+            .chain(self.field.pieces.iter().filter(|p| p.active()).map(|p| p.pos))
+            .chain(self.field.boss.iter().filter(|b| b.active()).map(|b| b.pos))
             .map(|p| vec2(wrap_near(p.x, ship.x), wrap_near(p.y, ship.y)))
             .min_by(|a, b| {
                 a.distance_squared(ship)
@@ -966,6 +1089,36 @@ impl Play {
         for d in self.field.depots.iter().filter(|d| d.active()) {
             let p = self.to_screen(d.pos);
             draw_quad(label, p.x - label.width() * 0.5, p.y + depot::LABEL_DROP, 1.0, self.z, color);
+        }
+    }
+
+    fn draw_boss(&self, canvas: &Canvas, assets: &PlayAssets) {
+        for p in &self.field.pieces {
+            let s = self.to_screen(p.pos);
+            let color = Color::new(1.0, 1.0, 1.0, p.alpha);
+            let draw = || draw_sprite(&assets.boss_piece, s.x, s.y, p.angle, self.z + p.z, color);
+            if p.flash {
+                canvas.flashing(draw);
+            } else {
+                draw();
+            }
+        }
+        let Some(b) = &self.field.boss else { return };
+        let s = self.to_screen(b.pos);
+        let color = Color::new(1.0, 1.0, 1.0, b.alpha);
+        let tex = &assets.boss[b.frame % assets.boss.len()];
+        let draw = || draw_sprite(tex, s.x, s.y, b.angle, self.z + b.z, color);
+        if b.flash {
+            canvas.flashing(draw);
+        } else {
+            draw();
+        }
+        if b.active() {
+            // BossInside::draw: the health bar.
+            let at = s + boss::BAR_OFFSET;
+            fill_rect(at, boss::BAR_SIZE, self.z, Color::new(1.0, 1.0, 1.0, 0.25));
+            let w = b.health / b.max_health * boss::BAR_SIZE.x;
+            fill_rect(at, vec2(w, boss::BAR_SIZE.y), self.z, Color::new(1.0, 0.0, 0.0, 0.5));
         }
     }
 
@@ -1050,6 +1203,7 @@ impl Play {
         }
         self.draw_rocks(assets);
         self.draw_depots(canvas, assets);
+        self.draw_boss(canvas, assets);
 
         // Cannon fire: green additive point sprites trailing each bullet.
         let mut points = Vec::new();

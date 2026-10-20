@@ -200,6 +200,8 @@ struct Running {
     angle: f32,
     reverse: bool,
     frame: usize,
+    /// Handle for effects that follow something (LineSystem pointers).
+    id: u64,
 }
 
 pub struct Effects {
@@ -209,6 +211,7 @@ pub struct Effects {
     next_variant: Vec<Vec<usize>>,
     /// FlashManager: (colour, seconds left, alpha speed).
     flashes: Vec<(Color, f32, f32)>,
+    next_id: u64,
 }
 
 // FlashManager: flashes last 0.5 s; alpha falls at 3/s, damped each update.
@@ -244,6 +247,7 @@ impl Effects {
             running,
             next_variant,
             flashes: Vec::new(),
+            next_id: 1,
         }
     }
 
@@ -251,15 +255,18 @@ impl Effects {
         SETS.iter().position(|(k, _)| *k == kind).unwrap()
     }
 
-    /// `<Kind>SystemManager::start(set, x, y, angle, reverse)`.
-    pub fn start(&mut self, kind: Kind, set: usize, pos: Vec2, angle: f32, reverse: bool) {
+    /// `<Kind>SystemManager::start(set, x, y, angle, reverse)`. Returns a
+    /// handle for `follow` and `is_running`, or 0 when nothing started.
+    pub fn start(&mut self, kind: Kind, set: usize, pos: Vec2, angle: f32, reverse: bool) -> u64 {
         let m = Effects::manager(kind);
         let Some(info) = self.sets[m].1.get(set) else {
-            return;
+            return 0;
         };
         if info.variants.is_empty() {
-            return;
+            return 0;
         }
+        let id = self.next_id;
+        self.next_id += 1;
         let running = &mut self.running[m][set];
         let variant = self.next_variant[m][set] % info.variants.len();
         self.next_variant[m][set] += 1;
@@ -270,12 +277,30 @@ impl Effects {
             angle,
             reverse,
             frame: 0,
+            id,
         };
         if running.len() < info.pool {
             running.push(effect);
         } else if let Some(oldest) = running.iter_mut().max_by_key(|e| e.frame) {
             *oldest = effect;
         }
+        id
+    }
+
+    fn find(&mut self, id: u64) -> Option<&mut Running> {
+        self.running.iter_mut().flatten().flatten().find(|e| e.id == id)
+    }
+
+    /// Moves a running effect (the original writes the system's x, y).
+    pub fn follow(&mut self, id: u64, pos: Vec2) {
+        if let Some(e) = self.find(id) {
+            e.pos = pos;
+        }
+    }
+
+    /// `LineSystem::isActive` for a handle from `start`.
+    pub fn is_running(&mut self, id: u64) -> bool {
+        id != 0 && self.find(id).is_some()
     }
 
     /// FlashManager::flash.
