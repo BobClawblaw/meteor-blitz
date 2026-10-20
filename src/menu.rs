@@ -3,6 +3,8 @@
 
 use macroquad::prelude::*;
 
+use crate::pad::{self, Button};
+
 use crate::gfx::{draw_quad, Canvas, CANVAS_W};
 
 // BasicScreen: backdrop mesh origin and depth, horizon scale.
@@ -70,18 +72,37 @@ pub struct MenuScreen {
     /// Index of the button whose down frame is showing (Button::update
     /// advances the frame on press and only resets it on re-entry).
     pressed: Option<usize>,
+    /// The button a controller has selected (shown pressed). The original
+    /// had no such thing: it was touch-only.
+    focus: Option<usize>,
+    /// The left stick was pushed last frame (it steps once per push).
+    stick_held: bool,
 }
 
 impl MenuScreen {
     pub fn new(label: Texture2D, label_y: f32, buttons: Vec<MenuButton>, fade_backdrop: bool) -> MenuScreen {
-        MenuScreen { label, label_y, buttons, fx: ScreenFx::enter(fade_backdrop), pressed: None }
+        MenuScreen {
+            label,
+            label_y,
+            buttons,
+            fx: ScreenFx::enter(fade_backdrop),
+            pressed: None,
+            focus: None,
+            stick_held: false,
+        }
     }
 
     /// Advances the transition and returns the event of a button pressed
     /// this frame. The original fires on touch start, not release.
     pub fn update(&mut self, dt: f32) -> Option<u8> {
-        self.fx.update(dt, is_mouse_button_down(MouseButton::Left));
-        if !self.fx.ready() || !is_mouse_button_pressed(MouseButton::Left) {
+        self.fx.update(dt, is_mouse_button_down(MouseButton::Left) || pad::down(Button::A));
+        if !self.fx.ready() {
+            return None;
+        }
+        if let Some(event) = self.pad_update() {
+            return Some(event);
+        }
+        if !is_mouse_button_pressed(MouseButton::Left) {
             return None;
         }
         let mouse = Canvas::mouse();
@@ -90,12 +111,58 @@ impl MenuScreen {
         Some(self.buttons[hit].event)
     }
 
+    /// Controller: the D-pad or left stick moves the selection to the
+    /// nearest button that way; A presses it.
+    fn pad_update(&mut self) -> Option<u8> {
+        let stick = pad::left();
+        let pushed = stick.length() > 0.6;
+        let mut dir = Vec2::ZERO;
+        if pushed && !self.stick_held {
+            dir = if stick.x.abs() > stick.y.abs() { vec2(stick.x.signum(), 0.0) } else { vec2(0.0, stick.y.signum()) };
+        }
+        self.stick_held = pushed;
+        for (b, d) in [(Button::Up, vec2(0.0, -1.0)), (Button::Down, vec2(0.0, 1.0)), (Button::Left, vec2(-1.0, 0.0)), (Button::Right, vec2(1.0, 0.0))] {
+            if pad::pressed(b) {
+                dir = d;
+            }
+        }
+        if self.buttons.is_empty() {
+            return None;
+        }
+        if dir != Vec2::ZERO {
+            match self.focus {
+                None => self.focus = Some(0),
+                Some(f) => {
+                    let from = self.buttons[f].rect.center();
+                    let next = (0..self.buttons.len())
+                        .filter(|&i| i != f)
+                        .filter_map(|i| {
+                            let d = self.buttons[i].rect.center() - from;
+                            let along = d.dot(dir);
+                            (along > 1.0).then(|| (i, along + 3.0 * (d.length_squared() - along * along).max(0.0).sqrt()))
+                        })
+                        .min_by(|a, b| a.1.total_cmp(&b.1));
+                    if let Some((i, _)) = next {
+                        self.focus = Some(i);
+                    }
+                }
+            }
+        }
+        if pad::pressed(Button::A) {
+            let f = *self.focus.get_or_insert(0);
+            self.pressed = Some(f);
+            return Some(self.buttons[f].event);
+        }
+        None
+    }
+
     pub fn draw(&self, canvas: &Canvas, assets: &MenuAssets, backdrop: &MenuBackdrop) {
         backdrop.draw(canvas, assets, self.fx.backdrop_alpha());
         let color = self.fx.content_color();
         draw_quad(&self.label, ((CANVAS_W - self.label.width()) * 0.5).floor(), self.label_y, 1.0, self.fx.z, color);
         for (i, b) in self.buttons.iter().enumerate() {
-            let tex = if self.pressed == Some(i) { &b.down } else { &b.up };
+            let lit = self.pressed == Some(i) || (self.pressed.is_none() && self.focus == Some(i));
+            let tex = if lit { &b.down } else { &b.up };
             draw_quad(tex, b.rect.x, b.rect.y, 1.0, self.fx.z, color);
         }
     }

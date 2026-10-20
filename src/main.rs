@@ -11,6 +11,7 @@ mod hud;
 mod menu;
 mod lobber;
 mod mine;
+mod pad;
 mod particles;
 mod play;
 mod progress;
@@ -524,11 +525,22 @@ async fn main() {
 
     loop {
         let dt = get_frame_time().min(0.05);
+        pad::poll();
 
         match screen {
             Screen::Menu(kind) => {
                 backdrop.update(dt);
-                if let Some(event) = menu_screen.update(dt) {
+                // A controller's B goes back, like each menu's back button.
+                let back = match kind {
+                    MenuKind::Mode => Some(2),
+                    MenuKind::World => Some(7),
+                    MenuKind::Stage(_) => Some(6),
+                    MenuKind::Main => None,
+                };
+                let pad_back = back.filter(|_| {
+                    menu_screen.fx.ready() && menu_next.is_none() && pad::pressed(pad::Button::B)
+                });
+                if let Some(event) = menu_screen.update(dt).or(pad_back) {
                     play_effect(SOUND_BUTTON);
                     if let Some(next) = menu_event(kind, event) {
                         menu_next = Some(next);
@@ -537,7 +549,7 @@ async fn main() {
                 }
                 if kind == MenuKind::Main
                     && menu_screen.fx.ready()
-                    && is_key_pressed(KeyCode::Enter)
+                    && (is_key_pressed(KeyCode::Enter) || pad::pressed(pad::Button::Start))
                 {
                     menu_next = Some(Next::Menu(MenuKind::Mode));
                     menu_screen.fx.leave();
@@ -585,8 +597,11 @@ async fn main() {
                         }
                     }
                 }
+                let pad_leave = pad::pressed(pad::Button::Start) || pad::pressed(pad::Button::View);
+                let pad_done = pad::pressed(pad::Button::A) || pad::pressed(pad::Button::Start);
                 if is_key_pressed(KeyCode::Escape)
-                    || (over.is_some() && is_key_pressed(KeyCode::Enter))
+                    || pad_leave
+                    || (over.is_some() && (is_key_pressed(KeyCode::Enter) || pad_done))
                 {
                     let kind = match game.as_ref() {
                         Some(g) if g.world < SURVIVAL => MenuKind::Stage(g.world),

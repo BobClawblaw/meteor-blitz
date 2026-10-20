@@ -17,6 +17,7 @@ use crate::enemies::{wrap_near, Element, Event, Field, Rock, Script, Weapon};
 use crate::gfx::{draw_atlas_sprite, draw_quad, draw_sprite, Canvas};
 use crate::bonus::{Power, Rings};
 use crate::gravity;
+use crate::pad::{self, Button};
 use crate::boss::{self, BossState};
 use crate::tower;
 use crate::weapons::{self, FireGun, LaserGun};
@@ -106,6 +107,8 @@ pub const SOUND_BOOST_READY: usize = 5;
 pub const SOUND_WAVE: usize = 11;
 /// Ship::bomb.
 pub const SOUND_BOMB: usize = 3;
+/// The right stick fires once pushed this far.
+const PAD_FIRE: f32 = 0.5;
 /// GameScreen::updateStateReady: the double press for the gravity gun.
 const DOUBLE_PRESS: f32 = 0.3;
 /// Bonus::setState(0): the ring pickup chime.
@@ -1352,13 +1355,22 @@ impl Play {
             (is_key_down(KeyCode::D) as i32 - is_key_down(KeyCode::A) as i32) as f32,
             (is_key_down(KeyCode::S) as i32 - is_key_down(KeyCode::W) as i32) as f32,
         );
+        // A controller's left stick is the original's left wheel: speed
+        // follows how far it is pushed.
+        let pad_stick = pad::left();
         if stick != Vec2::ZERO {
             self.ship.vel = stick.normalize() * WHEEL_MAX * SHIP_SPEED;
+        } else if pad_stick != Vec2::ZERO {
+            self.ship.vel = pad_stick * WHEEL_MAX * SHIP_SPEED;
         } else {
             self.ship.vel *= DRAG / (dt + DRAG);
         }
         // The original's switch-weapon button: Q or the mouse wheel here.
-        if is_key_pressed(KeyCode::Q) || mouse_wheel().1 != 0.0 {
+        if is_key_pressed(KeyCode::Q)
+            || mouse_wheel().1 != 0.0
+            || pad::pressed(Button::X)
+            || pad::pressed(Button::Y)
+        {
             self.ship.switch_weapon();
         }
         // Bombs: the original's on-screen bomb button; right mouse or B here.
@@ -1367,10 +1379,16 @@ impl Play {
             .ok()
             .and_then(|v| v.parse::<f32>().ok())
             .is_some_and(|t| self.elapsed >= t && self.elapsed - dt < t);
-        if auto_bomb || is_mouse_button_pressed(MouseButton::Right) || is_key_pressed(KeyCode::B) {
+        if auto_bomb
+            || is_mouse_button_pressed(MouseButton::Right)
+            || is_key_pressed(KeyCode::B)
+            || pad::pressed(Button::B)
+            || pad::pressed(Button::RightBumper)
+        {
             self.bomb();
         }
-        if is_key_pressed(KeyCode::Space) && self.ship.can_boost() {
+        let boost = is_key_pressed(KeyCode::Space) || pad::pressed(Button::A) || pad::pressed(Button::LeftBumper);
+        if boost && self.ship.can_boost() {
             self.ship.boost(dt);
             self.camera.shake(0.75, 7.5);
             self.sounds.push(SOUND_BOOST);
@@ -1418,12 +1436,38 @@ impl Play {
             if is_key_pressed(KeyCode::E) {
                 self.field.gun.activate();
             }
+        } else if let Some(dir) = self.pad_aim() {
+            // The right stick is the original's fire wheel: aim and shoot.
+            // The right trigger fires along the last aim.
+            self.ship.shoot(dt, dir);
+            if pad::pressed(Button::LeftTrigger) {
+                self.field.gun.activate();
+            }
         } else {
             self.ship.hold_fire();
-            // Letting go of the trigger throws what the gun holds.
-            self.field.gun_release();
+            if pad::pressed(Button::LeftTrigger) {
+                self.field.gun.activate();
+            }
+            // Letting go of the trigger throws what the gun holds; with a
+            // controller, holding the left trigger keeps the grip.
+            if !pad::down(Button::LeftTrigger) {
+                self.field.gun_release();
+            }
         }
         self.since_press += dt;
+    }
+
+    /// Firing direction from a controller: the right stick pushed past
+    /// half way, or the right trigger along the current aim.
+    fn pad_aim(&self) -> Option<Vec2> {
+        let r = pad::right();
+        if r.length() > PAD_FIRE {
+            Some(r.normalize())
+        } else if pad::down(Button::RightTrigger) {
+            Some(self.ship.aim_dir)
+        } else {
+            None
+        }
     }
 
     fn nearest_rock(&self) -> Option<Vec2> {
