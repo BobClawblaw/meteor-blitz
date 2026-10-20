@@ -2,6 +2,7 @@
 
 mod enemies;
 mod gfx;
+mod hud;
 mod menu;
 mod play;
 mod progress;
@@ -13,6 +14,7 @@ use macroquad::audio::{load_sound, play_sound, PlaySoundParams};
 use macroquad::prelude::*;
 
 use gfx::Canvas;
+use hud::{Font, HudAssets};
 use menu::{MenuAssets, MenuBackdrop, MenuButton, MenuScreen};
 use play::{Play, PlayAssets, RockArt};
 use progress::Progress;
@@ -251,7 +253,15 @@ async fn load_play_assets() -> PlayAssets {
     for (base, decal) in pairs {
         backdrops.push((load_texture_file(base).await, load_texture_file(decal).await));
     }
+    let font = Font::new(load_ui("ngage").await, &load_file("original/app/ngage.dat").await.unwrap());
     PlayAssets {
+        hud: HudAssets {
+            font,
+            ship_counter: load_sprite("shipCounter").await,
+            bomb_counter: load_sprite("bombCounter").await,
+            ring: load_sprite("bonus").await,
+            pause: load_sprite("pause").await,
+        },
         rocks: [
             load_rock_art("rock4A", "rock").await,
             load_rock_art("freeze4", "freeze").await,
@@ -288,7 +298,7 @@ async fn main() {
         let (w, s) = v.split_once('.')?;
         Some((w.parse::<usize>().ok()?, s.parse::<usize>().ok()?))
     }) {
-        game = Some(Play::new(w.saturating_sub(1).min(SURVIVAL), s, &play_assets));
+        game = Some(Play::new(w.saturating_sub(1).min(SURVIVAL), s, progress.best, &play_assets));
         screen = Screen::Game;
     }
 
@@ -315,7 +325,7 @@ async fn main() {
                             screen = Screen::Menu(next);
                         }
                         Some(Next::Game(world, stage)) => {
-                            game = Some(Play::new(world, stage, &play_assets));
+                            game = Some(Play::new(world, stage, progress.best, &play_assets));
                             screen = Screen::Game;
                             if !music_on {
                                 play_sound(&music, PlaySoundParams { looped: true, volume: 0.35 });

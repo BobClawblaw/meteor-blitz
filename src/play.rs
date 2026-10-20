@@ -15,6 +15,7 @@ use macroquad::prelude::*;
 
 use crate::enemies::{wrap_near, Element, Event, Field, Rock, Script, Weapon};
 use crate::gfx::{draw_atlas_sprite, draw_quad, draw_sprite, Canvas};
+use crate::hud::{self, HudAssets, HudValues};
 
 const STEP: f32 = 1.0 / 60.0;
 
@@ -100,6 +101,7 @@ impl RockArt {
 }
 
 pub struct PlayAssets {
+    pub hud: HudAssets,
     /// Normal, ice and fire.
     pub rocks: [RockArt; 3],
     pub ship: Vec<Texture2D>,
@@ -372,11 +374,13 @@ pub struct Play {
     pub multiplier: u32,
     pub lives: u32,
     pub bombs: u32,
+    pub rings: u32,
+    high_score: u64,
 }
 
 impl Play {
     /// `world` 0-5 for arcade worlds, 6 for survival.
-    pub fn new(world: usize, stage: usize, assets: &PlayAssets) -> Play {
+    pub fn new(world: usize, stage: usize, high_score: u64, assets: &PlayAssets) -> Play {
         Play {
             world,
             stage,
@@ -395,6 +399,8 @@ impl Play {
             multiplier: 1,
             lives: if world == SURVIVAL { SURVIVAL_LIVES } else { LIVES },
             bombs: BOMBS,
+            rings: 0,
+            high_score,
         }
     }
 
@@ -587,6 +593,7 @@ impl Play {
 
         let ship = &self.ship;
         if matches!(ship.life, Life::Dead(_)) {
+            self.draw_hud(assets);
             return;
         }
         let p = self.to_screen(ship.pos);
@@ -602,9 +609,23 @@ impl Play {
         if shield > 0.0 {
             draw_sprite(&assets.shield, p.x, p.y, self.elapsed * SHIELD_SPIN, self.z, Color::new(1.0, 1.0, 1.0, shield));
         }
+        self.draw_hud(assets);
         if ship.aiming {
             let aim = p + ship.aim_dir * AIM_DISTANCE;
             draw_quad(&assets.aim, aim.x - 1.0, aim.y - 1.0, 1.0, self.z, color);
         }
+    }
+
+    /// GameScreen::draw: the HUD sits at depth 0 whatever the play layer does.
+    fn draw_hud(&self, assets: &PlayAssets) {
+        let values = HudValues {
+            score: self.score,
+            high_score: self.high_score,
+            multiplier: self.multiplier,
+            lives: self.lives,
+            bombs: self.bombs,
+            rings: self.rings,
+        };
+        hud::draw(&assets.hud, &values);
     }
 }
