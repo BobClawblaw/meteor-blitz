@@ -234,10 +234,22 @@ impl Pause {
             self.selected = items.len().saturating_sub(1);
         }
 
-        if pad::pressed(pad::Button::Up) || pad::pressed(pad::Button::Left) {
+        let up = is_key_pressed(KeyCode::Up)
+            || is_key_pressed(KeyCode::W)
+            || is_key_pressed(KeyCode::Left)
+            || is_key_pressed(KeyCode::A)
+            || pad::pressed(pad::Button::Up)
+            || pad::pressed(pad::Button::Left);
+        let down = is_key_pressed(KeyCode::Down)
+            || is_key_pressed(KeyCode::S)
+            || is_key_pressed(KeyCode::Right)
+            || is_key_pressed(KeyCode::D)
+            || pad::pressed(pad::Button::Down)
+            || pad::pressed(pad::Button::Right);
+        if up {
             self.selected = (self.selected + items.len() - 1) % items.len().max(1);
         }
-        if pad::pressed(pad::Button::Down) || pad::pressed(pad::Button::Right) {
+        if down {
             self.selected = (self.selected + 1) % items.len().max(1);
         }
         if pad::pressed(pad::Button::A) || is_key_pressed(KeyCode::Enter) {
