@@ -9,6 +9,7 @@ use crate::depot::{self, Depot};
 use crate::mine::{self, Mine};
 use crate::shyguy::{self, ShyGuy};
 use crate::snake::{self, Hit, Snake};
+use crate::tower::{self, Tower};
 use crate::waves::{Wave, ARCADE};
 
 /// World::WIDTH / HEIGHT.
@@ -40,6 +41,11 @@ pub const ROCK_POINTS: u32 = 10;
 const KIND_DEPOT: i32 = 21;
 /// Wave kind for shy guys.
 const KIND_SHY_GUY: i32 = 13;
+/// Wave kind for towers.
+const KIND_TOWER: i32 = 19;
+const TOWER_WEIGHT: u32 = 4;
+/// Tower::setState(10007): Enemy::activateBonuses(50, 8).
+const TOWER_RINGS: u32 = 8;
 /// Wave kind for arrows.
 const KIND_ARROW: i32 = 14;
 /// Wave kind for snakes.
@@ -343,6 +349,14 @@ pub enum Event {
         sound: bool,
         sparks: bool,
     },
+    /// Tower::setState(10007).
+    TowerDestroyed {
+        pos: Vec2,
+        points: u32,
+        rings: u32,
+        sound: bool,
+        effects: bool,
+    },
     /// Arrow::setState(10007).
     ArrowDestroyed {
         pos: Vec2,
@@ -410,6 +424,7 @@ pub struct Field {
     pub shy_guys: Vec<ShyGuy>,
     pub snakes: Vec<Snake>,
     pub arrows: Vec<Arrow>,
+    pub towers: Vec<Tower>,
     pub boss: Option<Boss>,
     pub pieces: Vec<Piece>,
     /// Animation frame counts by size: small atlas, medium, large, extra large.
@@ -428,6 +443,7 @@ impl Field {
             shy_guys: Vec::new(),
             snakes: Vec::new(),
             arrows: Vec::new(),
+            towers: Vec::new(),
             boss: None,
             pieces: Vec::new(),
             frames,
@@ -461,7 +477,45 @@ impl Field {
             + self.shy_guys.len() as u32
             + self.snakes.len() as u32 * SNAKE_WEIGHT
             + self.arrows.len() as u32
+            + self.towers.len() as u32 * TOWER_WEIGHT
             + self.boss.is_some() as u32
+    }
+
+    fn spawn_tower(&mut self, pos: Vec2) {
+        if self.towers.len() < tower::POOL {
+            self.towers.push(Tower::new(pos));
+        }
+    }
+
+    /// Tower::setState(10007).
+    pub fn destroy_tower(&mut self, index: usize, score: bool, sound: bool, effects: bool) {
+        let t = self.towers.swap_remove(index);
+        self.events.push(Event::TowerDestroyed {
+            pos: t.pos,
+            points: if score { tower::POINTS } else { 0 },
+            rings: if score { TOWER_RINGS } else { 0 },
+            sound,
+            effects,
+        });
+    }
+
+    /// Whether a live tower beam touches a circle (towerGunCollision).
+    pub fn beam_hits(&self, centre: Vec2, radius: f32) -> bool {
+        self.towers.iter().filter(|t| t.firing()).any(|t| {
+            let c = vec2(wrap_near(centre.x, t.pos.x), wrap_near(centre.y, t.pos.y));
+            segment_distance(c, t.pos, t.pos + t.aim * tower::BEAM_LENGTH) < tower::BEAM_RADIUS + radius
+        })
+    }
+
+    /// Positions and radii of fixed obstacles that push lighter enemies:
+    /// towers, depots and boss parts.
+    fn obstacles(&self) -> Vec<(Vec2, f32)> {
+        let mut out = Vec::new();
+        out.extend(self.towers.iter().filter(|t| t.active()).map(|t| (t.pos, tower::RADIUS)));
+        out.extend(self.depots.iter().filter(|d| d.active()).map(|d| (d.pos, depot::RADIUS)));
+        out.extend(self.pieces.iter().filter(|p| p.active()).map(|p| (p.pos, boss::PIECE_RADIUS)));
+        out.extend(self.boss.iter().filter(|b| b.active()).map(|b| (b.pos, boss::RADIUS)));
+        out
     }
 
     fn spawn_arrow(&mut self, pos: Vec2, heading: f32) {
@@ -586,9 +640,7 @@ impl Field {
             let mut others: Vec<(Vec2, f32, f32)> = Vec::new();
             others.extend(self.rocks.iter().filter(|r| r.active()).map(|r| (r.pos, r.radius(), 2.0)));
             others.extend(self.mines.iter().filter(|m| m.active()).map(|m| (m.pos, mine::RADIUS, 1.0)));
-            others.extend(self.depots.iter().filter(|d| d.active()).map(|d| (d.pos, depot::RADIUS, 2.0)));
-            others.extend(self.pieces.iter().filter(|p| p.active()).map(|p| (p.pos, boss::PIECE_RADIUS, 2.0)));
-            others.extend(self.boss.iter().filter(|b| b.active()).map(|b| (b.pos, boss::RADIUS, 2.0)));
+            others.extend(self.obstacles().into_iter().map(|(p, r)| (p, r, 2.0)));
             let s = &mut self.snakes[i];
             for (pos, radius, k) in others {
                 let c = vec2(wrap_near(pos.x, s.pos.x), wrap_near(pos.y, s.pos.y));
@@ -656,9 +708,7 @@ impl Field {
             let mut others: Vec<(Vec2, f32)> = Vec::new();
             others.extend(self.rocks.iter().filter(|r| r.active()).map(|r| (r.pos, r.radius())));
             others.extend(self.mines.iter().filter(|m| m.active()).map(|m| (m.pos, mine::RADIUS)));
-            others.extend(self.depots.iter().filter(|d| d.active()).map(|d| (d.pos, depot::RADIUS)));
-            others.extend(self.pieces.iter().filter(|p| p.active()).map(|p| (p.pos, boss::PIECE_RADIUS)));
-            others.extend(self.boss.iter().filter(|b| b.active()).map(|b| (b.pos, boss::RADIUS)));
+            others.extend(self.obstacles());
             let g = &mut self.shy_guys[i];
             for (pos, radius) in others {
                 let c = vec2(wrap_near(pos.x, g.pos.x), wrap_near(pos.y, g.pos.y));
@@ -723,9 +773,7 @@ impl Field {
             }
             let mut others: Vec<(Vec2, f32)> = Vec::new();
             others.extend(self.rocks.iter().filter(|r| r.active()).map(|r| (r.pos, r.radius())));
-            others.extend(self.depots.iter().filter(|d| d.active()).map(|d| (d.pos, depot::RADIUS)));
-            others.extend(self.pieces.iter().filter(|p| p.active()).map(|p| (p.pos, boss::PIECE_RADIUS)));
-            others.extend(self.boss.iter().filter(|b| b.active()).map(|b| (b.pos, boss::RADIUS)));
+            others.extend(self.obstacles());
             let m = &mut self.mines[i];
             for (pos, radius) in others {
                 let c = vec2(wrap_near(pos.x, m.pos.x), wrap_near(pos.y, m.pos.y));
@@ -793,6 +841,10 @@ impl Field {
         }
         while !self.depots.is_empty() {
             self.destroy_depot(0, false);
+        }
+        while !self.towers.is_empty() {
+            let effects = visible(self.towers[0].pos);
+            self.destroy_tower(0, false, false, effects);
         }
         while !self.arrows.is_empty() {
             let effects = visible(self.arrows[0].pos);
@@ -878,6 +930,7 @@ impl Field {
             None if kind == KIND_SHY_GUY => self.shy_guys.len(),
             None if kind == KIND_SNAKE => self.snakes.len(),
             None if kind == KIND_ARROW => self.arrows.len(),
+            None if kind == KIND_TOWER => self.towers.len(),
             None => 0,
         }
     }
@@ -921,6 +974,26 @@ impl Field {
         }
         for a in &mut self.arrows {
             a.update(dt, centre);
+        }
+        for t in &mut self.towers {
+            t.update(dt, ship, centre);
+        }
+        // towerCollision: towers never move, but push depots (repelOther),
+        // and rocks bounce off them (Enemy::bounceThis).
+        let towers: Vec<Vec2> = self.towers.iter().filter(|t| t.active()).map(|t| t.pos).collect();
+        for &tp in &towers {
+            for d in self.depots.iter_mut().filter(|d| d.active()) {
+                let c = vec2(wrap_near(tp.x, d.pos.x), wrap_near(tp.y, d.pos.y));
+                if c.distance_squared(d.pos) < (tower::RADIUS + depot::RADIUS).powi(2) {
+                    d.repel_from(c, tower::RADIUS, mine::REPEL);
+                }
+            }
+            for rock in self.rocks.iter_mut().filter(|r| r.active()) {
+                let c = vec2(wrap_near(tp.x, rock.pos.x), wrap_near(tp.y, rock.pos.y));
+                if c.distance_squared(rock.pos) < (rock.radius() + tower::RADIUS).powi(2) {
+                    bounce_off(rock, c, tower::MASS);
+                }
+            }
         }
         self.snake_collisions();
         for d in &mut self.depots {
@@ -1020,6 +1093,18 @@ impl Field {
                     self.events.push(Event::DepotHit);
                 } else {
                     self.destroy_depot(i, true);
+                }
+                return true;
+            }
+        }
+        for i in 0..self.towers.len() {
+            let t = &self.towers[i];
+            let c = vec2(wrap_near(t.pos.x, to.x), wrap_near(t.pos.y, to.y));
+            if t.active() && segment_distance(c, from, to) < tower::RADIUS + radius {
+                if self.towers[i].hit(damage) {
+                    self.destroy_tower(i, true, true, true);
+                } else {
+                    self.events.push(Event::DepotHit);
                 }
                 return true;
             }
@@ -1401,6 +1486,9 @@ impl Script {
                     let p = self.origin + offset;
                     let p = vec2(wrap_near(p.x, ship.x), wrap_near(p.y, ship.y));
                     field.spawn_boss(p, self.world, self.stage, ship);
+                } else if wave.kind == KIND_TOWER {
+                    let p = self.origin + offset;
+                    field.spawn_tower(vec2(wrap_near(p.x, ship.x), wrap_near(p.y, ship.y)));
                 } else if wave.kind == KIND_ARROW {
                     let p = self.origin + offset;
                     let p = vec2(wrap_near(p.x, ship.x), wrap_near(p.y, ship.y));

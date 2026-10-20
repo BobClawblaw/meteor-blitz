@@ -14,6 +14,7 @@ mod play;
 mod progress;
 mod shyguy;
 mod snake;
+mod tower;
 mod waves;
 
 use std::collections::HashMap;
@@ -435,6 +436,7 @@ async fn load_play_assets() -> PlayAssets {
         depot: load_sprite("depot").await,
         mine: load_sprite("mine").await,
         arrow: load_sprite("arrow").await,
+        tower: load_sprite("tower.1").await,
         shy_guy: load_sprite("shyGuyFrames").await,
         snake_head: load_sprite("pillHead.1").await,
         snake_body: load_sprite("pillBody.1").await,

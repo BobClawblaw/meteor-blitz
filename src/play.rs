@@ -17,6 +17,7 @@ use crate::enemies::{wrap_near, Element, Event, Field, Rock, Script, Weapon};
 use crate::gfx::{draw_atlas_sprite, draw_quad, draw_sprite, Canvas};
 use crate::bonus::{Power, Rings};
 use crate::boss::{self, BossState};
+use crate::tower;
 use crate::depot::{self, Depot};
 use crate::hud::{self, HudAssets, HudValues};
 use crate::particles::{Effects, Kind};
@@ -176,6 +177,7 @@ pub struct PlayAssets {
     pub depot: Texture2D,
     pub mine: Texture2D,
     pub arrow: Texture2D,
+    pub tower: Texture2D,
     /// shyGuyFrames.png: a 4x4 atlas of 32x32 frames.
     pub shy_guy: Texture2D,
     /// pillHead.1.png and pillBody.1.png.
@@ -742,6 +744,25 @@ impl Play {
         for i in heads {
             self.field.ram_snake(i);
         }
+        // Tower::handleEvent(3/4): a tower the ship touches is destroyed,
+        // and the ship with it unless boosting. A live beam
+        // (Ship::handleEvent(12)) kills a ship that is not boosting.
+        let p = self.ship.pos;
+        let mut towers: Vec<usize> = (0..self.field.towers.len())
+            .filter(|&i| {
+                let t = &self.field.towers[i];
+                let c = vec2(wrap_near(t.pos.x, p.x), wrap_near(t.pos.y, p.y));
+                t.active() && c.distance(p) < tower::RADIUS + SHIP_RADIUS
+            })
+            .collect();
+        towers.sort_unstable_by(|a, b| b.cmp(a));
+        for i in towers {
+            self.field.destroy_tower(i, true, true, true);
+            hit |= !boosting;
+        }
+        if !boosting && self.field.beam_hits(self.ship.pos, SHIP_RADIUS) {
+            hit = true;
+        }
         // Arrows die on contact and take the ship with them unless boosting.
         let mut arrows = self.field.touching_arrows(self.ship.pos, SHIP_RADIUS);
         arrows.sort_unstable_by(|a, b| b.cmp(a));
@@ -993,6 +1014,25 @@ impl Play {
                         self.effects.start(Kind::Point, 3, pos, away, false);
                     }
                 }
+                Event::TowerDestroyed {
+                    pos,
+                    points,
+                    rings,
+                    sound,
+                    effects,
+                } => {
+                    if sound {
+                        self.sounds.push(SOUND_DEPOT_DESTROYED);
+                    }
+                    if effects {
+                        self.effects.start(Kind::Sprite, 3, pos, 0.0, false);
+                        self.effects.start(Kind::Line, 4, pos, 0.0, false);
+                        self.effects.start(Kind::Point, 4, pos, 0.0, false);
+                    }
+                    self.score += (points * self.multiplier) as u64;
+                    self.pickups
+                        .drop(pos, MINE_RING_SPEED, rings, self.magnet > 0.0);
+                }
                 Event::ArrowDestroyed {
                     pos,
                     points,
@@ -1194,6 +1234,7 @@ impl Play {
             .chain(self.field.shy_guys.iter().filter(|g| g.active()).map(|g| g.pos))
             .chain(self.field.snakes.iter().filter(|s| s.active()).map(|s| s.pos))
             .chain(self.field.arrows.iter().filter(|a| a.active()).map(|a| a.pos))
+            .chain(self.field.towers.iter().filter(|t| t.active()).map(|t| t.pos))
             .chain(self.field.pieces.iter().filter(|p| p.active()).map(|p| p.pos))
             .chain(self.field.boss.iter().filter(|b| b.active()).map(|b| b.pos))
             .map(|p| vec2(wrap_near(p.x, ship.x), wrap_near(p.y, ship.y)))
@@ -1352,6 +1393,34 @@ impl Play {
             let color = Color::new(1.0, 1.0, 1.0, m.alpha);
             let draw = || draw_sprite(&assets.mine, s.x, s.y, m.angle, self.z + m.z, color);
             if m.flash {
+                canvas.flashing(draw);
+            } else {
+                draw();
+            }
+        }
+        for t in &self.field.towers {
+            let s = self.to_screen(t.pos);
+            if let Some(colors) = t.beam_colors() {
+                // Tower::draw: the beam fan, turned to the locked aim.
+                let a = t.aim.y.atan2(t.aim.x) + std::f32::consts::FRAC_PI_2;
+                let (sn, cs) = a.sin_cos();
+                let verts: Vec<Vertex> = tower::BEAM
+                    .iter()
+                    .zip(colors)
+                    .map(|(v, c)| {
+                        let p = s + vec2(v.x * cs - v.y * sn, v.x * sn + v.y * cs);
+                        Vertex::new(p.x, p.y, self.z + t.z, 0.0, 0.0, c)
+                    })
+                    .collect();
+                let indices: Vec<u16> = (1..9).flat_map(|i| [0, i, i + 1]).collect();
+                canvas.draw_triangles(verts, indices, None, false);
+            }
+            let a = t.angle.to_radians();
+            let off = vec2(-a.sin(), a.cos()) * tower::SPRITE_OFFSET;
+            let c = s + off;
+            let color = Color::new(1.0, 1.0, 1.0, t.alpha);
+            let draw = || draw_sprite(&assets.tower, c.x, c.y, t.angle, self.z + t.z, color);
+            if t.flash {
                 canvas.flashing(draw);
             } else {
                 draw();
