@@ -1,6 +1,7 @@
 //! Meteor Blitz — a port of the 2009 iPhone game. Window, screens, and loop.
 
 mod bonus;
+mod depot;
 mod enemies;
 mod gfx;
 mod hud;
@@ -426,6 +427,16 @@ async fn load_play_assets() -> PlayAssets {
         aim: load_sprite("aim").await,
         cannon: load_sprite("fire100").await,
         spark: load_sprite("fire200").await,
+        depot: load_sprite("depot").await,
+        depot_label: load_sprite("labelBonus").await,
+        power: load_sprite("bigBonus").await,
+        power_labels: [
+            load_sprite("labelLife").await,
+            load_sprite("labelShield").await,
+            load_sprite("labelBomb").await,
+            load_sprite("labelSlow").await,
+            load_sprite("labelRings").await,
+        ],
         systems: load_file("original/app/systems.dat")
             .await
             .expect("systems.dat"),

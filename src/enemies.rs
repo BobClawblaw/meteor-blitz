@@ -3,6 +3,7 @@
 
 use macroquad::prelude::*;
 
+use crate::depot::{self, Depot};
 use crate::waves::{Wave, ARCADE};
 
 /// World::WIDTH / HEIGHT.
@@ -10,10 +11,10 @@ const WORLD: f32 = 1024.0;
 
 // Enemy::setState / Enemy::update: enemies drop in from 400 units above the
 // surface at 450 units/s, fading in from 25% at 0.84375/s.
-const DROP_IN_HEIGHT: f32 = 400.0;
-const DROP_IN_SPEED: f32 = 450.0;
-const FADE_IN_START: f32 = 0.25;
-const FADE_IN_SPEED: f32 = 0.84375;
+pub const DROP_IN_HEIGHT: f32 = 400.0;
+pub const DROP_IN_SPEED: f32 = 450.0;
+pub const FADE_IN_START: f32 = 0.25;
+pub const FADE_IN_SPEED: f32 = 0.84375;
 
 // Rock::reset: drift up to 50 units/s per axis, spin up to 60 deg/s, drag
 // 0.3, restitution 0.9; animation at 20 frames/s.
@@ -30,6 +31,8 @@ const NEAR_Y: f32 = 226.7;
 const MAX_BREAK_SPEED: f32 = 50.0;
 /// Rock::reset: points per rock (doubled for gravity-gun kills).
 pub const ROCK_POINTS: u32 = 10;
+/// Wave kind for depots.
+const KIND_DEPOT: i32 = 21;
 /// Rock::handleEvent: hit sparks at most every 8 updates.
 const HIT_SPARK_UPDATES: i32 = 8;
 
@@ -254,6 +257,18 @@ fn bounce(a: &mut Rock, b: &mut Rock) {
     b.vel = (b.vel + n * jb) * RESTITUTION;
 }
 
+/// Enemy::bounceThis: `rock` bounces off a still body at `other`.
+fn bounce_off(rock: &mut Rock, other: Vec2, other_mass: f32) {
+    let d = rock.pos - other;
+    if d.dot(-rock.vel) <= 0.0 {
+        return;
+    }
+    let n = d.normalize_or_zero();
+    let closing = n.dot(rock.vel);
+    let j = other_mass * (2.0 * closing / (other_mass + rock.mass()));
+    rock.vel = (rock.vel - n * j) * RESTITUTION;
+}
+
 /// What happened during an update, for effects, sounds and scoring.
 pub enum Event {
     RockDestroyed {
@@ -273,12 +288,20 @@ pub enum Event {
         pos: Vec2,
         angle: f32,
     },
+    /// A bullet hit a depot that survived (Depot::handleEvent(0)).
+    DepotHit,
+    /// Depot::setState(10007): it drops a power-up.
+    DepotDestroyed {
+        pos: Vec2,
+        points: u32,
+    },
     WaveIncoming,
 }
 
-/// All enemies on the field (only rocks so far).
+/// All enemies on the field: rocks and depots so far.
 pub struct Field {
     pub rocks: Vec<Rock>,
+    pub depots: Vec<Depot>,
     /// Animation frame counts by size: small atlas, medium, large, extra large.
     frames: [usize; 4],
     pub events: Vec<Event>,
@@ -288,6 +311,7 @@ impl Field {
     pub fn new(frames: [usize; 4]) -> Field {
         Field {
             rocks: Vec::new(),
+            depots: Vec::new(),
             frames,
             events: Vec::new(),
         }
@@ -312,13 +336,40 @@ impl Field {
 
     /// WaveManager::getWaveRemaining: everything left, in small-rock units.
     pub fn weighted_remaining(&self) -> u32 {
-        self.rocks.iter().map(|r| WEIGHT[r.size]).sum()
+        self.rocks.iter().map(|r| WEIGHT[r.size]).sum::<u32>() + self.depots.len() as u32
+    }
+
+    fn spawn_depot(&mut self, pos: Vec2) {
+        if self.depots.len() < depot::POOL {
+            self.depots.push(Depot::new(pos));
+        }
+    }
+
+    /// Depot::setState(10007).
+    pub fn destroy_depot(&mut self, index: usize, score: bool) {
+        let d = self.depots.swap_remove(index);
+        self.events.push(Event::DepotDestroyed {
+            pos: d.pos,
+            points: if score { depot::POINTS } else { 0 },
+        });
+    }
+
+    /// Active depots touching a circle (the ship).
+    pub fn touching_depots(&self, centre: Vec2, radius: f32) -> Vec<usize> {
+        (0..self.depots.len())
+            .filter(|&i| {
+                let d = &self.depots[i];
+                let c = vec2(wrap_near(d.pos.x, centre.x), wrap_near(d.pos.y, centre.y));
+                d.active() && c.distance_squared(centre) < (depot::RADIUS + radius).powi(2)
+            })
+            .collect()
     }
 
     /// WaveManager::getRemaining for one wave kind.
     fn remaining_of_kind(&self, kind: i32) -> usize {
         match rock_kind(kind) {
             Some((element, size)) => self.count(element, size),
+            None if kind == KIND_DEPOT => self.depots.len(),
             None => 0,
         }
     }
@@ -326,6 +377,35 @@ impl Field {
     pub fn update(&mut self, dt: f32, centre: Vec2) {
         for rock in &mut self.rocks {
             rock.update(dt, centre);
+        }
+        for d in &mut self.depots {
+            d.update(dt, centre);
+        }
+        // depotCollision: depots push each other apart.
+        let n = self.depots.len();
+        for i in 0..n {
+            for j in i + 1..n {
+                let (left, right) = self.depots.split_at_mut(j);
+                let (a, b) = (&mut left[i], &mut right[0]);
+                if !a.active() || !b.active() {
+                    continue;
+                }
+                let real = b.pos;
+                b.pos = vec2(wrap_near(b.pos.x, a.pos.x), wrap_near(b.pos.y, a.pos.y));
+                if a.pos.distance_squared(b.pos) < (depot::RADIUS * 2.0).powi(2) {
+                    depot::repel_both(a, b, depot::REPEL);
+                }
+                b.pos = real;
+            }
+        }
+        // Rock::handleCollision with a depot: Enemy::bounceThis, the rock alone.
+        for rock in self.rocks.iter_mut().filter(|r| r.active()) {
+            for d in self.depots.iter().filter(|d| d.active()) {
+                let c = vec2(wrap_near(d.pos.x, rock.pos.x), wrap_near(d.pos.y, rock.pos.y));
+                if c.distance_squared(rock.pos) < (rock.radius() + depot::RADIUS).powi(2) {
+                    bounce_off(rock, c, depot::MASS);
+                }
+            }
         }
         // Rock::handleCollision with other rocks: bounce both.
         let n = self.rocks.len();
@@ -377,6 +457,24 @@ impl Field {
                         pos: r.pos,
                         element: r.element,
                     });
+                }
+                return true;
+            }
+        }
+        for i in 0..self.depots.len() {
+            let d = &self.depots[i];
+            if !d.active() {
+                continue;
+            }
+            let c = vec2(wrap_near(d.pos.x, to.x), wrap_near(d.pos.y, to.y));
+            if segment_distance(c, from, to) < depot::RADIUS + radius {
+                let d = &mut self.depots[i];
+                d.health -= damage;
+                if d.health > 0.0 {
+                    d.flash = true;
+                    self.events.push(Event::DepotHit);
+                } else {
+                    self.destroy_depot(i, true);
                 }
                 return true;
             }
@@ -600,7 +698,10 @@ impl Script {
                     let a = (wave.offset_angle + self.rotation).to_radians();
                     offset += vec2(a.sin(), -a.cos()) * wave.offset_distance;
                 }
-                if let Some((element, size)) = rock_kind(wave.kind) {
+                if wave.kind == KIND_DEPOT {
+                    let p = self.origin + offset;
+                    field.spawn_depot(vec2(wrap_near(p.x, ship.x), wrap_near(p.y, ship.y)));
+                } else if let Some((element, size)) = rock_kind(wave.kind) {
                     let p = self.origin + offset;
                     field.spawn(
                         element,

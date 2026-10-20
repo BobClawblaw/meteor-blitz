@@ -15,7 +15,8 @@ use macroquad::prelude::*;
 
 use crate::enemies::{wrap_near, Element, Event, Field, Rock, Script, Weapon};
 use crate::gfx::{draw_atlas_sprite, draw_quad, draw_sprite, Canvas};
-use crate::bonus::Rings;
+use crate::bonus::{Power, Rings};
+use crate::depot::{self, Depot};
 use crate::hud::{self, HudAssets, HudValues};
 use crate::particles::{Effects, Kind};
 
@@ -101,6 +102,22 @@ pub const SOUND_BOOST_READY: usize = 5;
 pub const SOUND_WAVE: usize = 11;
 /// Bonus::setState(0): the ring pickup chime.
 pub const SOUND_RING: usize = 9;
+/// BigBonus::setState(0): power-up pickup, and the slow-motion one.
+pub const SOUND_POWER: usize = 2;
+pub const SOUND_SLOW: usize = 16;
+/// Depot::handleEvent(0) and Depot::setState(10007).
+pub const SOUND_DEPOT_HIT: usize = 8;
+pub const SOUND_DEPOT_DESTROYED: usize = 10;
+/// BigBonus::setState(0): the ring magnet lasts the stage (25 s in survival).
+const MAGNET_SECONDS: f32 = 10000.0;
+const SURVIVAL_MAGNET_SECONDS: f32 = 25.0;
+/// TimeManager::modify(0.25, 8): slow motion for enemies.
+const SLOW_FACTOR: f32 = 0.25;
+const SLOW_SECONDS: f32 = 8.0;
+/// Ship::deactivateShield: a broken shield gives 0.75 s of grace.
+const SHIELD_GRACE: f32 = 0.75;
+/// BigBonus::draw: its label sits 10 units below the centre at 75%.
+const POWER_LABEL_DROP: f32 = 10.0;
 /// Rock::setState(10007): Enemy::activateBonuses spread for a small rock.
 const RING_DROP_SPEED: f32 = 5.0;
 /// Hud::update: the multiplier steps up when the score since the last
@@ -147,8 +164,44 @@ pub struct PlayAssets {
     pub shield: Texture2D,
     pub aim: Texture2D,
     pub cannon: Texture2D,
+    pub depot: Texture2D,
+    /// depot.png's "BONUS" label.
+    pub depot_label: Texture2D,
+    /// bigBonus.png: five 16x16 power-up icons.
+    pub power: Texture2D,
+    /// Power-up labels in `Power::frame` order: life, shield, bomb, slow, rings.
+    pub power_labels: [Texture2D; 5],
     /// Base and decal planet textures per world (0-5), then survival.
     pub backdrops: Vec<(Texture2D, Texture2D)>,
+}
+
+/// TimeManager: enemies run at `factor`, easing toward the target while
+/// a slow-motion power-up lasts and back to 1 after.
+struct TimeScale {
+    factor: f32,
+    target: f32,
+    remaining: f32,
+}
+
+impl Default for TimeScale {
+    fn default() -> TimeScale {
+        TimeScale { factor: 1.0, target: 1.0, remaining: 0.0 }
+    }
+}
+
+impl TimeScale {
+    fn modify(&mut self, factor: f32, seconds: f32) {
+        self.target = factor;
+        self.remaining = seconds;
+    }
+
+    /// TimeManager::update.
+    fn update(&mut self, dt: f32) {
+        self.remaining = (self.remaining - dt).max(0.0);
+        let goal = if self.remaining > 0.0 { self.target } else { 1.0 };
+        let next = self.factor + 2.0 * dt * (goal - self.factor);
+        self.factor = if self.factor < goal { next.min(goal) } else { next.max(goal) };
+    }
 }
 
 /// Ship::update keeps the ship itself in [-512, 512].
@@ -204,6 +257,10 @@ struct Ship {
     boost_dir: Vec2,
     boost_time: f32,
     invincible: f32,
+    /// Ship 0x94: the shield power-up absorbs the next hit.
+    shield: bool,
+    /// Ship 0xfc: no death for a moment after the shield breaks.
+    grace: f32,
     boost_charge: f32,
     angle: f32,
     frame: usize,
@@ -229,6 +286,8 @@ impl Ship {
             boost_dir: Vec2::ZERO,
             boost_time: 0.0,
             invincible: 0.0,
+            shield: false,
+            grace: 0.0,
             boost_charge: BOOST_RECHARGE,
             angle: 0.0,
             frame: 4,
@@ -315,6 +374,7 @@ impl Ship {
             self.boost_vel += self.boost_dir * BOOST_SPEED * dt;
         }
         self.invincible = (self.invincible - dt).max(0.0);
+        self.grace = (self.grace - dt).max(0.0);
         self.boost_charge = (self.boost_charge + dt).min(BOOST_RECHARGE);
 
         let total = self.vel + self.boost_vel;
@@ -438,6 +498,9 @@ pub struct Play {
     /// Global::multiplierBaseScore: the score at the last death.
     multiplier_base: u64,
     pickups: Rings,
+    /// Global::bonusAlwaysGoToShipSeconds: new rings home in at once.
+    magnet: f32,
+    time: TimeScale,
     high_score: u64,
     /// `Audio::play` ids raised this update, for the caller to play.
     pub sounds: Vec<usize>,
@@ -477,6 +540,8 @@ impl Play {
             rings: 0,
             multiplier_base: 0,
             pickups: Rings::default(),
+            magnet: 0.0,
+            time: TimeScale::default(),
             high_score,
             sounds: Vec::new(),
             effects: Effects::load(&assets.systems),
@@ -529,7 +594,8 @@ impl Play {
             }
             State::Ready => self.step_ready(dt),
             State::Over { .. } => {
-                self.field.update(dt, self.ship.pos);
+                self.time.update(dt);
+                self.field.update(dt * self.time.factor, self.ship.pos);
                 self.update_rings(dt);
                 self.camera.update(dt, Vec2::ZERO);
             }
@@ -563,8 +629,10 @@ impl Play {
         self.camera.update(dt, total * CAMERA_LEAD);
 
         self.script.update(dt, self.ship.pos, &mut self.field);
-        self.field.update(dt, self.ship.pos);
+        self.time.update(dt);
+        self.field.update(dt * self.time.factor, self.ship.pos);
         self.update_rings(dt);
+        self.magnet = (self.magnet - dt).max(0.0);
         self.collide();
         self.handle_events();
         self.update_multiplier();
@@ -597,6 +665,20 @@ impl Play {
         if matches!(self.ship.life, Life::Dead(_)) {
             return;
         }
+        // shipCollision with a depot: boosting smashes it, else it is pushed.
+        let mut depots = self.field.touching_depots(self.ship.pos, SHIP_RADIUS);
+        depots.sort_unstable_by(|a, b| b.cmp(a));
+        for i in depots {
+            if self.ship.invincible > 0.0 {
+                self.field.destroy_depot(i, true);
+            } else {
+                let ship = self.ship.pos;
+                let d = &mut self.field.depots[i];
+                let other = vec2(wrap_near(ship.x, d.pos.x), wrap_near(ship.y, d.pos.y));
+                d.repel_from(other, SHIP_RADIUS, depot::REPEL);
+            }
+        }
+        self.handle_events();
         let mut touching = self.field.touching(self.ship.pos, SHIP_RADIUS);
         if touching.is_empty() {
             return;
@@ -606,7 +688,11 @@ impl Play {
             self.field.destroy(i, true);
         }
         if self.ship.life == Life::Alive && self.ship.invincible <= 0.0 {
-            self.kill_ship();
+            if self.ship.shield {
+                self.break_shield();
+            } else if self.ship.grace == 0.0 {
+                self.kill_ship();
+            }
         }
     }
 
@@ -633,12 +719,91 @@ impl Play {
     /// Bonus::update for every ring; Bonus::setState(0) for each collected.
     fn update_rings(&mut self, dt: f32) {
         let ship = (!matches!(self.ship.life, Life::Dead(_))).then_some(self.ship.pos);
-        for pos in self.pickups.update(dt, ship, self.ship.pos) {
-            self.sounds.push(SOUND_RING);
-            self.effects.start(Kind::Point, 15, pos, rand::gen_range(0.0, 360.0), false);
-            self.rings += 1;
-            self.score += self.multiplier as u64;
+        for (pos, power) in self.pickups.update(dt, ship, self.ship.pos) {
+            match power {
+                None => {
+                    self.sounds.push(SOUND_RING);
+                    self.effects
+                        .start(Kind::Point, 15, pos, rand::gen_range(0.0, 360.0), false);
+                    self.rings += 1;
+                    self.score += self.multiplier as u64;
+                }
+                Some(power) => self.collect_power(pos, power),
+            }
         }
+    }
+
+    /// BigBonus::setState(0).
+    fn collect_power(&mut self, pos: Vec2, power: Power) {
+        self.effects.start(Kind::Point, 16, pos, 0.0, false);
+        self.sounds.push(if power == Power::Slow { SOUND_SLOW } else { SOUND_POWER });
+        match power {
+            Power::Life => self.lives += 1,
+            Power::Bomb => self.bombs += 1,
+            Power::Shield => self.ship.shield = true,
+            Power::Slow => {
+                self.time.modify(SLOW_FACTOR, SLOW_SECONDS);
+                self.effects.flash(Color::new(0.8, 0.8, 0.8, 1.0));
+            }
+            Power::Magnet => {
+                self.pickups.magnetize();
+                self.magnet = if self.world == SURVIVAL { SURVIVAL_MAGNET_SECONDS } else { MAGNET_SECONDS };
+            }
+        }
+    }
+
+    /// Enemy::activateBigBonus: which power-up a depot drops.
+    fn choose_power(&self) -> Power {
+        let roll = |n: f32| (rand::gen_range(0.0f32, 1.0) * n) as i32;
+        if self.world == SURVIVAL {
+            return if !self.ship.shield {
+                Power::Shield
+            } else if roll(3.0) != 0 {
+                Power::Magnet
+            } else {
+                Power::Slow
+            };
+        }
+        let magnet_on = self.magnet > 0.0;
+        match (self.ship.shield, magnet_on) {
+            (true, false) => match roll(9.0) {
+                0 => Power::Life,
+                1 | 2 => Power::Bomb,
+                3 | 4 => Power::Slow,
+                _ => Power::Magnet,
+            },
+            (true, true) => match roll(7.0) {
+                0 => Power::Life,
+                1 | 2 => Power::Bomb,
+                _ => Power::Slow,
+            },
+            (false, false) => match roll(13.0) {
+                0 => Power::Life,
+                1 | 2 => Power::Bomb,
+                3 | 4 => Power::Slow,
+                5..=8 => Power::Magnet,
+                _ => Power::Shield,
+            },
+            (false, true) => match roll(9.0) {
+                0 => Power::Life,
+                1 | 2 => Power::Bomb,
+                3..=5 => Power::Slow,
+                _ => Power::Shield,
+            },
+        }
+    }
+
+    /// Ship::deactivateShield.
+    fn break_shield(&mut self) {
+        self.ship.shield = false;
+        self.ship.grace = SHIELD_GRACE;
+        self.camera.shake(0.75, 7.5);
+        let p = self.ship.pos;
+        self.effects.start(Kind::Ring, 8, p, 0.0, false);
+        for _ in 0..3 {
+            self.effects.start(Kind::Point, 17, p, 0.0, false);
+        }
+        self.sounds.push(SOUND_SHIP_DESTROYED);
     }
 
     /// Hud::update: the multiplier from the score since the last death.
@@ -667,7 +832,8 @@ impl Play {
                     rings,
                 } => {
                     self.score += (points * self.multiplier) as u64;
-                    self.pickups.drop(pos, RING_DROP_SPEED, rings);
+                    self.pickups
+                        .drop(pos, RING_DROP_SPEED, rings, self.magnet > 0.0);
                     self.sounds.push(SOUND_ROCK[rand::gen_range(0, 3)]);
                     // Rock::setState(10007): debris aimed away from the ship.
                     let away = self.towards_ship(pos) + 180.0;
@@ -700,6 +866,14 @@ impl Play {
                     self.effects.start(Kind::Point, front, pos, towards, false);
                 }
                 Event::WaveIncoming => self.sounds.push(SOUND_WAVE),
+                Event::DepotHit => self.sounds.push(SOUND_DEPOT_HIT),
+                Event::DepotDestroyed { pos, points } => {
+                    self.sounds.push(SOUND_DEPOT_DESTROYED);
+                    self.effects.start(Kind::Point, 17, pos, 0.0, false);
+                    self.score += (points * self.multiplier) as u64;
+                    let power = self.choose_power();
+                    self.pickups.drop_power(pos, power);
+                }
             }
         }
     }
@@ -752,8 +926,10 @@ impl Play {
         self.field
             .rocks
             .iter()
-            .filter(|r| r.z >= 0.0)
-            .map(|r| vec2(wrap_near(r.pos.x, ship.x), wrap_near(r.pos.y, ship.y)))
+            .filter(|r| r.active())
+            .map(|r| r.pos)
+            .chain(self.field.depots.iter().filter(|d| d.active()).map(|d| d.pos))
+            .map(|p| vec2(wrap_near(p.x, ship.x), wrap_near(p.y, ship.y)))
             .min_by(|a, b| {
                 a.distance_squared(ship)
                     .total_cmp(&b.distance_squared(ship))
@@ -777,6 +953,30 @@ impl Play {
                     self.draw_rock(art, rock);
                 }
             }
+        }
+    }
+
+    fn draw_depots(&self, canvas: &Canvas, assets: &PlayAssets) {
+        for d in &self.field.depots {
+            self.draw_depot(canvas, assets, d);
+        }
+        // Depot::draw: the label, only once the depot has landed.
+        let color = Color::new(1.0, 1.0, 1.0, depot::LABEL_ALPHA);
+        let label = &assets.depot_label;
+        for d in self.field.depots.iter().filter(|d| d.active()) {
+            let p = self.to_screen(d.pos);
+            draw_quad(label, p.x - label.width() * 0.5, p.y + depot::LABEL_DROP, 1.0, self.z, color);
+        }
+    }
+
+    fn draw_depot(&self, canvas: &Canvas, assets: &PlayAssets, d: &Depot) {
+        let p = self.to_screen(d.pos);
+        let color = Color::new(1.0, 1.0, 1.0, d.alpha);
+        let draw = || draw_sprite(&assets.depot, p.x, p.y, d.angle, self.z + d.z, color);
+        if d.flash {
+            canvas.flashing(draw);
+        } else {
+            draw();
         }
     }
 
@@ -828,13 +1028,28 @@ impl Play {
         );
         canvas.draw_backdrop(false, base, decal, origin, self.scroll, 1.0);
         // EnemyManager::sharedDraw: rings first, under everything else.
-        for r in &self.pickups.rings {
+        for r in self.pickups.rings.iter().filter(|r| r.power.is_none()) {
             let p = self.to_screen(r.pos);
             // AnimationData(bonus, 4, 4): the 7x7 sprite anchored 4 units in.
             let c = p + vec2(-0.5, -0.5);
             draw_sprite(&assets.hud.ring, c.x, c.y, r.angle, self.z, Color::new(1.0, 1.0, 1.0, r.alpha));
         }
+        // Power-ups, then their labels (BigBonus::draw).
+        for r in &self.pickups.rings {
+            let Some(power) = r.power else { continue };
+            let p = self.to_screen(r.pos);
+            let color = Color::new(1.0, 1.0, 1.0, r.alpha);
+            draw_atlas_sprite(&assets.power, 5, 1, power.frame(), p.x, p.y, r.angle, self.z, color);
+        }
+        for r in &self.pickups.rings {
+            let Some(power) = r.power else { continue };
+            let p = self.to_screen(r.pos);
+            let label = &assets.power_labels[power.frame()];
+            let color = Color::new(1.0, 1.0, 1.0, r.alpha * depot::LABEL_ALPHA);
+            draw_quad(label, p.x - label.width() * 0.5, p.y + POWER_LABEL_DROP, 1.0, self.z, color);
+        }
         self.draw_rocks(assets);
+        self.draw_depots(canvas, assets);
 
         // Cannon fire: green additive point sprites trailing each bullet.
         let mut points = Vec::new();
@@ -867,8 +1082,9 @@ impl Play {
         draw_sprite(&frames[ship.frame], p.x, p.y, ship.angle, self.z, color);
         let shield = match ship.life {
             Life::Spawning(_) => ship.alpha,
+            Life::Fading(_) if ship.shield => ship.alpha,
             Life::Fading(t) => t * ship.alpha,
-            _ if ship.invincible > 0.0 => ship.alpha,
+            _ if ship.shield => ship.alpha,
             _ => 0.0,
         };
         if shield > 0.0 {

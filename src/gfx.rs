@@ -63,6 +63,18 @@ void main() {
     gl_FragColor = texture2D(Texture, uv) * color;
 }"#;
 
+/// GL_ADD with a white vertex colour (Texture::drawFlash): a white
+/// silhouette with the texture's alpha.
+const FLASH_FRAGMENT: &str = r#"#version 100
+precision mediump float;
+varying lowp vec4 color;
+varying lowp vec2 uv;
+uniform sampler2D Texture;
+void main() {
+    vec4 t = texture2D(Texture, uv);
+    gl_FragColor = vec4(min(t.rgb + color.rgb, vec3(1.0)), t.a * color.a);
+}"#;
+
 /// Texture unit 1 was GL_DECAL: the decal layer over the base by the
 /// decal's alpha, alpha from the base. Both layers repeat and scroll.
 const BACKDROP_FRAGMENT: &str = r#"#version 100
@@ -184,6 +196,7 @@ pub struct Canvas {
     game_backdrop: Mesh,
     backdrop_material: Material,
     additive: Material,
+    flash: Material,
 }
 
 impl Canvas {
@@ -216,6 +229,17 @@ impl Canvas {
             },
         )
         .expect("additive shader");
+        let flash = load_material(
+            ShaderSource::Glsl {
+                vertex: DEFAULT_VERTEX,
+                fragment: FLASH_FRAGMENT,
+            },
+            MaterialParams {
+                pipeline_params: pipeline(BlendFactor::OneMinusValue(BlendValue::SourceAlpha)),
+                ..Default::default()
+            },
+        )
+        .expect("flash shader");
         let white = Texture2D::from_rgba8(1, 1, &[255, 255, 255, 255]);
         Canvas {
             target,
@@ -224,7 +248,15 @@ impl Canvas {
             game_backdrop: backdrop_mesh(false),
             backdrop_material,
             additive,
+            flash,
         }
+    }
+
+    /// Runs `draw` with hit-flash shading (Texture::drawFlash).
+    pub fn flashing(&self, draw: impl FnOnce()) {
+        gl_use_material(&self.flash);
+        draw();
+        gl_use_default_material();
     }
 
     /// Where the landscape canvas lands in the window: largest 3:2 fit, centred.
