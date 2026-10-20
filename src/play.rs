@@ -13,7 +13,8 @@ use std::collections::VecDeque;
 
 use macroquad::prelude::*;
 
-use crate::gfx::{draw_quad, draw_sprite, Canvas};
+use crate::enemies::{wrap_near, Element, Event, Field, Rock, Script, Weapon};
+use crate::gfx::{draw_atlas_sprite, draw_quad, draw_sprite, Canvas};
 
 const STEP: f32 = 1.0 / 60.0;
 
@@ -62,8 +63,45 @@ const CANNON_SPREAD: [&[f32]; 8] = [&[0.0], &[0.0], &[-3.0, 3.0], &[-3.0, 3.0], 
 const CANNON_TRAIL: [(f32, f32); 4] = [(0.0, 18.0), (4.0, 13.0), (7.0, 10.0), (9.0, 8.0)];
 /// Ship::drawAim: the aim dot sits 60 units out along the fire direction.
 const AIM_DISTANCE: f32 = 60.0;
+// StandardBulletManager: segment shapes of radius 2, mass 0.03, damage 1.
+const CANNON_RADIUS: f32 = 2.0;
+const CANNON_MASS: f32 = 0.03;
+const CANNON_DAMAGE: f32 = 1.0;
+
+/// Ship collision circle (Ship::Ship: cpCircleShapeNew radius 10).
+const SHIP_RADIUS: f32 = 10.0;
+// Ship::setState: a new ship is shielded for 3 s, then the shield fades
+// over 1 s; after a death the next ship comes 2 s later.
+const SPAWN_SHIELD: f32 = 3.0;
+const SHIELD_FADE: f32 = 1.0;
+const RESPAWN_DELAY: f32 = 2.0;
+/// Ship::update spins the shield at 300 degrees/s.
+const SHIELD_SPIN: f32 = 300.0;
+// GameScreen::reset: three lives (two in survival) and three bombs.
+const LIVES: u32 = 3;
+const SURVIVAL_LIVES: u32 = 2;
+const BOMBS: u32 = 3;
+const SURVIVAL: usize = 6;
+
+/// One element's meteor art: the small-rock 4x4 atlas, then the medium,
+/// large and extra-large rotation frames.
+pub struct RockArt {
+    pub small: Texture2D,
+    pub medium: Vec<Texture2D>,
+    pub large: Vec<Texture2D>,
+    pub extra_large: Vec<Texture2D>,
+}
+
+impl RockArt {
+    /// Frame counts by size, for the rock animations.
+    pub fn frame_counts(&self) -> [usize; 4] {
+        [16, self.medium.len(), self.large.len(), self.extra_large.len()]
+    }
+}
 
 pub struct PlayAssets {
+    /// Normal, ice and fire.
+    pub rocks: [RockArt; 3],
     pub ship: Vec<Texture2D>,
     pub ship_ready: Vec<Texture2D>,
     pub shield: Texture2D,
@@ -71,15 +109,6 @@ pub struct PlayAssets {
     pub cannon: Texture2D,
     /// Base and decal planet textures per world (0-5), then survival.
     pub backdrops: Vec<(Texture2D, Texture2D)>,
-}
-
-/// `World::updateX/Y`: bring a coordinate within half a world of `centre`.
-fn wrap_near(v: f32, centre: f32) -> f32 {
-    let mut v = v;
-    if (centre - v).abs() > WORLD * 0.5 {
-        v += if v < centre { WORLD } else { -WORLD };
-    }
-    v
 }
 
 /// Ship::update keeps the ship itself in [-512, 512].
@@ -106,6 +135,8 @@ fn heading(d: Vec2) -> f32 {
 }
 
 struct Bullet {
+    /// Where the bullet was last update: hits are tested along the segment.
+    prev: Vec2,
     pos: Vec2,
     vel: Vec2,
     life: f32,
@@ -113,7 +144,18 @@ struct Bullet {
     back: Vec2,
 }
 
+/// Ship::setState: 1 spawning (shielded), 2 shield fading, 3 vulnerable,
+/// 4 destroyed.
+#[derive(Clone, Copy, PartialEq)]
+enum Life {
+    Spawning(f32),
+    Fading(f32),
+    Alive,
+    Dead(f32),
+}
+
 struct Ship {
+    life: Life,
     pos: Vec2,
     vel: Vec2,
     boost_vel: Vec2,
@@ -137,6 +179,7 @@ struct Ship {
 impl Ship {
     fn new() -> Ship {
         Ship {
+            life: Life::Spawning(SPAWN_SHIELD),
             pos: Vec2::ZERO,
             vel: Vec2::ZERO,
             boost_vel: Vec2::ZERO,
@@ -156,6 +199,17 @@ impl Ship {
             cannon_timer: CANNON_INTERVAL[0],
             bullets: Vec::new(),
         }
+    }
+
+    /// Ship::reset: a fresh ship where the last one died.
+    fn respawn(&mut self) {
+        self.life = Life::Spawning(SPAWN_SHIELD);
+        self.vel = Vec2::ZERO;
+        self.boost_vel = Vec2::ZERO;
+        self.boost_time = 0.0;
+        self.invincible = 0.0;
+        self.boost_charge = BOOST_RECHARGE;
+        self.bullets.clear();
     }
 
     fn can_boost(&self) -> bool {
@@ -187,7 +241,7 @@ impl Ship {
         for offset in CANNON_SPREAD[self.cannon_level] {
             let rad = (base + offset).to_radians();
             let vel = vec2(rad.sin(), -rad.cos()) * CANNON_SPEED;
-            self.bullets.push(Bullet { pos: origin, vel, life: CANNON_LIFE, back: -vel.normalize() });
+            self.bullets.push(Bullet { prev: origin, pos: origin, vel, life: CANNON_LIFE, back: -vel.normalize() });
         }
     }
 
@@ -198,6 +252,13 @@ impl Ship {
     }
 
     fn update(&mut self, dt: f32) {
+        self.life = match self.life {
+            Life::Spawning(t) if t - dt <= 0.0 => Life::Fading(SHIELD_FADE),
+            Life::Spawning(t) => Life::Spawning(t - dt),
+            Life::Fading(t) if t - dt <= 0.0 => Life::Alive,
+            Life::Fading(t) => Life::Fading(t - dt),
+            other => other,
+        };
         let before = self.angle;
         if self.boost_time > 0.0 {
             self.boost_time -= dt;
@@ -214,6 +275,7 @@ impl Ship {
         self.boost_vel *= DRAG / (dt + DRAG);
 
         for b in &mut self.bullets {
+            b.prev = b.pos;
             b.life -= dt;
             b.pos = vec2(wrap_near(b.pos.x + b.vel.x * dt, self.pos.x), wrap_near(b.pos.y + b.vel.y * dt, self.pos.y));
         }
@@ -287,6 +349,8 @@ enum State {
     /// Flying in from GAME_SCREEN_START_Z while fading in.
     Entering,
     Ready,
+    /// Stage cleared or out of lives; the screen waits for the player.
+    Over { cleared: bool },
 }
 
 pub struct Play {
@@ -302,11 +366,17 @@ pub struct Play {
     /// Background offset: the planet scrolls with the ship's motion.
     scroll: Vec2,
     accumulator: f32,
+    field: Field,
+    script: Script,
+    pub score: u64,
+    pub multiplier: u32,
+    pub lives: u32,
+    pub bombs: u32,
 }
 
 impl Play {
     /// `world` 0-5 for arcade worlds, 6 for survival.
-    pub fn new(world: usize, stage: usize) -> Play {
+    pub fn new(world: usize, stage: usize, assets: &PlayAssets) -> Play {
         Play {
             world,
             stage,
@@ -319,6 +389,20 @@ impl Play {
             camera: Lead { centre: Vec2::ZERO, shake: Vec2::ZERO, shake_power: 0.0, shake_time: 0.0 },
             scroll: Vec2::ZERO,
             accumulator: 0.0,
+            field: Field::new(assets.rocks[0].frame_counts()),
+            script: Script::arcade(world, stage),
+            score: 0,
+            multiplier: 1,
+            lives: if world == SURVIVAL { SURVIVAL_LIVES } else { LIVES },
+            bombs: BOMBS,
+        }
+    }
+
+    /// The stage is over: `Some(true)` cleared, `Some(false)` out of lives.
+    pub fn result(&self) -> Option<bool> {
+        match self.state {
+            State::Over { cleared } => Some(cleared),
+            _ => None,
         }
     }
 
@@ -355,6 +439,10 @@ impl Play {
                 self.camera.update(dt, Vec2::ZERO);
             }
             State::Ready => self.step_ready(dt),
+            State::Over { .. } => {
+                self.field.update(dt, self.ship.pos);
+                self.camera.update(dt, Vec2::ZERO);
+            }
         }
         self.elapsed += dt;
     }
@@ -362,6 +450,75 @@ impl Play {
     /// GameScreen::updateStateReady with keyboard and mouse in place of the
     /// two touch wheels.
     fn step_ready(&mut self, dt: f32) {
+        if let Life::Dead(t) = self.ship.life {
+            // GameScreen::updateStateReady: two seconds after a death, the
+            // next ship, or the end of the game.
+            self.ship.life = Life::Dead(t + dt);
+            if t + dt >= RESPAWN_DELAY {
+                if self.lives == 0 {
+                    self.state = State::Over { cleared: false };
+                } else {
+                    self.lives -= 1;
+                    self.ship.respawn();
+                }
+            }
+            self.ship.vel = Vec2::ZERO;
+        } else {
+            self.control(dt);
+        }
+        self.ship.update(dt);
+        let total = self.ship.vel + self.ship.boost_vel;
+        self.scroll += total * dt;
+        self.camera.update(dt, total * CAMERA_LEAD);
+
+        self.script.update(dt, self.ship.pos, &mut self.field);
+        self.field.update(dt, self.ship.pos);
+        self.collide();
+        self.handle_events();
+        if self.script.complete(&self.field) {
+            self.state = State::Over { cleared: true };
+        }
+    }
+
+    /// The cannon against rocks, then rocks against the ship (shipCollision).
+    fn collide(&mut self) {
+        let field = &mut self.field;
+        self.ship.bullets.retain(|b| !field.bullet(b.prev, b.pos, CANNON_RADIUS, Weapon::Cannon, CANNON_DAMAGE, CANNON_MASS, b.vel));
+        if matches!(self.ship.life, Life::Dead(_)) {
+            return;
+        }
+        let mut touching = self.field.touching(self.ship.pos, SHIP_RADIUS);
+        if touching.is_empty() {
+            return;
+        }
+        touching.sort_unstable_by(|a, b| b.cmp(a));
+        for i in touching {
+            self.field.destroy(i, true);
+        }
+        if self.ship.life == Life::Alive && self.ship.invincible <= 0.0 {
+            self.kill_ship();
+        }
+    }
+
+    /// Ship::setState(4).
+    fn kill_ship(&mut self) {
+        self.ship.life = Life::Dead(0.0);
+        self.ship.bullets.clear();
+        self.ship.aiming = false;
+        self.camera.shake(0.75, 7.5);
+        self.script.delay();
+    }
+
+    fn handle_events(&mut self) {
+        for event in self.field.events.drain(..) {
+            match event {
+                Event::RockDestroyed { points, .. } => self.score += (points * self.multiplier) as u64,
+                Event::WaveIncoming => {}
+            }
+        }
+    }
+
+    fn control(&mut self, dt: f32) {
         let stick = vec2(
             (is_key_down(KeyCode::D) as i32 - is_key_down(KeyCode::A) as i32) as f32,
             (is_key_down(KeyCode::S) as i32 - is_key_down(KeyCode::W) as i32) as f32,
@@ -383,10 +540,30 @@ impl Play {
         } else {
             self.ship.hold_fire();
         }
-        self.ship.update(dt);
-        let total = self.ship.vel + self.ship.boost_vel;
-        self.scroll += total * dt;
-        self.camera.update(dt, total * CAMERA_LEAD);
+    }
+
+    fn draw_rocks(&self, assets: &PlayAssets) {
+        // EnemyManager::sharedDraw: per element, small to extra large.
+        for (e, element) in [Element::Normal, Element::Ice, Element::Fire].into_iter().enumerate() {
+            let art = &assets.rocks[e];
+            for size in 0..4 {
+                for rock in self.field.rocks.iter().filter(|r| r.element == element && r.size == size) {
+                    self.draw_rock(art, rock);
+                }
+            }
+        }
+    }
+
+    fn draw_rock(&self, art: &RockArt, rock: &Rock) {
+        let p = self.to_screen(rock.pos);
+        let z = self.z + rock.z;
+        let color = Color::new(1.0, 1.0, 1.0, rock.alpha);
+        match rock.size {
+            0 => draw_atlas_sprite(&art.small, 4, 4, rock.frame, p.x, p.y, rock.angle, z, color),
+            1 => draw_sprite(&art.medium[rock.frame % art.medium.len()], p.x, p.y, rock.angle, z, color),
+            2 => draw_sprite(&art.large[rock.frame % art.large.len()], p.x, p.y, rock.angle, z, color),
+            _ => draw_sprite(&art.extra_large[rock.frame % art.extra_large.len()], p.x, p.y, rock.angle, z, color),
+        }
     }
 
     pub fn draw(&self, canvas: &Canvas, assets: &PlayAssets) {
@@ -396,6 +573,7 @@ impl Play {
         let bg_z = std::env::var("MB_BG_Z").ok().and_then(|v| v.parse().ok()).unwrap_or(BACKGROUND_Z);
         let origin = vec3(SCREEN_CENTRE.x + cam.x, SCREEN_CENTRE.y + cam.y, self.z + bg_z);
         canvas.draw_backdrop(false, base, decal, origin, self.scroll, 1.0);
+        self.draw_rocks(assets);
 
         // Cannon fire: green additive point sprites trailing each bullet.
         let mut points = Vec::new();
@@ -408,12 +586,21 @@ impl Play {
         canvas.draw_points(&assets.cannon, &points, self.z, GREEN);
 
         let ship = &self.ship;
+        if matches!(ship.life, Life::Dead(_)) {
+            return;
+        }
         let p = self.to_screen(ship.pos);
         let frames = if ship.can_boost() { &assets.ship_ready } else { &assets.ship };
         let color = Color::new(1.0, 1.0, 1.0, ship.alpha);
         draw_sprite(&frames[ship.frame], p.x, p.y, ship.angle, self.z, color);
-        if ship.invincible > 0.0 {
-            draw_sprite(&assets.shield, p.x, p.y, self.elapsed * 300.0, self.z, color);
+        let shield = match ship.life {
+            Life::Spawning(_) => ship.alpha,
+            Life::Fading(t) => t * ship.alpha,
+            _ if ship.invincible > 0.0 => ship.alpha,
+            _ => 0.0,
+        };
+        if shield > 0.0 {
+            draw_sprite(&assets.shield, p.x, p.y, self.elapsed * SHIELD_SPIN, self.z, Color::new(1.0, 1.0, 1.0, shield));
         }
         if ship.aiming {
             let aim = p + ship.aim_dir * AIM_DISTANCE;

@@ -24,6 +24,7 @@ CFSTRING = (0x9475C, 0x9475C + 0x28C0)
 CSTRING = (0x898FC, 0x898FC + 0x611D)
 SELREFS = (0x97764, 0x97DF8)
 MAX_ADDR = 0xB0000
+MIN_ADDR = 0x2DEC  # start of __text: smaller words are plain integers (state ids etc.)
 
 
 def load_syms():
@@ -74,7 +75,7 @@ class Binary:
             return f"@selector({self.cstring(self.word(w))})"
         if CSTRING[0] <= w < CSTRING[1]:
             return f'cstr "{self.cstring(w)}"'
-        if 0x1000 <= w < MAX_ADDR and depth < 2:
+        if MIN_ADDR <= w < MAX_ADDR and depth < 2:
             sym = self.symbol(w)
             inner = self.describe(w, depth + 1)
             return f"-> {w:#x} {sym or ''} [{inner}]"

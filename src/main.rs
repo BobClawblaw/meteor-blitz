@@ -1,9 +1,11 @@
 //! Meteor Blitz — a port of the 2009 iPhone game. Window, screens, and loop.
 
+mod enemies;
 mod gfx;
 mod menu;
 mod play;
 mod progress;
+mod waves;
 
 use std::collections::HashMap;
 
@@ -12,7 +14,7 @@ use macroquad::prelude::*;
 
 use gfx::Canvas;
 use menu::{MenuAssets, MenuBackdrop, MenuButton, MenuScreen};
-use play::{Play, PlayAssets};
+use play::{Play, PlayAssets, RockArt};
 use progress::Progress;
 
 fn window_conf() -> Conf {
@@ -205,6 +207,29 @@ async fn load_texture_file(name: &str) -> Texture2D {
     tex
 }
 
+/// GameScreen::loadTextures: each element's small-rock atlas and the medium,
+/// large and extra-large rotation frames (EnemyManager::sharedNew).
+async fn load_rock_art(atlas: &str, prefix: &str) -> RockArt {
+    let frames = |family: u32, count: u32| {
+        let names: Vec<String> = (1..=count).map(|i| format!("{}{}.{}", prefix, family, i)).collect();
+        names
+    };
+    let medium_family = if prefix == "rock" { "rock3A".to_owned() } else { format!("{}3", prefix) };
+    let mut medium = Vec::new();
+    for i in 1..=30 {
+        medium.push(load_sprite(&format!("{}.{}", medium_family, i)).await);
+    }
+    let mut large = Vec::new();
+    for name in frames(2, 23) {
+        large.push(load_sprite(&name).await);
+    }
+    let mut extra_large = Vec::new();
+    for name in frames(1, 30) {
+        extra_large.push(load_sprite(&name).await);
+    }
+    RockArt { small: load_sprite(atlas).await, medium, large, extra_large }
+}
+
 async fn load_play_assets() -> PlayAssets {
     let mut ship = Vec::new();
     let mut ship_ready = Vec::new();
@@ -227,6 +252,11 @@ async fn load_play_assets() -> PlayAssets {
         backdrops.push((load_texture_file(base).await, load_texture_file(decal).await));
     }
     PlayAssets {
+        rocks: [
+            load_rock_art("rock4A", "rock").await,
+            load_rock_art("freeze4", "freeze").await,
+            load_rock_art("cinder4", "cinder").await,
+        ],
         ship,
         ship_ready,
         shield: load_sprite("shield").await,
@@ -244,7 +274,7 @@ async fn main() {
     let music = load_sound("original/audio/music.wav").await.unwrap();
     let canvas = Canvas::new();
     let mut backdrop = MenuBackdrop::new();
-    let progress = Progress::load();
+    let mut progress = Progress::load();
 
     let mut screen = Screen::Menu(MenuKind::Main);
     let mut menu_screen = build_menu(MenuKind::Main, &ui, &progress, true);
@@ -258,7 +288,7 @@ async fn main() {
         let (w, s) = v.split_once('.')?;
         Some((w.parse::<usize>().ok()?, s.parse::<usize>().ok()?))
     }) {
-        game = Some(Play::new(w.saturating_sub(1).min(SURVIVAL), s));
+        game = Some(Play::new(w.saturating_sub(1).min(SURVIVAL), s, &play_assets));
         screen = Screen::Game;
     }
 
@@ -285,7 +315,7 @@ async fn main() {
                             screen = Screen::Menu(next);
                         }
                         Some(Next::Game(world, stage)) => {
-                            game = Some(Play::new(world, stage));
+                            game = Some(Play::new(world, stage, &play_assets));
                             screen = Screen::Game;
                             if !music_on {
                                 play_sound(&music, PlaySoundParams { looped: true, volume: 0.35 });
@@ -300,8 +330,19 @@ async fn main() {
                 if let Some(g) = game.as_mut() {
                     g.update(dt);
                 }
-                // Until the pause popup is ported, Escape leaves to stage select.
-                if is_key_pressed(KeyCode::Escape) {
+                // Until the pause and results popups are ported: Escape leaves
+                // to stage select, as does Enter once the stage is over.
+                let over = game.as_ref().and_then(|g| g.result());
+                if over == Some(true) {
+                    if let Some(g) = game.as_ref() {
+                        if g.world < SURVIVAL {
+                            progress.unlocked = progress.unlocked.max(g.world * 5 + g.stage);
+                            progress.best = progress.best.max(g.score);
+                            progress.save();
+                        }
+                    }
+                }
+                if is_key_pressed(KeyCode::Escape) || (over.is_some() && is_key_pressed(KeyCode::Enter)) {
                     let kind = match game.as_ref() {
                         Some(g) if g.world < SURVIVAL => MenuKind::Stage(g.world),
                         _ => MenuKind::Mode,

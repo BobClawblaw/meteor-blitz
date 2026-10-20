@@ -294,3 +294,24 @@ pub fn draw_sprite(tex: &Texture2D, x: f32, y: f32, angle_deg: f32, z: f32, colo
     };
     draw_mesh(&quad);
 }
+
+/// `Texture::drawMultipleFrames` for one sprite: cell `index` of a
+/// `cols` x `rows` atlas, centred on `(x, y)` and rotated by `angle_deg`.
+pub fn draw_atlas_sprite(tex: &Texture2D, cols: usize, rows: usize, index: usize, x: f32, y: f32, angle_deg: f32, z: f32, color: Color) {
+    let (cw, ch) = (1.0 / cols as f32, 1.0 / rows as f32);
+    let (u0, v0) = ((index % cols) as f32 * cw, (index / cols % rows) as f32 * ch);
+    let (hw, hh) = (tex.width() * cw * 0.5, tex.height() * ch * 0.5);
+    let (s, c) = angle_deg.to_radians().sin_cos();
+    let corner = |dx: f32, dy: f32, u: f32, v: f32| Vertex::new(x + dx * c - dy * s, y + dx * s + dy * c, z, u, v, color);
+    let quad = Mesh {
+        vertices: vec![
+            corner(-hw, -hh, u0, v0),
+            corner(hw, -hh, u0 + cw, v0),
+            corner(hw, hh, u0 + cw, v0 + ch),
+            corner(-hw, hh, u0, v0 + ch),
+        ],
+        indices: vec![0, 1, 2, 0, 2, 3],
+        texture: Some(tex.clone()),
+    };
+    draw_mesh(&quad);
+}
