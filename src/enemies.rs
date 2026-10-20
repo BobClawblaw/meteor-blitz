@@ -107,6 +107,8 @@ pub struct Rock {
     frame_reverse: bool,
     frames: usize,
     spark_cooldown: i32,
+    /// Set by `hit` when this hit should show sparks.
+    sparked: bool,
     pub points: u32,
 }
 
@@ -131,6 +133,7 @@ impl Rock {
             frame_reverse: signed() > 0.0,
             frames,
             spark_cooldown: 0,
+            sparked: false,
             points: ROCK_POINTS,
         };
         // Animation::setRandomFrame.
@@ -178,8 +181,12 @@ impl Rock {
                 self.animate(dt);
             }
             State::Active => {
-                let d = vec2(wrap_near(self.pos.x, centre.x) - centre.x, wrap_near(self.pos.y, centre.y) - centre.y);
-                if d.x.abs() < NEAR_X && d.y.abs() < NEAR_Y && self.vel.length() > NEAR_SPEED_LIMIT {
+                let d = vec2(
+                    wrap_near(self.pos.x, centre.x) - centre.x,
+                    wrap_near(self.pos.y, centre.y) - centre.y,
+                );
+                if d.x.abs() < NEAR_X && d.y.abs() < NEAR_Y && self.vel.length() > NEAR_SPEED_LIMIT
+                {
                     self.vel = self.vel.normalize() * NEAR_SPEED_LIMIT;
                 }
                 // Sprite::update.
@@ -192,11 +199,21 @@ impl Rock {
             }
         }
         // World::updateSpritePosition.
-        self.pos = vec2(wrap_near(self.pos.x, centre.x), wrap_near(self.pos.y, centre.y));
+        self.pos = vec2(
+            wrap_near(self.pos.x, centre.x),
+            wrap_near(self.pos.y, centre.y),
+        );
     }
 
     /// Rock::handleEvent(0): a bullet hit. Returns true when the rock dies.
-    fn hit(&mut self, weapon: Weapon, damage: f32, bullet_pos: Vec2, bullet_vel: Vec2, bullet_mass: f32) -> bool {
+    fn hit(
+        &mut self,
+        weapon: Weapon,
+        damage: f32,
+        bullet_pos: Vec2,
+        bullet_vel: Vec2,
+        bullet_mass: f32,
+    ) -> bool {
         let factor = match (self.element, weapon) {
             (Element::Ice, Weapon::Fire) | (Element::Fire, Weapon::Laser) => 1.25,
             (Element::Normal, Weapon::Cannon) => 1.0,
@@ -206,6 +223,7 @@ impl Rock {
         if self.health <= 0.0 {
             return true;
         }
+        self.sparked = false;
         // Knock back with the bullet's momentum.
         let n = (self.pos - bullet_pos).normalize_or_zero();
         let closing = n.dot(self.vel) - n.dot(bullet_vel);
@@ -213,6 +231,7 @@ impl Rock {
         self.vel = (self.vel - n * j) * RESTITUTION;
         if self.spark_cooldown == 0 {
             self.spark_cooldown = HIT_SPARK_UPDATES;
+            self.sparked = true;
         }
         false
     }
@@ -237,7 +256,21 @@ fn bounce(a: &mut Rock, b: &mut Rock) {
 
 /// What happened during an update, for effects, sounds and scoring.
 pub enum Event {
-    RockDestroyed { pos: Vec2, element: Element, size: usize, points: u32 },
+    RockDestroyed {
+        pos: Vec2,
+        element: Element,
+        points: u32,
+    },
+    /// A hit that did not destroy the rock (sparks at most every 8 updates).
+    RockHit {
+        pos: Vec2,
+        element: Element,
+    },
+    /// The rock broke into three; fragments fly out at `angle` + 0/120/240.
+    RockSplit {
+        pos: Vec2,
+        angle: f32,
+    },
     WaveIncoming,
 }
 
@@ -251,11 +284,18 @@ pub struct Field {
 
 impl Field {
     pub fn new(frames: [usize; 4]) -> Field {
-        Field { rocks: Vec::new(), frames, events: Vec::new() }
+        Field {
+            rocks: Vec::new(),
+            frames,
+            events: Vec::new(),
+        }
     }
 
     fn count(&self, element: Element, size: usize) -> usize {
-        self.rocks.iter().filter(|r| r.element == element && r.size == size).count()
+        self.rocks
+            .iter()
+            .filter(|r| r.element == element && r.size == size)
+            .count()
     }
 
     /// EnemyManager::activate: take a rock from its pool if one is free.
@@ -263,7 +303,8 @@ impl Field {
         if self.count(element, size) >= POOL[size] {
             return None;
         }
-        self.rocks.push(Rock::new(element, size, pos, self.frames[size]));
+        self.rocks
+            .push(Rock::new(element, size, pos, self.frames[size]));
         Some(self.rocks.len() - 1)
     }
 
@@ -293,7 +334,10 @@ impl Field {
                 if !a.active() || !b.active() {
                     continue;
                 }
-                let d = vec2(wrap_near(b.pos.x, a.pos.x) - a.pos.x, wrap_near(b.pos.y, a.pos.y) - a.pos.y);
+                let d = vec2(
+                    wrap_near(b.pos.x, a.pos.x) - a.pos.x,
+                    wrap_near(b.pos.y, a.pos.y) - a.pos.y,
+                );
                 let r = a.radius() + b.radius();
                 if d.length_squared() < r * r {
                     let real = b.pos;
@@ -306,7 +350,16 @@ impl Field {
     }
 
     /// A bullet segment against active rocks. Returns true when it hit one.
-    pub fn bullet(&mut self, from: Vec2, to: Vec2, radius: f32, weapon: Weapon, damage: f32, mass: f32, vel: Vec2) -> bool {
+    pub fn bullet(
+        &mut self,
+        from: Vec2,
+        to: Vec2,
+        radius: f32,
+        weapon: Weapon,
+        damage: f32,
+        mass: f32,
+        vel: Vec2,
+    ) -> bool {
         for i in 0..self.rocks.len() {
             let rock = &self.rocks[i];
             if !rock.active() {
@@ -316,6 +369,12 @@ impl Field {
             if segment_distance(c, from, to) < rock.radius() + radius {
                 if self.rocks[i].hit(weapon, damage, to, vel, mass) {
                     self.destroy(i, true);
+                } else if self.rocks[i].sparked {
+                    let r = &self.rocks[i];
+                    self.events.push(Event::RockHit {
+                        pos: r.pos,
+                        element: r.element,
+                    });
                 }
                 return true;
             }
@@ -341,13 +400,16 @@ impl Field {
         self.events.push(Event::RockDestroyed {
             pos: rock.pos,
             element: rock.element,
-            size: rock.size,
             points: if score { rock.points } else { 0 },
         });
         if rock.size == 0 {
             return;
         }
         let base = unit() * 180.0;
+        self.events.push(Event::RockSplit {
+            pos: rock.pos,
+            angle: base,
+        });
         let distance = 10.0 - signed();
         for k in 0..3 {
             let a = (base + 120.0 * k as f32).to_radians();
@@ -365,7 +427,11 @@ impl Field {
 
 fn segment_distance(p: Vec2, a: Vec2, b: Vec2) -> f32 {
     let ab = b - a;
-    let t = if ab.length_squared() > 0.0 { ((p - a).dot(ab) / ab.length_squared()).clamp(0.0, 1.0) } else { 0.0 };
+    let t = if ab.length_squared() > 0.0 {
+        ((p - a).dot(ab) / ab.length_squared()).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
     p.distance(a + ab * t)
 }
 
@@ -441,7 +507,8 @@ impl Script {
 
     /// WaveManager::isStageComplete.
     pub fn complete(&self, field: &Field) -> bool {
-        self.index == self.waves.len() as i32 - 1 && (field.remaining_of_kind(self.tracked_kind) == 0 || field.weighted_remaining() == 0)
+        self.index == self.waves.len() as i32 - 1
+            && (field.remaining_of_kind(self.tracked_kind) == 0 || field.weighted_remaining() == 0)
     }
 
     /// WaveManager::update.
@@ -453,7 +520,9 @@ impl Script {
             return;
         }
         if self.index != -1 {
-            if self.index >= self.waves.len() as i32 - 1 || field.weighted_remaining() as i32 > self.threshold {
+            if self.index >= self.waves.len() as i32 - 1
+                || field.weighted_remaining() as i32 > self.threshold
+            {
                 return;
             }
             if self.delays > 0 {
@@ -479,7 +548,8 @@ impl Script {
         self.entry = 0;
         self.tick_timer = 0.0;
         self.spawning = true;
-        self.threshold = (self.threshold + wave_units(wave) - wave.threshold as i32).max(MIN_THRESHOLD);
+        self.threshold =
+            (self.threshold + wave_units(wave) - wave.threshold as i32).max(MIN_THRESHOLD);
         if wave.flags & 8 != 0 {
             self.tracked_kind = wave.kind;
         }
@@ -498,7 +568,9 @@ impl Script {
             if self.tick == 0 && wave.kind != 0 {
                 field.events.push(Event::WaveIncoming);
             }
-            while self.entry < spawns.len() && spawns[self.entry].tick * wave.ticks_per_step == self.tick {
+            while self.entry < spawns.len()
+                && spawns[self.entry].tick * wave.ticks_per_step == self.tick
+            {
                 let e = &spawns[self.entry];
                 if self.entry == 0 {
                     if wave.flags & 1 != 0 {
@@ -515,7 +587,10 @@ impl Script {
                     let distance = (e.b + signed() * e.b_jitter) * wave.scale;
                     vec2(angle.sin() * distance, -angle.cos() * distance)
                 } else {
-                    vec2((e.a + e.a_jitter * signed()) * wave.scale, (e.b + signed() * e.b_jitter) * wave.scale)
+                    vec2(
+                        (e.a + e.a_jitter * signed()) * wave.scale,
+                        (e.b + signed() * e.b_jitter) * wave.scale,
+                    )
                 };
                 if wave.offset_angle != 0.0 || wave.offset_distance != 0.0 {
                     let a = (wave.offset_angle + self.rotation).to_radians();
@@ -523,7 +598,11 @@ impl Script {
                 }
                 if let Some((element, size)) = rock_kind(wave.kind) {
                     let p = self.origin + offset;
-                    field.spawn(element, size, vec2(wrap_near(p.x, ship.x), wrap_near(p.y, ship.y)));
+                    field.spawn(
+                        element,
+                        size,
+                        vec2(wrap_near(p.x, ship.x), wrap_near(p.y, ship.y)),
+                    );
                 }
                 self.entry += 1;
             }

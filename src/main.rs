@@ -4,6 +4,7 @@ mod enemies;
 mod gfx;
 mod hud;
 mod menu;
+mod particles;
 mod play;
 mod progress;
 mod waves;
@@ -80,18 +81,33 @@ enum Next {
 type Ui = HashMap<String, Texture2D>;
 
 async fn load_ui(name: &str) -> Texture2D {
-    let tex = load_texture(&format!("assets/ui/{}.png", name)).await.unwrap();
+    let tex = load_texture(&format!("assets/ui/{}.png", name))
+        .await
+        .unwrap();
     tex.set_filter(FilterMode::Linear);
     tex
 }
 
 async fn load_ui_set() -> Ui {
     let mut names: Vec<String> = Vec::new();
-    for b in ["Play", "HighScores", "Settings", "Help", "Arcade", "Survival", "Back"] {
+    for b in [
+        "Play",
+        "HighScores",
+        "Settings",
+        "Help",
+        "Arcade",
+        "Survival",
+        "Back",
+    ] {
         names.push(format!("button{}", b));
         names.push(format!("button{}Down", b));
     }
-    for label in ["labelTitle", "labelSelectMode", "labelSelectWorld", "labelSelectStage"] {
+    for label in [
+        "labelTitle",
+        "labelSelectMode",
+        "labelSelectWorld",
+        "labelSelectStage",
+    ] {
         names.push(label.to_owned());
     }
     for world in 1..=6 {
@@ -116,7 +132,9 @@ async fn load_ui_set() -> Ui {
 
 async fn load_menu_assets() -> MenuAssets {
     let menu = MenuAssets {
-        space: load_texture("original/textures/space4deep.png").await.unwrap(),
+        space: load_texture("original/textures/space4deep.png")
+            .await
+            .unwrap(),
         fog: load_texture("original/textures/fogRed.png").await.unwrap(),
         horizon: load_ui("horizon").await,
     };
@@ -130,22 +148,74 @@ async fn load_menu_assets() -> MenuAssets {
 const BACK_XY: f32 = 2.0;
 
 fn button(ui: &Ui, up: &str, down: &str, x: f32, y: f32, w: f32, h: f32, event: u8) -> MenuButton {
-    MenuButton { up: ui[up].clone(), down: ui[down].clone(), rect: Rect::new(x, y, w, h), event }
+    MenuButton {
+        up: ui[up].clone(),
+        down: ui[down].clone(),
+        rect: Rect::new(x, y, w, h),
+        event,
+    }
 }
 
 /// Builds a menu screen with the original's layout (rects and events from
 /// the screen constructors in the iOS binary).
 fn build_menu(kind: MenuKind, ui: &Ui, progress: &Progress, fade_backdrop: bool) -> MenuScreen {
-    let back = |event| button(ui, "buttonBack", "buttonBackDown", BACK_XY, BACK_XY, 34.0, 34.0, event);
+    let back = |event| {
+        button(
+            ui,
+            "buttonBack",
+            "buttonBackDown",
+            BACK_XY,
+            BACK_XY,
+            34.0,
+            34.0,
+            event,
+        )
+    };
     match kind {
         MenuKind::Main => MenuScreen::new(
             ui["labelTitle"].clone(),
             15.0,
             vec![
-                button(ui, "buttonPlay", "buttonPlayDown", 160.0, 176.0, 160.0, 128.0, 0),
-                button(ui, "buttonHighScores", "buttonHighScoresDown", 16.0, 176.0, 128.0, 128.0, 1),
-                button(ui, "buttonSettings", "buttonSettingsDown", 336.0, 176.0, 127.0, 57.0, 2),
-                button(ui, "buttonHelp", "buttonHelpDown", 336.0, 246.0, 127.0, 57.0, 3),
+                button(
+                    ui,
+                    "buttonPlay",
+                    "buttonPlayDown",
+                    160.0,
+                    176.0,
+                    160.0,
+                    128.0,
+                    0,
+                ),
+                button(
+                    ui,
+                    "buttonHighScores",
+                    "buttonHighScoresDown",
+                    16.0,
+                    176.0,
+                    128.0,
+                    128.0,
+                    1,
+                ),
+                button(
+                    ui,
+                    "buttonSettings",
+                    "buttonSettingsDown",
+                    336.0,
+                    176.0,
+                    127.0,
+                    57.0,
+                    2,
+                ),
+                button(
+                    ui,
+                    "buttonHelp",
+                    "buttonHelpDown",
+                    336.0,
+                    246.0,
+                    127.0,
+                    57.0,
+                    3,
+                ),
             ],
             fade_backdrop,
         ),
@@ -154,25 +224,69 @@ fn build_menu(kind: MenuKind, ui: &Ui, progress: &Progress, fade_backdrop: bool)
             0.0,
             vec![
                 back(2),
-                button(ui, "buttonArcade", "buttonArcadeDown", 47.0, 118.0, 175.0, 128.0, 0),
-                button(ui, "buttonSurvival", "buttonSurvivalDown", 258.0, 118.0, 175.0, 128.0, 1),
+                button(
+                    ui,
+                    "buttonArcade",
+                    "buttonArcadeDown",
+                    47.0,
+                    118.0,
+                    175.0,
+                    128.0,
+                    0,
+                ),
+                button(
+                    ui,
+                    "buttonSurvival",
+                    "buttonSurvivalDown",
+                    258.0,
+                    118.0,
+                    175.0,
+                    128.0,
+                    1,
+                ),
             ],
             fade_backdrop,
         ),
         MenuKind::World => {
             // Columns at 30 / 176.5 / 320 (the middle one 127 wide), rows at 55 / 185.
-            let slots = [(30.0, 55.0, 130.0), (176.5, 54.0, 127.0), (320.0, 55.0, 130.0), (30.0, 185.0, 130.0), (176.5, 185.0, 127.0), (320.0, 185.0, 130.0)];
+            let slots = [
+                (30.0, 55.0, 130.0),
+                (176.5, 54.0, 127.0),
+                (320.0, 55.0, 130.0),
+                (30.0, 185.0, 130.0),
+                (176.5, 185.0, 127.0),
+                (320.0, 185.0, 130.0),
+            ];
             let mut buttons = vec![back(7)];
             for (i, (x, y, w)) in slots.into_iter().enumerate() {
                 let world = i + 1;
                 let unlocked = i == 0 || progress.unlocked >= i * 5;
-                let name = if unlocked { format!("buttonArcade{}", world) } else { format!("buttonArcade{}Locked", world) };
-                buttons.push(button(ui, &name, &name, x, y, w, 114.0, if unlocked { world as u8 } else { 0 }));
+                let name = if unlocked {
+                    format!("buttonArcade{}", world)
+                } else {
+                    format!("buttonArcade{}Locked", world)
+                };
+                buttons.push(button(
+                    ui,
+                    &name,
+                    &name,
+                    x,
+                    y,
+                    w,
+                    114.0,
+                    if unlocked { world as u8 } else { 0 },
+                ));
             }
             MenuScreen::new(ui["labelSelectWorld"].clone(), -9.0, buttons, fade_backdrop)
         }
         MenuKind::Stage(world) => {
-            let slots = [(30.0, 55.0), (176.5, 54.0), (320.0, 55.0), (100.0, 185.0), (250.0, 185.0)];
+            let slots = [
+                (30.0, 55.0),
+                (176.5, 54.0),
+                (320.0, 55.0),
+                (100.0, 185.0),
+                (250.0, 185.0),
+            ];
             let mut buttons = vec![back(6)];
             for (i, (x, y)) in slots.into_iter().enumerate() {
                 let stage = i + 1;
@@ -182,7 +296,16 @@ fn build_menu(kind: MenuKind, ui: &Ui, progress: &Progress, fade_backdrop: bool)
                 } else {
                     format!("buttonStage{}.{}.Locked", world + 1, stage)
                 };
-                buttons.push(button(ui, &name, &name, x, y, 127.0, 121.0, if unlocked { stage as u8 } else { 0 }));
+                buttons.push(button(
+                    ui,
+                    &name,
+                    &name,
+                    x,
+                    y,
+                    127.0,
+                    121.0,
+                    if unlocked { stage as u8 } else { 0 },
+                ));
             }
             MenuScreen::new(ui["labelSelectStage"].clone(), -9.0, buttons, fade_backdrop)
         }
@@ -206,13 +329,17 @@ fn menu_event(kind: MenuKind, event: u8) -> Option<Next> {
 
 /// Sprites unpacked from the original sheet by `tools/decode_sheet.py`.
 async fn load_sprite(name: &str) -> Texture2D {
-    let tex = load_texture(&format!("original/sprites/{}.png", name)).await.unwrap();
+    let tex = load_texture(&format!("original/sprites/{}.png", name))
+        .await
+        .unwrap();
     tex.set_filter(FilterMode::Linear);
     tex
 }
 
 async fn load_texture_file(name: &str) -> Texture2D {
-    let tex = load_texture(&format!("original/textures/{}.png", name)).await.unwrap();
+    let tex = load_texture(&format!("original/textures/{}.png", name))
+        .await
+        .unwrap();
     tex.set_filter(FilterMode::Linear);
     tex
 }
@@ -221,10 +348,16 @@ async fn load_texture_file(name: &str) -> Texture2D {
 /// large and extra-large rotation frames (EnemyManager::sharedNew).
 async fn load_rock_art(atlas: &str, prefix: &str) -> RockArt {
     let frames = |family: u32, count: u32| {
-        let names: Vec<String> = (1..=count).map(|i| format!("{}{}.{}", prefix, family, i)).collect();
+        let names: Vec<String> = (1..=count)
+            .map(|i| format!("{}{}.{}", prefix, family, i))
+            .collect();
         names
     };
-    let medium_family = if prefix == "rock" { "rock3A".to_owned() } else { format!("{}3", prefix) };
+    let medium_family = if prefix == "rock" {
+        "rock3A".to_owned()
+    } else {
+        format!("{}3", prefix)
+    };
     let mut medium = Vec::new();
     for i in 1..=30 {
         medium.push(load_sprite(&format!("{}.{}", medium_family, i)).await);
@@ -237,7 +370,12 @@ async fn load_rock_art(atlas: &str, prefix: &str) -> RockArt {
     for name in frames(1, 30) {
         extra_large.push(load_sprite(&name).await);
     }
-    RockArt { small: load_sprite(atlas).await, medium, large, extra_large }
+    RockArt {
+        small: load_sprite(atlas).await,
+        medium,
+        large,
+        extra_large,
+    }
 }
 
 async fn load_play_assets() -> PlayAssets {
@@ -259,9 +397,15 @@ async fn load_play_assets() -> PlayAssets {
     ];
     let mut backdrops = Vec::new();
     for (base, decal) in pairs {
-        backdrops.push((load_texture_file(base).await, load_texture_file(decal).await));
+        backdrops.push((
+            load_texture_file(base).await,
+            load_texture_file(decal).await,
+        ));
     }
-    let font = Font::new(load_ui("ngage").await, &load_file("original/app/ngage.dat").await.unwrap());
+    let font = Font::new(
+        load_ui("ngage").await,
+        &load_file("original/app/ngage.dat").await.unwrap(),
+    );
     PlayAssets {
         hud: HudAssets {
             font,
@@ -280,6 +424,10 @@ async fn load_play_assets() -> PlayAssets {
         shield: load_sprite("shield").await,
         aim: load_sprite("aim").await,
         cannon: load_sprite("fire100").await,
+        spark: load_sprite("fire200").await,
+        systems: load_file("original/app/systems.dat")
+            .await
+            .expect("systems.dat"),
         backdrops,
     }
 }
@@ -292,11 +440,21 @@ async fn main() {
     let music = load_sound("original/audio/music.wav").await.unwrap();
     let mut sounds: Vec<Option<Sound>> = vec![None];
     for id in 1..=SOUND_COUNT {
-        sounds.push(Some(load_sound(&format!("original/audio/sound_{:02}.wav", id)).await.unwrap()));
+        sounds.push(Some(
+            load_sound(&format!("original/audio/sound_{:02}.wav", id))
+                .await
+                .unwrap(),
+        ));
     }
     let play_effect = |id: usize| {
         if let Some(Some(sound)) = sounds.get(id) {
-            play_sound(sound, PlaySoundParams { looped: false, volume: EFFECT_VOLUME });
+            play_sound(
+                sound,
+                PlaySoundParams {
+                    looped: false,
+                    volume: EFFECT_VOLUME,
+                },
+            );
         }
     };
     let canvas = Canvas::new();
@@ -315,7 +473,12 @@ async fn main() {
         let (w, s) = v.split_once('.')?;
         Some((w.parse::<usize>().ok()?, s.parse::<usize>().ok()?))
     }) {
-        game = Some(Play::new(w.saturating_sub(1).min(SURVIVAL), s, progress.best, &play_assets));
+        game = Some(Play::new(
+            w.saturating_sub(1).min(SURVIVAL),
+            s,
+            progress.best,
+            &play_assets,
+        ));
         screen = Screen::Game;
     }
 
@@ -332,7 +495,10 @@ async fn main() {
                         menu_screen.fx.leave();
                     }
                 }
-                if kind == MenuKind::Main && menu_screen.fx.ready() && is_key_pressed(KeyCode::Enter) {
+                if kind == MenuKind::Main
+                    && menu_screen.fx.ready()
+                    && is_key_pressed(KeyCode::Enter)
+                {
                     menu_next = Some(Next::Menu(MenuKind::Mode));
                     menu_screen.fx.leave();
                 }
@@ -346,7 +512,13 @@ async fn main() {
                             game = Some(Play::new(world, stage, progress.best, &play_assets));
                             screen = Screen::Game;
                             if !music_on {
-                                play_sound(&music, PlaySoundParams { looped: true, volume: MUSIC_VOLUME });
+                                play_sound(
+                                    &music,
+                                    PlaySoundParams {
+                                        looped: true,
+                                        volume: MUSIC_VOLUME,
+                                    },
+                                );
                                 music_on = true;
                             }
                         }
@@ -373,7 +545,9 @@ async fn main() {
                         }
                     }
                 }
-                if is_key_pressed(KeyCode::Escape) || (over.is_some() && is_key_pressed(KeyCode::Enter)) {
+                if is_key_pressed(KeyCode::Escape)
+                    || (over.is_some() && is_key_pressed(KeyCode::Enter))
+                {
                     let kind = match game.as_ref() {
                         Some(g) if g.world < SURVIVAL => MenuKind::Stage(g.world),
                         _ => MenuKind::Mode,
@@ -402,11 +576,18 @@ async fn main() {
         // F12 saves the frame for pixel comparison against emulator frames;
         // MB_SHOT=<file> saves frame MB_SHOT_FRAME (default 20) there and exits.
         frame_count += 1;
-        let shot_frame = std::env::var("MB_SHOT_FRAME").ok().and_then(|v| v.parse().ok()).unwrap_or(20);
-        let auto_shot = std::env::var("MB_SHOT").ok().filter(|_| frame_count == shot_frame);
+        let shot_frame = std::env::var("MB_SHOT_FRAME")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(20);
+        let auto_shot = std::env::var("MB_SHOT")
+            .ok()
+            .filter(|_| frame_count == shot_frame);
         if is_key_pressed(KeyCode::F12) || auto_shot.is_some() {
             let _ = std::fs::create_dir_all("shots");
-            let name = auto_shot.clone().unwrap_or_else(|| format!("shots/port_{}.png", (get_time() * 1000.0) as u64));
+            let name = auto_shot
+                .clone()
+                .unwrap_or_else(|| format!("shots/port_{}.png", (get_time() * 1000.0) as u64));
             get_screen_data().export_png(&name);
             if auto_shot.is_some() {
                 std::process::exit(0);

@@ -16,6 +16,7 @@ use macroquad::prelude::*;
 use crate::enemies::{wrap_near, Element, Event, Field, Rock, Script, Weapon};
 use crate::gfx::{draw_atlas_sprite, draw_quad, draw_sprite, Canvas};
 use crate::hud::{self, HudAssets, HudValues};
+use crate::particles::{Effects, Kind};
 
 const STEP: f32 = 1.0 / 60.0;
 
@@ -59,7 +60,16 @@ const CANNON_SPEED: f32 = 900.0;
 const CANNON_LIFE: f32 = 0.4;
 const CANNON_INTERVAL: [f32; 8] = [0.15, 0.1, 0.1333, 0.1, 0.12, 0.1, 0.1143, 0.1];
 /// Spread angles (degrees) of each shot by cannon level.
-const CANNON_SPREAD: [&[f32]; 8] = [&[0.0], &[0.0], &[-3.0, 3.0], &[-3.0, 3.0], &[-6.0, 0.0, 6.0], &[-6.0, 0.0, 6.0], &[-3.0, 3.0, -9.0, 9.0], &[-3.0, 3.0, -9.0, 9.0]];
+const CANNON_SPREAD: [&[f32]; 8] = [
+    &[0.0],
+    &[0.0],
+    &[-3.0, 3.0],
+    &[-3.0, 3.0],
+    &[-6.0, 0.0, 6.0],
+    &[-6.0, 0.0, 6.0],
+    &[-3.0, 3.0, -9.0, 9.0],
+    &[-3.0, 3.0, -9.0, 9.0],
+];
 /// The trail of point sprites drawn per bullet: (distance behind, size).
 const CANNON_TRAIL: [(f32, f32); 4] = [(0.0, 18.0), (4.0, 13.0), (7.0, 10.0), (9.0, 8.0)];
 /// Ship::drawAim: the aim dot sits 60 units out along the fire direction.
@@ -107,12 +117,21 @@ pub struct RockArt {
 impl RockArt {
     /// Frame counts by size, for the rock animations.
     pub fn frame_counts(&self) -> [usize; 4] {
-        [16, self.medium.len(), self.large.len(), self.extra_large.len()]
+        [
+            16,
+            self.medium.len(),
+            self.large.len(),
+            self.extra_large.len(),
+        ]
     }
 }
 
 pub struct PlayAssets {
     pub hud: HudAssets,
+    /// The original's systems.dat (baked particle effects).
+    pub systems: Vec<u8>,
+    /// Point-sprite texture for sprite effects (fire200.png).
+    pub spark: Texture2D,
     /// Normal, ice and fire.
     pub rocks: [RockArt; 3],
     pub ship: Vec<Texture2D>,
@@ -258,7 +277,13 @@ impl Ship {
         for offset in CANNON_SPREAD[self.cannon_level] {
             let rad = (base + offset).to_radians();
             let vel = vec2(rad.sin(), -rad.cos()) * CANNON_SPEED;
-            self.bullets.push(Bullet { prev: origin, pos: origin, vel, life: CANNON_LIFE, back: -vel.normalize() });
+            self.bullets.push(Bullet {
+                prev: origin,
+                pos: origin,
+                vel,
+                life: CANNON_LIFE,
+                back: -vel.normalize(),
+            });
         }
     }
 
@@ -288,13 +313,19 @@ impl Ship {
         if total != Vec2::ZERO {
             self.angle = heading(total);
         }
-        self.pos = vec2(wrap_world(self.pos.x + total.x * dt), wrap_world(self.pos.y + total.y * dt));
+        self.pos = vec2(
+            wrap_world(self.pos.x + total.x * dt),
+            wrap_world(self.pos.y + total.y * dt),
+        );
         self.boost_vel *= DRAG / (dt + DRAG);
 
         for b in &mut self.bullets {
             b.prev = b.pos;
             b.life -= dt;
-            b.pos = vec2(wrap_near(b.pos.x + b.vel.x * dt, self.pos.x), wrap_near(b.pos.y + b.vel.y * dt, self.pos.y));
+            b.pos = vec2(
+                wrap_near(b.pos.x + b.vel.x * dt, self.pos.x),
+                wrap_near(b.pos.y + b.vel.y * dt, self.pos.y),
+            );
         }
         self.bullets.retain(|b| b.life > 0.0);
 
@@ -308,7 +339,8 @@ impl Ship {
         }
         if self.turns.len() == TURN_HISTORY {
             let oldest = self.turns.pop_front().unwrap_or(0.0);
-            self.turn_average = (self.turn_average * TURN_HISTORY as f32 - oldest) / (TURN_HISTORY - 1) as f32;
+            self.turn_average =
+                (self.turn_average * TURN_HISTORY as f32 - oldest) / (TURN_HISTORY - 1) as f32;
         }
         self.turns.push_back(turn);
         let n = self.turns.len() as f32;
@@ -338,14 +370,17 @@ struct Lead {
 impl Lead {
     fn update(&mut self, dt: f32, target: Vec2) {
         self.centre -= (self.centre - target) * CAMERA_EASE;
-        self.centre = self.centre.clamp(Vec2::splat(-CAMERA_LIMIT), Vec2::splat(CAMERA_LIMIT));
+        self.centre = self
+            .centre
+            .clamp(Vec2::splat(-CAMERA_LIMIT), Vec2::splat(CAMERA_LIMIT));
         if self.shake_time != 0.0 && self.shake_power != 0.0 {
             self.shake_time -= dt;
             if self.shake_time < 0.0 {
                 self.shake_time = 0.0;
                 self.shake = Vec2::ZERO;
             } else {
-                self.shake = vec2(rand::gen_range(-1.0, 1.0), rand::gen_range(-1.0, 1.0)) * self.shake_power;
+                self.shake =
+                    vec2(rand::gen_range(-1.0, 1.0), rand::gen_range(-1.0, 1.0)) * self.shake_power;
                 self.shake_power *= 0.5 / (dt + 0.5);
             }
         }
@@ -367,7 +402,9 @@ enum State {
     Entering,
     Ready,
     /// Stage cleared or out of lives; the screen waits for the player.
-    Over { cleared: bool },
+    Over {
+        cleared: bool,
+    },
 }
 
 pub struct Play {
@@ -393,6 +430,7 @@ pub struct Play {
     high_score: u64,
     /// `Audio::play` ids raised this update, for the caller to play.
     pub sounds: Vec<usize>,
+    effects: Effects,
 }
 
 impl Play {
@@ -407,18 +445,28 @@ impl Play {
             elapsed: 0.0,
             shaken: false,
             ship: Ship::new(),
-            camera: Lead { centre: Vec2::ZERO, shake: Vec2::ZERO, shake_power: 0.0, shake_time: 0.0 },
+            camera: Lead {
+                centre: Vec2::ZERO,
+                shake: Vec2::ZERO,
+                shake_power: 0.0,
+                shake_time: 0.0,
+            },
             scroll: Vec2::ZERO,
             accumulator: 0.0,
             field: Field::new(assets.rocks[0].frame_counts()),
             script: Script::arcade(world, stage),
             score: 0,
             multiplier: 1,
-            lives: if world == SURVIVAL { SURVIVAL_LIVES } else { LIVES },
+            lives: if world == SURVIVAL {
+                SURVIVAL_LIVES
+            } else {
+                LIVES
+            },
             bombs: BOMBS,
             rings: 0,
             high_score,
             sounds: Vec::new(),
+            effects: Effects::load(&assets.systems),
         }
     }
 
@@ -432,7 +480,10 @@ impl Play {
 
     /// Where a world position appears on the canvas.
     fn to_screen(&self, p: Vec2) -> Vec2 {
-        let d = vec2(wrap_near(p.x, self.ship.pos.x) - self.ship.pos.x, wrap_near(p.y, self.ship.pos.y) - self.ship.pos.y);
+        let d = vec2(
+            wrap_near(p.x, self.ship.pos.x) - self.ship.pos.x,
+            wrap_near(p.y, self.ship.pos.y) - self.ship.pos.y,
+        );
         SCREEN_CENTRE + self.camera.offset() + d
     }
 
@@ -454,7 +505,8 @@ impl Play {
                     self.ship.alpha = 1.0;
                     self.state = State::Ready;
                 }
-                self.z = (START_Z - START_Z * (self.alpha * std::f32::consts::FRAC_PI_2).sin()).max(0.0);
+                self.z =
+                    (START_Z - START_Z * (self.alpha * std::f32::consts::FRAC_PI_2).sin()).max(0.0);
                 self.ship.update(dt);
                 if !self.shaken && self.elapsed > 0.75 {
                     self.shaken = true;
@@ -468,6 +520,7 @@ impl Play {
                 self.camera.update(dt, Vec2::ZERO);
             }
         }
+        self.effects.update(dt);
         self.elapsed += dt;
     }
 
@@ -507,7 +560,24 @@ impl Play {
     /// The cannon against rocks, then rocks against the ship (shipCollision).
     fn collide(&mut self) {
         let field = &mut self.field;
-        self.ship.bullets.retain(|b| !field.bullet(b.prev, b.pos, CANNON_RADIUS, Weapon::Cannon, CANNON_DAMAGE, CANNON_MASS, b.vel));
+        let effects = &mut self.effects;
+        self.ship.bullets.retain(|b| {
+            let hit = field.bullet(
+                b.prev,
+                b.pos,
+                CANNON_RADIUS,
+                Weapon::Cannon,
+                CANNON_DAMAGE,
+                CANNON_MASS,
+                b.vel,
+            );
+            if hit {
+                // standardBulletCollision: a spark and a streak back along the shot.
+                effects.start(Kind::Sprite, 0, b.pos, 0.0, false);
+                effects.start(Kind::Line, 0, b.pos, heading(-b.vel), false);
+            }
+            !hit
+        });
         if matches!(self.ship.life, Life::Dead(_)) {
             return;
         }
@@ -532,14 +602,64 @@ impl Play {
         self.camera.shake(0.75, 7.5);
         self.script.delay();
         self.sounds.push(SOUND_SHIP_DESTROYED);
+        let p = self.ship.pos;
+        self.effects.flash(Color::new(0.8, 0.8, 0.8, 1.0));
+        self.effects.start(Kind::Ring, 1, p, 0.0, false);
+        self.effects.start(Kind::Line, 3, p, 0.0, false);
+        for _ in 0..3 {
+            self.effects.start(Kind::Point, 2, p, 0.0, false);
+        }
+    }
+
+    /// Enemy::rotationTowards the ship, in the original's degrees.
+    fn towards_ship(&self, from: Vec2) -> f32 {
+        let ship = vec2(
+            wrap_near(self.ship.pos.x, from.x),
+            wrap_near(self.ship.pos.y, from.y),
+        );
+        heading(ship - from)
     }
 
     fn handle_events(&mut self) {
-        for event in self.field.events.drain(..) {
+        let events: Vec<Event> = self.field.events.drain(..).collect();
+        for event in events {
             match event {
-                Event::RockDestroyed { points, .. } => {
+                Event::RockDestroyed {
+                    pos,
+                    element,
+                    points,
+                } => {
                     self.score += (points * self.multiplier) as u64;
                     self.sounds.push(SOUND_ROCK[rand::gen_range(0, 3)]);
+                    // Rock::setState(10007): debris aimed away from the ship.
+                    let away = self.towards_ship(pos) + 180.0;
+                    let (point, diamond) = match element {
+                        Element::Normal => (0, 0),
+                        Element::Ice => (11, 1),
+                        Element::Fire => (12, 2),
+                    };
+                    self.effects.start(Kind::Ring, 0, pos, 0.0, false);
+                    self.effects.start(Kind::Sprite, 1, pos, 0.0, false);
+                    self.effects.start(Kind::Point, point, pos, away, false);
+                    self.effects.start(Kind::Diamond, diamond, pos, away, false);
+                }
+                Event::RockSplit { pos, angle } => {
+                    for k in 0..3 {
+                        self.effects
+                            .start(Kind::Line, 2, pos, angle + 120.0 * k as f32, false);
+                    }
+                }
+                Event::RockHit { pos, element } => {
+                    // Rock::handleEvent(0): sparks toward and away from the ship.
+                    let towards = self.towards_ship(pos);
+                    let (back, front) = match element {
+                        Element::Normal => (0, 1),
+                        Element::Ice => (11, 13),
+                        Element::Fire => (12, 14),
+                    };
+                    self.effects
+                        .start(Kind::Point, back, pos, towards + 180.0, false);
+                    self.effects.start(Kind::Point, front, pos, towards, false);
                 }
                 Event::WaveIncoming => self.sounds.push(SOUND_WAVE),
             }
@@ -562,11 +682,24 @@ impl Play {
             self.sounds.push(SOUND_BOOST);
         }
         let charge = self.ship.boost_charge;
-        if !self.ship.boost_cued && charge >= BOOST_RECHARGE - BOOST_CUE_EARLY && charge < BOOST_RECHARGE - BOOST_CUE_LATE {
+        if !self.ship.boost_cued
+            && charge >= BOOST_RECHARGE - BOOST_CUE_EARLY
+            && charge < BOOST_RECHARGE - BOOST_CUE_LATE
+        {
             self.ship.boost_cued = true;
             self.sounds.push(SOUND_BOOST_READY);
         }
-        if is_mouse_button_down(MouseButton::Left) {
+        // MB_AUTOFIRE aims at the nearest rock, for unattended screenshot runs.
+        let auto = std::env::var_os("MB_AUTOFIRE")
+            .is_some()
+            .then(|| self.nearest_rock())
+            .flatten();
+        if let Some(target) = auto {
+            let dir = (target - self.ship.pos).normalize_or_zero();
+            if dir != Vec2::ZERO {
+                self.ship.fire(dt, dir);
+            }
+        } else if is_mouse_button_down(MouseButton::Left) {
             let dir = (Canvas::mouse() - self.to_screen(self.ship.pos)).normalize_or_zero();
             if dir != Vec2::ZERO {
                 self.ship.fire(dt, dir);
@@ -576,12 +709,33 @@ impl Play {
         }
     }
 
+    fn nearest_rock(&self) -> Option<Vec2> {
+        let ship = self.ship.pos;
+        self.field
+            .rocks
+            .iter()
+            .filter(|r| r.z >= 0.0)
+            .map(|r| vec2(wrap_near(r.pos.x, ship.x), wrap_near(r.pos.y, ship.y)))
+            .min_by(|a, b| {
+                a.distance_squared(ship)
+                    .total_cmp(&b.distance_squared(ship))
+            })
+    }
+
     fn draw_rocks(&self, assets: &PlayAssets) {
         // EnemyManager::sharedDraw: per element, small to extra large.
-        for (e, element) in [Element::Normal, Element::Ice, Element::Fire].into_iter().enumerate() {
+        for (e, element) in [Element::Normal, Element::Ice, Element::Fire]
+            .into_iter()
+            .enumerate()
+        {
             let art = &assets.rocks[e];
             for size in 0..4 {
-                for rock in self.field.rocks.iter().filter(|r| r.element == element && r.size == size) {
+                for rock in self
+                    .field
+                    .rocks
+                    .iter()
+                    .filter(|r| r.element == element && r.size == size)
+                {
                     self.draw_rock(art, rock);
                 }
             }
@@ -594,9 +748,30 @@ impl Play {
         let color = Color::new(1.0, 1.0, 1.0, rock.alpha);
         match rock.size {
             0 => draw_atlas_sprite(&art.small, 4, 4, rock.frame, p.x, p.y, rock.angle, z, color),
-            1 => draw_sprite(&art.medium[rock.frame % art.medium.len()], p.x, p.y, rock.angle, z, color),
-            2 => draw_sprite(&art.large[rock.frame % art.large.len()], p.x, p.y, rock.angle, z, color),
-            _ => draw_sprite(&art.extra_large[rock.frame % art.extra_large.len()], p.x, p.y, rock.angle, z, color),
+            1 => draw_sprite(
+                &art.medium[rock.frame % art.medium.len()],
+                p.x,
+                p.y,
+                rock.angle,
+                z,
+                color,
+            ),
+            2 => draw_sprite(
+                &art.large[rock.frame % art.large.len()],
+                p.x,
+                p.y,
+                rock.angle,
+                z,
+                color,
+            ),
+            _ => draw_sprite(
+                &art.extra_large[rock.frame % art.extra_large.len()],
+                p.x,
+                p.y,
+                rock.angle,
+                z,
+                color,
+            ),
         }
     }
 
@@ -604,8 +779,15 @@ impl Play {
         let cam = self.camera.offset();
         let (base, decal) = &assets.backdrops[self.world.min(assets.backdrops.len() - 1)];
         // MB_BG_Z overrides the backdrop depth while it is being verified.
-        let bg_z = std::env::var("MB_BG_Z").ok().and_then(|v| v.parse().ok()).unwrap_or(BACKGROUND_Z);
-        let origin = vec3(SCREEN_CENTRE.x + cam.x, SCREEN_CENTRE.y + cam.y, self.z + bg_z);
+        let bg_z = std::env::var("MB_BG_Z")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(BACKGROUND_Z);
+        let origin = vec3(
+            SCREEN_CENTRE.x + cam.x,
+            SCREEN_CENTRE.y + cam.y,
+            self.z + bg_z,
+        );
         canvas.draw_backdrop(false, base, decal, origin, self.scroll, 1.0);
         self.draw_rocks(assets);
 
@@ -619,13 +801,23 @@ impl Play {
         }
         canvas.draw_points(&assets.cannon, &points, self.z, GREEN);
 
+        self.draw_ship(assets);
+        self.effects
+            .draw(canvas, &assets.spark, self.z, |p| self.to_screen(p));
+        self.draw_hud(assets);
+    }
+
+    fn draw_ship(&self, assets: &PlayAssets) {
         let ship = &self.ship;
         if matches!(ship.life, Life::Dead(_)) {
-            self.draw_hud(assets);
             return;
         }
         let p = self.to_screen(ship.pos);
-        let frames = if ship.can_boost() { &assets.ship_ready } else { &assets.ship };
+        let frames = if ship.can_boost() {
+            &assets.ship_ready
+        } else {
+            &assets.ship
+        };
         let color = Color::new(1.0, 1.0, 1.0, ship.alpha);
         draw_sprite(&frames[ship.frame], p.x, p.y, ship.angle, self.z, color);
         let shield = match ship.life {
@@ -635,9 +827,15 @@ impl Play {
             _ => 0.0,
         };
         if shield > 0.0 {
-            draw_sprite(&assets.shield, p.x, p.y, self.elapsed * SHIELD_SPIN, self.z, Color::new(1.0, 1.0, 1.0, shield));
+            draw_sprite(
+                &assets.shield,
+                p.x,
+                p.y,
+                self.elapsed * SHIELD_SPIN,
+                self.z,
+                Color::new(1.0, 1.0, 1.0, shield),
+            );
         }
-        self.draw_hud(assets);
         if ship.aiming {
             let aim = p + ship.aim_dir * AIM_DISTANCE;
             draw_quad(&assets.aim, aim.x - 1.0, aim.y - 1.0, 1.0, self.z, color);
@@ -646,14 +844,17 @@ impl Play {
 
     /// GameScreen::draw: the HUD sits at depth 0 whatever the play layer does.
     fn draw_hud(&self, assets: &PlayAssets) {
-        let values = HudValues {
+        hud::draw(&assets.hud, &self.hud_values());
+    }
+
+    fn hud_values(&self) -> HudValues {
+        HudValues {
             score: self.score,
             high_score: self.high_score,
             multiplier: self.multiplier,
             lives: self.lives,
             bombs: self.bombs,
             rings: self.rings,
-        };
-        hud::draw(&assets.hud, &values);
+        }
     }
 }

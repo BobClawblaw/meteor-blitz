@@ -7,7 +7,10 @@
 //! original's landscape coordinates (480x320, y down) plus a depth; the
 //! portrait target is blitted onto the window as a 480x320 landscape image.
 
-use macroquad::miniquad::{BlendFactor, BlendState, BlendValue, Comparison, CullFace, Equation, PipelineParams, UniformDesc, UniformType};
+use macroquad::miniquad::{
+    BlendFactor, BlendState, BlendValue, Comparison, CullFace, Equation, PipelineParams,
+    UniformDesc, UniformType,
+};
 use macroquad::prelude::*;
 
 pub const CANVAS_W: f32 = 480.0;
@@ -77,7 +80,11 @@ void main() {
 }"#;
 
 fn pipeline(dst: BlendFactor) -> PipelineParams {
-    let blend = BlendState::new(Equation::Add, BlendFactor::Value(BlendValue::SourceAlpha), dst);
+    let blend = BlendState::new(
+        Equation::Add,
+        BlendFactor::Value(BlendValue::SourceAlpha),
+        dst,
+    );
     PipelineParams {
         color_blend: Some(blend),
         alpha_blend: Some(blend),
@@ -141,7 +148,14 @@ fn backdrop_mesh(flipped: bool) -> Mesh {
             let y = iy as f32 * CELL - BACKDROP_SIZE * 0.5;
             let z = sign * offset_z(-x, -y);
             // GL textures have their origin at the bottom, so v runs the other way.
-            vertices.push(Vertex::new(x, y, z, x * TEXEL_PER_UNIT, -y * TEXEL_PER_UNIT, WHITE));
+            vertices.push(Vertex::new(
+                x,
+                y,
+                z,
+                x * TEXEL_PER_UNIT,
+                -y * TEXEL_PER_UNIT,
+                WHITE,
+            ));
         }
     }
     let mut indices = Vec::new();
@@ -152,11 +166,20 @@ fn backdrop_mesh(flipped: bool) -> Mesh {
             indices.extend_from_slice(&[i0, i1, i0 + 1, i1, i1 + 1, i0 + 1]);
         }
     }
-    Mesh { vertices, indices, texture: None }
+    Mesh {
+        vertices,
+        indices,
+        texture: None,
+    }
 }
+
+/// macroquad draws at most this much per mesh; larger batches are split.
+pub const MAX_BATCH_VERTICES: usize = 8000;
+pub const MAX_BATCH_INDICES: usize = 4800;
 
 pub struct Canvas {
     target: RenderTarget,
+    white: Texture2D,
     menu_backdrop: Mesh,
     game_backdrop: Mesh,
     backdrop_material: Material,
@@ -168,27 +191,52 @@ impl Canvas {
         let target = render_target(FB_W as u32, FB_H as u32);
         target.texture.set_filter(FilterMode::Linear);
         let backdrop_material = load_material(
-            ShaderSource::Glsl { vertex: DEFAULT_VERTEX, fragment: BACKDROP_FRAGMENT },
+            ShaderSource::Glsl {
+                vertex: DEFAULT_VERTEX,
+                fragment: BACKDROP_FRAGMENT,
+            },
             MaterialParams {
                 pipeline_params: pipeline(BlendFactor::OneMinusValue(BlendValue::SourceAlpha)),
                 textures: vec!["Decal".to_owned()],
-                uniforms: vec![UniformDesc::new("Scroll0", UniformType::Float2), UniformDesc::new("Scroll1", UniformType::Float2)],
+                uniforms: vec![
+                    UniformDesc::new("Scroll0", UniformType::Float2),
+                    UniformDesc::new("Scroll1", UniformType::Float2),
+                ],
             },
         )
         .expect("backdrop shader");
         let additive = load_material(
-            ShaderSource::Glsl { vertex: DEFAULT_VERTEX, fragment: TEXTURED_FRAGMENT },
-            MaterialParams { pipeline_params: pipeline(BlendFactor::One), ..Default::default() },
+            ShaderSource::Glsl {
+                vertex: DEFAULT_VERTEX,
+                fragment: TEXTURED_FRAGMENT,
+            },
+            MaterialParams {
+                pipeline_params: pipeline(BlendFactor::One),
+                ..Default::default()
+            },
         )
         .expect("additive shader");
-        Canvas { target, menu_backdrop: backdrop_mesh(true), game_backdrop: backdrop_mesh(false), backdrop_material, additive }
+        let white = Texture2D::from_rgba8(1, 1, &[255, 255, 255, 255]);
+        Canvas {
+            target,
+            white,
+            menu_backdrop: backdrop_mesh(true),
+            game_backdrop: backdrop_mesh(false),
+            backdrop_material,
+            additive,
+        }
     }
 
     /// Where the landscape canvas lands in the window: largest 3:2 fit, centred.
     fn placement() -> Rect {
         let scale = (screen_width() / CANVAS_W).min(screen_height() / CANVAS_H);
         let (w, h) = (CANVAS_W * scale, CANVAS_H * scale);
-        Rect::new((screen_width() - w) * 0.5, (screen_height() - h) * 0.5, w, h)
+        Rect::new(
+            (screen_width() - w) * 0.5,
+            (screen_height() - h) * 0.5,
+            w,
+            h,
+        )
     }
 
     /// Mouse position in canvas coordinates.
@@ -199,7 +247,9 @@ impl Canvas {
     }
 
     pub fn begin(&self) {
-        set_camera(&OriginalCamera { render_pass: self.target.render_pass.clone() });
+        set_camera(&OriginalCamera {
+            render_pass: self.target.render_pass.clone(),
+        });
         clear_background(BLACK);
     }
 
@@ -211,10 +261,22 @@ impl Canvas {
         let r = Canvas::placement();
         let corner = |x: f32, y: f32| {
             let (lx, ly) = (x * CANVAS_W, y * CANVAS_H);
-            Vertex::new(r.x + x * r.w, r.y + y * r.h, 0.0, (FB_W - ly) / FB_W, (FB_H - lx) / FB_H, WHITE)
+            Vertex::new(
+                r.x + x * r.w,
+                r.y + y * r.h,
+                0.0,
+                (FB_W - ly) / FB_W,
+                (FB_H - lx) / FB_H,
+                WHITE,
+            )
         };
         let quad = Mesh {
-            vertices: vec![corner(0.0, 0.0), corner(1.0, 0.0), corner(1.0, 1.0), corner(0.0, 1.0)],
+            vertices: vec![
+                corner(0.0, 0.0),
+                corner(1.0, 0.0),
+                corner(1.0, 1.0),
+                corner(0.0, 1.0),
+            ],
             indices: vec![0, 1, 2, 0, 2, 3],
             texture: Some(self.target.texture.clone()),
         };
@@ -223,22 +285,73 @@ impl Canvas {
 
     /// `Background::draw` at `origin`: the base layer scrolls at 2x the
     /// background offset and the decal at 3x, in texture space.
-    pub fn draw_backdrop(&self, menu: bool, base: &Texture2D, decal: &Texture2D, origin: Vec3, scroll: Vec2, alpha: f32) {
-        let source = if menu { &self.menu_backdrop } else { &self.game_backdrop };
+    pub fn draw_backdrop(
+        &self,
+        menu: bool,
+        base: &Texture2D,
+        decal: &Texture2D,
+        origin: Vec3,
+        scroll: Vec2,
+        alpha: f32,
+    ) {
+        let source = if menu {
+            &self.menu_backdrop
+        } else {
+            &self.game_backdrop
+        };
         let a = (alpha.clamp(0.0, 1.0) * 255.0) as u8;
         let vertices = source
             .vertices
             .iter()
-            .map(|v| Vertex { position: v.position + origin, color: [255, 255, 255, a], ..*v })
+            .map(|v| Vertex {
+                position: v.position + origin,
+                color: [255, 255, 255, a],
+                ..*v
+            })
             .collect();
-        let mesh = Mesh { vertices, indices: source.indices.clone(), texture: Some(base.clone()) };
-        let wrap = |k: f32| vec2((scroll.x * k).rem_euclid(BACKDROP_SIZE) / BACKDROP_SIZE, (scroll.y * k).rem_euclid(BACKDROP_SIZE) / BACKDROP_SIZE);
+        let mesh = Mesh {
+            vertices,
+            indices: source.indices.clone(),
+            texture: Some(base.clone()),
+        };
+        let wrap = |k: f32| {
+            vec2(
+                (scroll.x * k).rem_euclid(BACKDROP_SIZE) / BACKDROP_SIZE,
+                (scroll.y * k).rem_euclid(BACKDROP_SIZE) / BACKDROP_SIZE,
+            )
+        };
         self.backdrop_material.set_texture("Decal", decal.clone());
         self.backdrop_material.set_uniform("Scroll0", wrap(2.0));
         self.backdrop_material.set_uniform("Scroll1", wrap(3.0));
         gl_use_material(&self.backdrop_material);
         draw_mesh(&mesh);
         gl_use_default_material();
+    }
+
+    /// Coloured triangles, textured or plain, alpha-blended or additive
+    /// (`GL_SRC_ALPHA, GL_ONE`). Keep batches within MAX_BATCH_*.
+    pub fn draw_triangles(
+        &self,
+        vertices: Vec<Vertex>,
+        indices: Vec<u16>,
+        texture: Option<&Texture2D>,
+        additive: bool,
+    ) {
+        if indices.is_empty() {
+            return;
+        }
+        let texture = texture.unwrap_or(&self.white).clone();
+        if additive {
+            gl_use_material(&self.additive);
+        }
+        draw_mesh(&Mesh {
+            vertices,
+            indices,
+            texture: Some(texture),
+        });
+        if additive {
+            gl_use_default_material();
+        }
     }
 
     /// Additively blended square sprites centred on each point
@@ -259,7 +372,11 @@ impl Canvas {
             indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
         }
         gl_use_material(&self.additive);
-        draw_mesh(&Mesh { vertices, indices, texture: Some(tex.clone()) });
+        draw_mesh(&Mesh {
+            vertices,
+            indices,
+            texture: Some(tex.clone()),
+        });
         gl_use_default_material();
     }
 }
@@ -286,9 +403,16 @@ pub fn draw_quad(tex: &Texture2D, x: f32, y: f32, scale: f32, z: f32, color: Col
 pub fn draw_sprite(tex: &Texture2D, x: f32, y: f32, angle_deg: f32, z: f32, color: Color) {
     let (hw, hh) = (tex.width() * 0.5, tex.height() * 0.5);
     let (s, c) = angle_deg.to_radians().sin_cos();
-    let corner = |dx: f32, dy: f32, u: f32, v: f32| Vertex::new(x + dx * c - dy * s, y + dx * s + dy * c, z, u, v, color);
+    let corner = |dx: f32, dy: f32, u: f32, v: f32| {
+        Vertex::new(x + dx * c - dy * s, y + dx * s + dy * c, z, u, v, color)
+    };
     let quad = Mesh {
-        vertices: vec![corner(-hw, -hh, 0.0, 0.0), corner(hw, -hh, 1.0, 0.0), corner(hw, hh, 1.0, 1.0), corner(-hw, hh, 0.0, 1.0)],
+        vertices: vec![
+            corner(-hw, -hh, 0.0, 0.0),
+            corner(hw, -hh, 1.0, 0.0),
+            corner(hw, hh, 1.0, 1.0),
+            corner(-hw, hh, 0.0, 1.0),
+        ],
         indices: vec![0, 1, 2, 0, 2, 3],
         texture: Some(tex.clone()),
     };
@@ -297,12 +421,27 @@ pub fn draw_sprite(tex: &Texture2D, x: f32, y: f32, angle_deg: f32, z: f32, colo
 
 /// `Texture::drawMultipleFrames` for one sprite: cell `index` of a
 /// `cols` x `rows` atlas, centred on `(x, y)` and rotated by `angle_deg`.
-pub fn draw_atlas_sprite(tex: &Texture2D, cols: usize, rows: usize, index: usize, x: f32, y: f32, angle_deg: f32, z: f32, color: Color) {
+pub fn draw_atlas_sprite(
+    tex: &Texture2D,
+    cols: usize,
+    rows: usize,
+    index: usize,
+    x: f32,
+    y: f32,
+    angle_deg: f32,
+    z: f32,
+    color: Color,
+) {
     let (cw, ch) = (1.0 / cols as f32, 1.0 / rows as f32);
-    let (u0, v0) = ((index % cols) as f32 * cw, (index / cols % rows) as f32 * ch);
+    let (u0, v0) = (
+        (index % cols) as f32 * cw,
+        (index / cols % rows) as f32 * ch,
+    );
     let (hw, hh) = (tex.width() * cw * 0.5, tex.height() * ch * 0.5);
     let (s, c) = angle_deg.to_radians().sin_cos();
-    let corner = |dx: f32, dy: f32, u: f32, v: f32| Vertex::new(x + dx * c - dy * s, y + dx * s + dy * c, z, u, v, color);
+    let corner = |dx: f32, dy: f32, u: f32, v: f32| {
+        Vertex::new(x + dx * c - dy * s, y + dx * s + dy * c, z, u, v, color)
+    };
     let quad = Mesh {
         vertices: vec![
             corner(-hw, -hh, u0, v0),
