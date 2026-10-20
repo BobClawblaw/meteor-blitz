@@ -13,17 +13,17 @@ use std::collections::VecDeque;
 
 use macroquad::prelude::*;
 
+use crate::bonus::{Power, Rings};
+use crate::boss::{self, BossState};
+use crate::depot::{self, Depot};
 use crate::enemies::{wrap_near, Element, Event, Field, Rock, Script, Weapon};
 use crate::gfx::{draw_atlas_sprite, draw_quad, draw_sprite, Canvas};
-use crate::bonus::{Power, Rings};
 use crate::gravity;
+use crate::hud::{self, HudAssets, HudValues};
 use crate::pad::{self, Button};
-use crate::boss::{self, BossState};
+use crate::particles::{Effects, Kind};
 use crate::tower;
 use crate::weapons::{self, FireGun, LaserGun};
-use crate::depot::{self, Depot};
-use crate::hud::{self, HudAssets, HudValues};
-use crate::particles::{Effects, Kind};
 
 const STEP: f32 = 1.0 / 60.0;
 
@@ -143,7 +143,9 @@ const POWER_LABEL_DROP: f32 = 10.0;
 const RING_DROP_SPEED: f32 = 5.0;
 /// Hud::update: the multiplier steps up when the score since the last
 /// death passes each of these.
-const MULTIPLIER_STEPS: [u64; 9] = [4999, 19999, 49999, 89999, 139999, 199999, 269999, 349999, 439999];
+const MULTIPLIER_STEPS: [u64; 9] = [
+    4999, 19999, 49999, 89999, 139999, 199999, 269999, 349999, 439999,
+];
 pub const SOUND_ROCK: [usize; 3] = [12, 13, 14];
 pub const SOUND_SHIP_DESTROYED: usize = 15;
 /// Ship::update: the boost-ready cue starts 1.3 to 0.65 s before the boost
@@ -222,7 +224,11 @@ struct TimeScale {
 
 impl Default for TimeScale {
     fn default() -> TimeScale {
-        TimeScale { factor: 1.0, target: 1.0, remaining: 0.0 }
+        TimeScale {
+            factor: 1.0,
+            target: 1.0,
+            remaining: 0.0,
+        }
     }
 }
 
@@ -235,9 +241,17 @@ impl TimeScale {
     /// TimeManager::update.
     fn update(&mut self, dt: f32) {
         self.remaining = (self.remaining - dt).max(0.0);
-        let goal = if self.remaining > 0.0 { self.target } else { 1.0 };
+        let goal = if self.remaining > 0.0 {
+            self.target
+        } else {
+            1.0
+        };
         let next = self.factor + 2.0 * dt * (goal - self.factor);
-        self.factor = if self.factor < goal { next.min(goal) } else { next.max(goal) };
+        self.factor = if self.factor < goal {
+            next.min(goal)
+        } else {
+            next.max(goal)
+        };
     }
 }
 
@@ -332,6 +346,8 @@ struct Ship {
     weapon: Weapon,
     fire_gun: FireGun,
     laser_gun: LaserGun,
+    speed_level: usize,
+    boost_level: usize,
     bullets: Vec<Bullet>,
 }
 
@@ -345,7 +361,12 @@ impl Ship {
         ship.cannon_timer = CANNON_INTERVAL[level];
         ship.fire_gun = FireGun::new(level);
         ship.laser_gun = LaserGun::new(level);
-        ship.weapon = if world == 1 { Weapon::Fire } else { Weapon::Cannon };
+        ship.boost_charge = ship.boost_recharge();
+        ship.weapon = if world == 1 {
+            Weapon::Fire
+        } else {
+            Weapon::Cannon
+        };
         // MB_WEAPON=0|1|2 picks the starting weapon, for screenshot runs.
         match std::env::var("MB_WEAPON").ok().as_deref() {
             Some("0") => ship.weapon = Weapon::Cannon,
@@ -384,24 +405,30 @@ impl Ship {
             weapon: Weapon::Cannon,
             fire_gun: FireGun::new(0),
             laser_gun: LaserGun::new(0),
+            speed_level: 0,
+            boost_level: 0,
             bullets: Vec::new(),
         }
     }
 
     /// Ship::reset: a fresh ship where the last one died.
-    fn respawn(&mut self) {
+    fn respawn(&mut self, recharge: f32) {
         self.life = Life::Spawning(SPAWN_SHIELD);
         self.lives_used += 1;
         self.vel = Vec2::ZERO;
         self.boost_vel = Vec2::ZERO;
         self.boost_time = 0.0;
         self.invincible = 0.0;
-        self.boost_charge = BOOST_RECHARGE;
+        self.boost_charge = recharge;
         self.bullets.clear();
     }
 
+    fn boost_recharge(&self) -> f32 {
+        BOOST_RECHARGE - self.boost_level as f32
+    }
+
     fn can_boost(&self) -> bool {
-        self.boost_charge >= BOOST_RECHARGE
+        self.boost_charge >= self.boost_recharge()
     }
 
     /// Ship::boost: kick along the current velocity.
@@ -459,7 +486,14 @@ impl Ship {
                     (weapons::LASER_LIFE, Weapon::Laser)
                 };
                 for (pos, vel) in shots {
-                    self.bullets.push(Bullet { prev: pos, pos, vel, life, back: -vel.normalize(), weapon });
+                    self.bullets.push(Bullet {
+                        prev: pos,
+                        pos,
+                        vel,
+                        life,
+                        back: -vel.normalize(),
+                        weapon,
+                    });
                 }
             }
         }
@@ -496,7 +530,7 @@ impl Ship {
         }
         self.invincible = (self.invincible - dt).max(0.0);
         self.grace = (self.grace - dt).max(0.0);
-        self.boost_charge = (self.boost_charge + dt).min(BOOST_RECHARGE);
+        self.boost_charge = (self.boost_charge + dt).min(self.boost_recharge());
 
         let total = self.vel + self.boost_vel;
         if total != Vec2::ZERO {
@@ -554,6 +588,8 @@ struct Lead {
     shake: Vec2,
     shake_power: f32,
     shake_time: f32,
+    /// Settings shake sensitivity, 0-1.
+    scale: f32,
 }
 
 impl Lead {
@@ -577,13 +613,42 @@ impl Lead {
 
     fn shake(&mut self, seconds: f32, power: f32) {
         self.shake_time = self.shake_time.max(seconds);
-        self.shake_power = self.shake_power.max(power);
+        self.shake_power = self.shake_power.max(power * self.scale);
     }
 
     fn offset(&self) -> Vec2 {
         self.centre + self.shake
     }
 }
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Upgrade {
+    Cannon,
+    Fire,
+    Laser,
+    Speed,
+    Boost,
+    Gravity,
+}
+
+pub const UPGRADES: [Upgrade; 6] = [
+    Upgrade::Cannon,
+    Upgrade::Fire,
+    Upgrade::Laser,
+    Upgrade::Speed,
+    Upgrade::Boost,
+    Upgrade::Gravity,
+];
+
+/// Global::canUpgrade* cost tables, by level; -1 means maxed.
+const UPGRADE_COSTS: [[i32; 8]; 6] = [
+    [50, 150, 250, 325, 400, 475, 525, -1],
+    [50, 150, 250, 325, 400, 475, 525, -1],
+    [50, 150, 250, 325, 400, 475, 525, -1],
+    [200, 400, -1, 50, 150, 250, 325, 400],
+    [200, 400, -1, 300, 600, -1, 200, 400],
+    [300, 600, -1, 200, 400, -1, 50, 150],
+];
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum State {
@@ -603,6 +668,8 @@ pub struct Play {
     alpha: f32,
     z: f32,
     elapsed: f32,
+    /// GameScreen 0x3c: seconds since the stage became ready.
+    stage_time: f32,
     shaken: bool,
     ship: Ship,
     camera: Lead,
@@ -616,6 +683,11 @@ pub struct Play {
     pub lives: u32,
     pub bombs: u32,
     pub rings: u32,
+    /// Global::upgradePoints: one per ring collected, spent in the pause
+    /// popup's upgrade page.
+    pub upgrade_points: u32,
+    /// Cannon, fire, laser, speed, boost and gravity levels.
+    upgrades: [usize; 6],
     /// Global::multiplierBaseScore: the score at the last death.
     multiplier_base: u64,
     pickups: Rings,
@@ -633,6 +705,7 @@ pub struct Play {
 impl Play {
     /// `world` 0-5 for arcade worlds, 6 for survival.
     pub fn new(world: usize, stage: usize, high_score: u64, assets: &PlayAssets) -> Play {
+        let level = if world == SURVIVAL { 1 } else { world.min(5) };
         Play {
             world,
             stage,
@@ -640,6 +713,7 @@ impl Play {
             alpha: 0.0,
             z: START_Z,
             elapsed: 0.0,
+            stage_time: 0.0,
             shaken: false,
             ship: Ship::armed(world),
             camera: Lead {
@@ -647,6 +721,7 @@ impl Play {
                 shake: Vec2::ZERO,
                 shake_power: 0.0,
                 shake_time: 0.0,
+                scale: 1.0,
             },
             scroll: Vec2::ZERO,
             accumulator: 0.0,
@@ -661,6 +736,8 @@ impl Play {
             },
             bombs: BOMBS,
             rings: 0,
+            upgrade_points: 0,
+            upgrades: [level, level, level, 0, 0, 0],
             multiplier_base: 0,
             pickups: Rings::default(),
             magnet: 0.0,
@@ -678,6 +755,92 @@ impl Play {
             State::Over { cleared } => Some(cleared),
             _ => None,
         }
+    }
+
+    pub fn stage_time(&self) -> f32 {
+        self.stage_time
+    }
+
+    /// Goal Time is 150 s for every arcade world.
+    pub fn time_bonus(&self) -> f32 {
+        if self.world == SURVIVAL {
+            0.0
+        } else {
+            (150.0 - self.stage_time).max(0.0)
+        }
+    }
+
+    /// Global::increaseScore for the results screen's time bonus.
+    pub fn apply_time_bonus(&mut self, seconds: f32) {
+        self.score += (seconds.round().max(0.0) as u64) * self.multiplier as u64 * 100;
+    }
+
+    /// The next arcade stage after a clear, or `None` after world 6.
+    pub fn next_stage(&self) -> Option<(usize, usize)> {
+        if self.world == SURVIVAL {
+            None
+        } else if self.stage < 5 {
+            Some((self.world, self.stage + 1))
+        } else if self.world < 5 {
+            Some((self.world + 1, 1))
+        } else {
+            None
+        }
+    }
+
+    pub fn set_shake_scale(&mut self, scale: f32) {
+        self.camera.scale = scale.clamp(0.0, 1.0);
+    }
+
+    pub fn upgrade_level(&self, u: Upgrade) -> usize {
+        self.upgrades[u as usize]
+    }
+
+    pub fn upgrade_cost(&self, u: Upgrade) -> Option<u32> {
+        let cost = UPGRADE_COSTS[u as usize][self.upgrades[u as usize]];
+        (cost >= 0).then_some(cost as u32)
+    }
+
+    pub fn can_buy(&self, u: Upgrade) -> bool {
+        self.upgrade_cost(u)
+            .is_some_and(|cost| cost <= self.upgrade_points)
+    }
+
+    /// PausePopup::handleEvent upgrade cases: spend rings and apply the
+    /// upgrade to the ship.
+    pub fn buy_upgrade(&mut self, u: Upgrade) -> bool {
+        let Some(cost) = self.upgrade_cost(u) else {
+            return false;
+        };
+        if cost > self.upgrade_points {
+            return false;
+        }
+        self.upgrade_points -= cost;
+        let level = self.upgrades[u as usize] + 1;
+        self.upgrades[u as usize] = level;
+        match u {
+            Upgrade::Cannon => {
+                self.ship.cannon_level = level;
+                self.ship.cannon_timer = CANNON_INTERVAL[level];
+            }
+            Upgrade::Fire => self.ship.fire_gun.level = level,
+            Upgrade::Laser => self.ship.laser_gun.level = level,
+            Upgrade::Speed => self.ship.speed_level = level,
+            Upgrade::Boost => {
+                self.ship.boost_level = level;
+                self.ship.boost_charge = self.ship.boost_recharge();
+            }
+            Upgrade::Gravity => self.field.gun.level = level as u32,
+        }
+        true
+    }
+
+    fn speed(&self) -> f32 {
+        SHIP_SPEED + self.ship.speed_level as f32
+    }
+
+    fn boost_recharge(&self) -> f32 {
+        self.ship.boost_recharge()
     }
 
     /// Where a world position appears on the canvas.
@@ -736,6 +899,7 @@ impl Play {
     /// GameScreen::updateStateReady with keyboard and mouse in place of the
     /// two touch wheels.
     fn step_ready(&mut self, dt: f32) {
+        self.stage_time += dt;
         if let Life::Dead(t) = self.ship.life {
             // GameScreen::updateStateReady: two seconds after a death, the
             // next ship, or the end of the game.
@@ -745,7 +909,7 @@ impl Play {
                     self.state = State::Over { cleared: false };
                 } else {
                     self.lives -= 1;
-                    self.ship.respawn();
+                    self.ship.respawn(self.boost_recharge());
                 }
             }
             self.ship.vel = Vec2::ZERO;
@@ -782,7 +946,11 @@ impl Play {
             let (radius, damage, mass) = match b.weapon {
                 Weapon::Cannon => (CANNON_RADIUS, CANNON_DAMAGE, CANNON_MASS),
                 Weapon::Fire => (weapons::FIRE_RADIUS, fire_damage, weapons::FIRE_MASS),
-                Weapon::Laser => (weapons::LASER_RADIUS, weapons::LASER_DAMAGE, weapons::LASER_MASS),
+                Weapon::Laser => (
+                    weapons::LASER_RADIUS,
+                    weapons::LASER_DAMAGE,
+                    weapons::LASER_MASS,
+                ),
             };
             let hit = field.bullet(b.prev, b.pos, radius, b.weapon, damage, mass, b.vel);
             if hit {
@@ -899,8 +1067,16 @@ impl Play {
         }
         // The core: ramming it costs it 7.5 once per life or per boost.
         if self.field.touching_boss(self.ship.pos, SHIP_RADIUS) {
-            let id = if boosting { self.ship.boosts } else { self.ship.lives_used };
-            let dead = self.field.boss.as_mut().is_some_and(|b| b.ram(boosting, id));
+            let id = if boosting {
+                self.ship.boosts
+            } else {
+                self.ship.lives_used
+            };
+            let dead = self
+                .field
+                .boss
+                .as_mut()
+                .is_some_and(|b| b.ram(boosting, id));
             if dead {
                 self.field.boss_dying();
             }
@@ -971,6 +1147,7 @@ impl Play {
                     self.effects
                         .start(Kind::Point, 15, pos, rand::gen_range(0.0, 360.0), false);
                     self.rings += 1;
+                    self.upgrade_points += 1;
                     self.score += self.multiplier as u64;
                 }
                 Some(power) => self.collect_power(pos, power),
@@ -981,7 +1158,11 @@ impl Play {
     /// BigBonus::setState(0).
     fn collect_power(&mut self, pos: Vec2, power: Power) {
         self.effects.start(Kind::Point, 16, pos, 0.0, false);
-        self.sounds.push(if power == Power::Slow { SOUND_SLOW } else { SOUND_POWER });
+        self.sounds.push(if power == Power::Slow {
+            SOUND_SLOW
+        } else {
+            SOUND_POWER
+        });
         match power {
             Power::Life => self.lives += 1,
             Power::Bomb => self.bombs += 1,
@@ -992,7 +1173,11 @@ impl Play {
             }
             Power::Magnet => {
                 self.pickups.magnetize();
-                self.magnet = if self.world == SURVIVAL { SURVIVAL_MAGNET_SECONDS } else { MAGNET_SECONDS };
+                self.magnet = if self.world == SURVIVAL {
+                    SURVIVAL_MAGNET_SECONDS
+                } else {
+                    MAGNET_SECONDS
+                };
             }
         }
     }
@@ -1160,8 +1345,20 @@ impl Play {
                     }
                     if effects {
                         self.effects.start(Kind::Sprite, 5, pos, 0.0, false);
-                        self.effects.start(Kind::Ring, 3, pos + vec2(LOBBER_RING_SPREAD, 0.0), 0.0, false);
-                        self.effects.start(Kind::Ring, 3, pos - vec2(LOBBER_RING_SPREAD, 0.0), 0.0, false);
+                        self.effects.start(
+                            Kind::Ring,
+                            3,
+                            pos + vec2(LOBBER_RING_SPREAD, 0.0),
+                            0.0,
+                            false,
+                        );
+                        self.effects.start(
+                            Kind::Ring,
+                            3,
+                            pos - vec2(LOBBER_RING_SPREAD, 0.0),
+                            0.0,
+                            false,
+                        );
                         self.effects.start(Kind::Point, 5, pos, 0.0, false);
                     }
                     self.score += (points * self.multiplier) as u64;
@@ -1181,7 +1378,8 @@ impl Play {
                     if effects {
                         let a = rand::gen_range(0.0, 360.0);
                         for k in 0..4 {
-                            self.effects.start(Kind::Line, 6, pos, a + 90.0 * k as f32, false);
+                            self.effects
+                                .start(Kind::Line, 6, pos, a + 90.0 * k as f32, false);
                         }
                         self.effects.start(Kind::Point, 6, pos, 0.0, false);
                         self.effects.start(Kind::Sprite, 1, pos, 0.0, false);
@@ -1251,7 +1449,8 @@ impl Play {
                         let a = rand::gen_range(0.0, 360.0);
                         self.effects.start(Kind::Sprite, 7, pos, 0.0, false);
                         for k in 0..4 {
-                            self.effects.start(Kind::Line, 7, pos, a + 90.0 * k as f32, false);
+                            self.effects
+                                .start(Kind::Line, 7, pos, a + 90.0 * k as f32, false);
                         }
                         self.effects.start(Kind::Point, 7, pos, a, false);
                     }
@@ -1339,7 +1538,8 @@ impl Play {
                     if effects {
                         let a = rand::gen_range(0.0, 360.0);
                         for k in 0..4 {
-                            self.effects.start(Kind::Line, 9, pos, a + 90.0 * k as f32, false);
+                            self.effects
+                                .start(Kind::Line, 9, pos, a + 90.0 * k as f32, false);
                         }
                         self.effects.start(Kind::Sprite, 9, pos, 0.0, false);
                     }
@@ -1369,9 +1569,9 @@ impl Play {
         });
         let pad_stick = drift.unwrap_or_else(pad::left);
         if stick != Vec2::ZERO {
-            self.ship.vel = stick.normalize() * WHEEL_MAX * SHIP_SPEED;
+            self.ship.vel = stick.normalize() * WHEEL_MAX * self.speed();
         } else if pad_stick != Vec2::ZERO {
-            self.ship.vel = pad_stick * WHEEL_MAX * SHIP_SPEED;
+            self.ship.vel = pad_stick * WHEEL_MAX * self.speed();
         } else {
             self.ship.vel *= DRAG / (dt + DRAG);
         }
@@ -1397,7 +1597,9 @@ impl Play {
         {
             self.bomb();
         }
-        let boost = is_key_pressed(KeyCode::Space) || pad::pressed(Button::A) || pad::pressed(Button::LeftBumper);
+        let boost = is_key_pressed(KeyCode::Space)
+            || pad::pressed(Button::A)
+            || pad::pressed(Button::LeftBumper);
         if boost && self.ship.can_boost() {
             self.ship.boost(dt);
             self.camera.shake(0.75, 7.5);
@@ -1405,8 +1607,8 @@ impl Play {
         }
         let charge = self.ship.boost_charge;
         if !self.ship.boost_cued
-            && charge >= BOOST_RECHARGE - BOOST_CUE_EARLY
-            && charge < BOOST_RECHARGE - BOOST_CUE_LATE
+            && charge >= self.boost_recharge() - BOOST_CUE_EARLY
+            && charge < self.boost_recharge() - BOOST_CUE_LATE
         {
             self.ship.boost_cued = true;
             self.sounds.push(SOUND_BOOST_READY);
@@ -1487,15 +1689,69 @@ impl Play {
             .iter()
             .filter(|r| r.active())
             .map(|r| r.pos)
-            .chain(self.field.depots.iter().filter(|d| d.active()).map(|d| d.pos))
-            .chain(self.field.mines.iter().filter(|m| m.active()).map(|m| m.pos))
-            .chain(self.field.shy_guys.iter().filter(|g| g.active()).map(|g| g.pos))
-            .chain(self.field.snakes.iter().filter(|s| s.active()).map(|s| s.pos))
-            .chain(self.field.arrows.iter().filter(|a| a.active()).map(|a| a.pos))
-            .chain(self.field.towers.iter().filter(|t| t.active()).map(|t| t.pos))
-            .chain(self.field.seekers.iter().filter(|k| k.active()).map(|k| k.pos))
-            .chain(self.field.lobbers.iter().filter(|l| l.active()).map(|l| l.pos))
-            .chain(self.field.pieces.iter().filter(|p| p.active()).map(|p| p.pos))
+            .chain(
+                self.field
+                    .depots
+                    .iter()
+                    .filter(|d| d.active())
+                    .map(|d| d.pos),
+            )
+            .chain(
+                self.field
+                    .mines
+                    .iter()
+                    .filter(|m| m.active())
+                    .map(|m| m.pos),
+            )
+            .chain(
+                self.field
+                    .shy_guys
+                    .iter()
+                    .filter(|g| g.active())
+                    .map(|g| g.pos),
+            )
+            .chain(
+                self.field
+                    .snakes
+                    .iter()
+                    .filter(|s| s.active())
+                    .map(|s| s.pos),
+            )
+            .chain(
+                self.field
+                    .arrows
+                    .iter()
+                    .filter(|a| a.active())
+                    .map(|a| a.pos),
+            )
+            .chain(
+                self.field
+                    .towers
+                    .iter()
+                    .filter(|t| t.active())
+                    .map(|t| t.pos),
+            )
+            .chain(
+                self.field
+                    .seekers
+                    .iter()
+                    .filter(|k| k.active())
+                    .map(|k| k.pos),
+            )
+            .chain(
+                self.field
+                    .lobbers
+                    .iter()
+                    .filter(|l| l.active())
+                    .map(|l| l.pos),
+            )
+            .chain(
+                self.field
+                    .pieces
+                    .iter()
+                    .filter(|p| p.active())
+                    .map(|p| p.pos),
+            )
             .chain(self.field.boss.iter().filter(|b| b.active()).map(|b| b.pos))
             .map(|p| vec2(wrap_near(p.x, ship.x), wrap_near(p.y, ship.y)))
             .min_by(|a, b| {
@@ -1527,7 +1783,12 @@ impl Play {
     /// GravityGun::draw and CustomSpriteSystem::draw: the reaching cone (or
     /// the tether to what it holds) and the sparkle trails, all additive.
     fn draw_gravity(&self, canvas: &Canvas, assets: &PlayAssets) {
-        let sparks: Vec<(Vec2, Color)> = self.field.sparks.points().map(|(p, c)| (self.to_screen(p), c)).collect();
+        let sparks: Vec<(Vec2, Color)> = self
+            .field
+            .sparks
+            .points()
+            .map(|(p, c)| (self.to_screen(p), c))
+            .collect();
         for (p, c) in &sparks {
             canvas.draw_points(&assets.spark, &[(*p, gravity::SPARK_SIZE)], self.z, *c);
         }
@@ -1545,19 +1806,44 @@ impl Play {
             }
             None => (gravity::REACH, self.ship.aim_dir),
         };
-        let spread = if gripped.is_some() { 5.0f32.to_radians().tan() * len } else { 5.0 };
+        let spread = if gripped.is_some() {
+            5.0f32.to_radians().tan() * len
+        } else {
+            5.0
+        };
         let side = vec2(-dir.y, dir.x);
         let tip = ship + dir * len;
         let verts = vec![
             Vertex::new(ship.x, ship.y, self.z, 0.0, 0.0, white),
-            Vertex::new(tip.x - side.x * spread, tip.y - side.y * spread, self.z, 0.0, 0.0, clear),
-            Vertex::new(tip.x + side.x * spread, tip.y + side.y * spread, self.z, 0.0, 0.0, clear),
+            Vertex::new(
+                tip.x - side.x * spread,
+                tip.y - side.y * spread,
+                self.z,
+                0.0,
+                0.0,
+                clear,
+            ),
+            Vertex::new(
+                tip.x + side.x * spread,
+                tip.y + side.y * spread,
+                self.z,
+                0.0,
+                0.0,
+                clear,
+            ),
         ];
         canvas.draw_triangles(verts, vec![0, 1, 2], None, true);
     }
 
     /// Texture::drawMultiple2D / drawMultipleBlend2D for one weapon's shots.
-    fn draw_shots(&self, canvas: &Canvas, tex: &Texture2D, weapon: Weapon, back: f32, additive: bool) {
+    fn draw_shots(
+        &self,
+        canvas: &Canvas,
+        tex: &Texture2D,
+        weapon: Weapon,
+        back: f32,
+        additive: bool,
+    ) {
         let (w, h) = (tex.width(), tex.height());
         let mut verts = Vec::new();
         let mut indices: Vec<u16> = Vec::new();
@@ -1567,7 +1853,12 @@ impl Play {
             let side = vec2(a.cos(), a.sin());
             let c = self.to_screen(b.pos) - fwd * h * back;
             let n = verts.len() as u16;
-            for (sx, sy, u, v) in [(-0.5, -0.5, 0.0, 0.0), (0.5, -0.5, 1.0, 0.0), (0.5, 0.5, 1.0, 1.0), (-0.5, 0.5, 0.0, 1.0)] {
+            for (sx, sy, u, v) in [
+                (-0.5, -0.5, 0.0, 0.0),
+                (0.5, -0.5, 1.0, 0.0),
+                (0.5, 0.5, 1.0, 1.0),
+                (-0.5, 0.5, 0.0, 1.0),
+            ] {
                 let p = c + side * (sx * w) - fwd * (sy * h);
                 verts.push(Vertex::new(p.x, p.y, self.z, u, v, WHITE));
             }
@@ -1587,7 +1878,14 @@ impl Play {
         let label = &assets.depot_label;
         for d in self.field.depots.iter().filter(|d| d.active()) {
             let p = self.to_screen(d.pos);
-            draw_quad(label, p.x - label.width() * 0.5, p.y + depot::LABEL_DROP, 1.0, self.z, color);
+            draw_quad(
+                label,
+                p.x - label.width() * 0.5,
+                p.y + depot::LABEL_DROP,
+                1.0,
+                self.z,
+                color,
+            );
         }
     }
 
@@ -1617,7 +1915,12 @@ impl Play {
             let at = s + boss::BAR_OFFSET;
             fill_rect(at, boss::BAR_SIZE, self.z, Color::new(1.0, 1.0, 1.0, 0.25));
             let w = b.health / b.max_health * boss::BAR_SIZE.x;
-            fill_rect(at, vec2(w, boss::BAR_SIZE.y), self.z, Color::new(1.0, 0.0, 0.0, 0.5));
+            fill_rect(
+                at,
+                vec2(w, boss::BAR_SIZE.y),
+                self.z,
+                Color::new(1.0, 0.0, 0.0, 0.5),
+            );
         }
     }
 
@@ -1684,21 +1987,45 @@ impl Play {
             let p = self.to_screen(r.pos);
             // AnimationData(bonus, 4, 4): the 7x7 sprite anchored 4 units in.
             let c = p + vec2(-0.5, -0.5);
-            draw_sprite(&assets.hud.ring, c.x, c.y, r.angle, self.z, Color::new(1.0, 1.0, 1.0, r.alpha));
+            draw_sprite(
+                &assets.hud.ring,
+                c.x,
+                c.y,
+                r.angle,
+                self.z,
+                Color::new(1.0, 1.0, 1.0, r.alpha),
+            );
         }
         // Power-ups, then their labels (BigBonus::draw).
         for r in &self.pickups.rings {
             let Some(power) = r.power else { continue };
             let p = self.to_screen(r.pos);
             let color = Color::new(1.0, 1.0, 1.0, r.alpha);
-            draw_atlas_sprite(&assets.power, 5, 1, power.frame(), p.x, p.y, r.angle, self.z, color);
+            draw_atlas_sprite(
+                &assets.power,
+                5,
+                1,
+                power.frame(),
+                p.x,
+                p.y,
+                r.angle,
+                self.z,
+                color,
+            );
         }
         for r in &self.pickups.rings {
             let Some(power) = r.power else { continue };
             let p = self.to_screen(r.pos);
             let label = &assets.power_labels[power.frame()];
             let color = Color::new(1.0, 1.0, 1.0, r.alpha * depot::LABEL_ALPHA);
-            draw_quad(label, p.x - label.width() * 0.5, p.y + POWER_LABEL_DROP, 1.0, self.z, color);
+            draw_quad(
+                label,
+                p.x - label.width() * 0.5,
+                p.y + POWER_LABEL_DROP,
+                1.0,
+                self.z,
+                color,
+            );
         }
         self.draw_rocks(assets);
         self.draw_depots(canvas, assets);
@@ -1751,7 +2078,8 @@ impl Play {
             }
             if let Some(b) = &l.ball {
                 let color = Color::new(1.0, 1.0, 1.0, b.alpha);
-                let draw = || draw_sprite(&assets.boss_piece, s.x, s.y, b.angle, self.z + b.z, color);
+                let draw =
+                    || draw_sprite(&assets.boss_piece, s.x, s.y, b.angle, self.z + b.z, color);
                 if b.flash {
                     canvas.flashing(draw);
                 } else {
@@ -1783,7 +2111,16 @@ impl Play {
             for seg in sn.segments.iter().rev() {
                 let s = self.to_screen(seg.pos);
                 let color = Color::new(1.0, 1.0, 1.0, seg.alpha);
-                let draw = || draw_sprite(&assets.snake_body, s.x, s.y, seg.angle, self.z + seg.z, color);
+                let draw = || {
+                    draw_sprite(
+                        &assets.snake_body,
+                        s.x,
+                        s.y,
+                        seg.angle,
+                        self.z + seg.z,
+                        color,
+                    )
+                };
                 if seg.flash {
                     canvas.flashing(draw);
                 } else {
@@ -1802,7 +2139,19 @@ impl Play {
         for g in &self.field.shy_guys {
             let s = self.to_screen(g.pos);
             let color = Color::new(1.0, 1.0, 1.0, g.alpha);
-            let draw = || draw_atlas_sprite(&assets.shy_guy, 4, 4, g.frame, s.x, s.y, g.angle, self.z + g.z, color);
+            let draw = || {
+                draw_atlas_sprite(
+                    &assets.shy_guy,
+                    4,
+                    4,
+                    g.frame,
+                    s.x,
+                    s.y,
+                    g.angle,
+                    self.z + g.z,
+                    color,
+                )
+            };
             if g.flash {
                 canvas.flashing(draw);
             } else {
@@ -1813,7 +2162,12 @@ impl Play {
 
         // Cannon fire: green additive point sprites trailing each bullet.
         let mut points = Vec::new();
-        for b in self.ship.bullets.iter().filter(|b| b.weapon == Weapon::Cannon) {
+        for b in self
+            .ship
+            .bullets
+            .iter()
+            .filter(|b| b.weapon == Weapon::Cannon)
+        {
             let p = self.to_screen(b.pos);
             for (behind, size) in CANNON_TRAIL {
                 points.push((p + b.back * behind, size));
@@ -1822,8 +2176,20 @@ impl Play {
         canvas.draw_points(&assets.cannon, &points, self.z, GREEN);
         // Ship::draw: laser bolts, then flames (additive), each drawn along
         // its flight and set back a fraction of its length.
-        self.draw_shots(canvas, &assets.laser, Weapon::Laser, weapons::LASER_DRAW_BACK, false);
-        self.draw_shots(canvas, &assets.flame, Weapon::Fire, weapons::FIRE_DRAW_BACK, true);
+        self.draw_shots(
+            canvas,
+            &assets.laser,
+            Weapon::Laser,
+            weapons::LASER_DRAW_BACK,
+            false,
+        );
+        self.draw_shots(
+            canvas,
+            &assets.flame,
+            Weapon::Fire,
+            weapons::FIRE_DRAW_BACK,
+            true,
+        );
 
         self.draw_gravity(canvas, assets);
         self.draw_ship(assets);

@@ -8,11 +8,12 @@ mod enemies;
 mod gfx;
 mod gravity;
 mod hud;
-mod menu;
 mod lobber;
+mod menu;
 mod mine;
 mod pad;
 mod particles;
+mod pause;
 mod play;
 mod progress;
 mod seeker;
@@ -24,12 +25,15 @@ mod weapons;
 
 use std::collections::HashMap;
 
-use macroquad::audio::{load_sound, play_sound, stop_sound, PlaySoundParams, Sound};
+use macroquad::audio::{
+    load_sound, play_sound, set_sound_volume, stop_sound, PlaySoundParams, Sound,
+};
 use macroquad::prelude::*;
 
 use gfx::Canvas;
 use hud::{Font, HudAssets};
 use menu::{MenuAssets, MenuBackdrop, MenuButton, MenuScreen};
+use pause::{Action, Page, Pause, PauseAssets, Settings};
 use play::{Play, PlayAssets, RockArt};
 use progress::Progress;
 
@@ -70,9 +74,6 @@ enum MenuKind {
 const SOUND_COUNT: usize = 17;
 /// Audio::play id for button presses.
 const SOUND_BUTTON: usize = 9;
-// The original's untouched Settings screen: music full, effects at half.
-const MUSIC_VOLUME: f32 = 1.0;
-const EFFECT_VOLUME: f32 = 0.5;
 
 /// `Global::level` for survival (worlds are 0-5).
 const SURVIVAL: usize = 6;
@@ -473,6 +474,56 @@ async fn load_play_assets() -> PlayAssets {
     }
 }
 
+async fn load_pause_assets() -> PauseAssets {
+    PauseAssets {
+        button: load_ui("button").await,
+        white: Texture2D::from_rgba8(1, 1, &[255, 255, 255, 255]),
+        upgrade_bg: load_ui("buttonUpgradeBackground").await,
+        upgrade_icons: [
+            load_ui("buttonUpgradeStandard").await,
+            load_ui("buttonUpgradeFire").await,
+            load_ui("buttonUpgradeLaser").await,
+            load_ui("buttonUpgradeSpeed").await,
+            load_ui("buttonUpgradeBoost").await,
+            load_ui("buttonUpgradeGravityGun").await,
+        ],
+        upgrade_disabled: [
+            load_ui("buttonUpgradeStandardDisabled").await,
+            load_ui("buttonUpgradeFireDisabled").await,
+            load_ui("buttonUpgradeLaserDisabled").await,
+            load_ui("buttonUpgradeSpeedDisabled").await,
+            load_ui("buttonUpgradeBoostDisabled").await,
+            load_ui("buttonUpgradeGravityGunDisabled").await,
+        ],
+        auto_pause: [
+            load_ui("buttonAutoPause").await,
+            load_ui("buttonAutoPauseDisabled").await,
+        ],
+        auto_upgrade: [
+            load_ui("buttonAutoUpgrade").await,
+            load_ui("buttonAutoUpgradeDisabled").await,
+        ],
+        auto_gravity: [
+            load_ui("buttonAutoGravityGun").await,
+            load_ui("buttonAutoGravityGunDisabled").await,
+        ],
+        shake: [
+            load_ui("buttonShakeBomb").await,
+            load_ui("buttonShakeBoost").await,
+            load_ui("buttonShakeDisabled").await,
+        ],
+        boost: [
+            load_ui("buttonBoostTap").await,
+            load_ui("buttonBoostButtonLeft").await,
+            load_ui("buttonBoostButtonRight").await,
+        ],
+        bomb: [
+            load_ui("buttonBomb").await,
+            load_ui("buttonBombDisabled").await,
+        ],
+    }
+}
+
 #[macroquad::main(window_conf)]
 async fn main() {
     // MB_ROOT points at the project (assets and original/) when the game
@@ -483,6 +534,7 @@ async fn main() {
     let ui = load_ui_set().await;
     let menu_assets = load_menu_assets().await;
     let play_assets = load_play_assets().await;
+    let pause_assets = load_pause_assets().await;
     let music = load_sound("original/audio/music.wav").await.unwrap();
     let mut sounds: Vec<Option<Sound>> = vec![None];
     for id in 1..=SOUND_COUNT {
@@ -492,13 +544,13 @@ async fn main() {
                 .unwrap(),
         ));
     }
-    let play_effect = |id: usize| {
+    let play_effect = |id: usize, volume: f32| {
         if let Some(Some(sound)) = sounds.get(id) {
             play_sound(
                 sound,
                 PlaySoundParams {
                     looped: false,
-                    volume: EFFECT_VOLUME,
+                    volume,
                 },
             );
         }
@@ -506,11 +558,13 @@ async fn main() {
     let canvas = Canvas::new();
     let mut backdrop = MenuBackdrop::new();
     let mut progress = Progress::load();
+    let mut settings = Settings::default();
 
     let mut screen = Screen::Menu(MenuKind::Main);
     let mut menu_screen = build_menu(MenuKind::Main, &ui, &progress, true);
     let mut menu_next: Option<Next> = None;
     let mut game: Option<Play> = None;
+    let mut pause: Option<Pause> = None;
     let mut music_on = false;
     let mut frame_count: u32 = 0;
     // MB_START=<world>.<stage> (1-based, world 7 = survival) boots straight
@@ -527,10 +581,23 @@ async fn main() {
         ));
         screen = Screen::Game;
     }
+    // MB_PAUSE opens a popup for screenshot runs.
+    if let Ok(kind) = std::env::var("MB_PAUSE") {
+        pause = Some(match kind.as_str() {
+            "upgrade" => Pause::menu_page(Page::Upgrade),
+            "clear" => Pause::results(true, 0, 1, 12345, 2, 42.0, 108.0),
+            "gameover" => Pause::results(false, 0, 1, 12345, 2, 42.0, 0.0),
+            "controls" => Pause::menu_page(Page::Controls),
+            _ => Pause::menu(),
+        });
+    }
 
     loop {
         let dt = get_frame_time().min(0.05);
         pad::poll();
+        if music_on {
+            set_sound_volume(&music, settings.music);
+        }
 
         match screen {
             Screen::Menu(kind) => {
@@ -546,7 +613,7 @@ async fn main() {
                     menu_screen.fx.ready() && menu_next.is_none() && pad::pressed(pad::Button::B)
                 });
                 if let Some(event) = menu_screen.update(dt).or(pad_back) {
-                    play_effect(SOUND_BUTTON);
+                    play_effect(SOUND_BUTTON, settings.effects);
                     if let Some(next) = menu_event(kind, event) {
                         menu_next = Some(next);
                         menu_screen.fx.leave();
@@ -573,7 +640,7 @@ async fn main() {
                                     &music,
                                     PlaySoundParams {
                                         looped: true,
-                                        volume: MUSIC_VOLUME,
+                                        volume: settings.music,
                                     },
                                 );
                                 music_on = true;
@@ -584,40 +651,84 @@ async fn main() {
                 }
             }
             Screen::Game => {
-                if let Some(g) = game.as_mut() {
+                if pause.is_some() {
+                    let action = match (pause.as_mut(), game.as_mut()) {
+                        (Some(p), Some(g)) => p.update(dt, g, &mut settings),
+                        _ => None,
+                    };
+                    match action {
+                        Some(Action::Resume) => pause = None,
+                        Some(Action::Leave) => {
+                            let kind = match game.as_ref() {
+                                Some(g) if g.world < SURVIVAL => MenuKind::Stage(g.world),
+                                _ => MenuKind::Mode,
+                            };
+                            game = None;
+                            pause = None;
+                            stop_sound(&music);
+                            music_on = false;
+                            menu_screen = build_menu(kind, &ui, &progress, true);
+                            screen = Screen::Menu(kind);
+                        }
+                        Some(Action::NextStage) => {
+                            let next = game.as_ref().and_then(|g| g.next_stage());
+                            pause = None;
+                            match next {
+                                Some((world, stage)) => {
+                                    game =
+                                        Some(Play::new(world, stage, progress.best, &play_assets));
+                                }
+                                None => {
+                                    let kind = match game.as_ref() {
+                                        Some(g) if g.world < SURVIVAL => MenuKind::Stage(g.world),
+                                        _ => MenuKind::Mode,
+                                    };
+                                    game = None;
+                                    stop_sound(&music);
+                                    music_on = false;
+                                    menu_screen = build_menu(kind, &ui, &progress, true);
+                                    screen = Screen::Menu(kind);
+                                }
+                            }
+                        }
+                        None => {}
+                    }
+                    if let Some(g) = game.as_mut() {
+                        for id in g.sounds.drain(..) {
+                            play_effect(id, settings.effects);
+                        }
+                    }
+                } else if let Some(g) = game.as_mut() {
+                    g.set_shake_scale(settings.shake);
                     g.update(dt);
                     for id in g.sounds.drain(..) {
-                        play_effect(id);
+                        play_effect(id, settings.effects);
                     }
-                }
-                // Until the pause and results popups are ported: Escape leaves
-                // to stage select, as does Enter once the stage is over.
-                let over = game.as_ref().and_then(|g| g.result());
-                if over == Some(true) {
-                    if let Some(g) = game.as_ref() {
+                    if let Some(cleared) = g.result() {
                         if g.world < SURVIVAL {
                             progress.unlocked = progress.unlocked.max(g.world * 5 + g.stage);
                             progress.best = progress.best.max(g.score);
                             progress.save();
                         }
+                        pause = Some(Pause::results(
+                            cleared,
+                            g.world,
+                            g.stage,
+                            g.score,
+                            g.multiplier,
+                            g.stage_time(),
+                            g.time_bonus(),
+                        ));
+                    } else {
+                        let pad_pause =
+                            pad::pressed(pad::Button::Start) || pad::pressed(pad::Button::View);
+                        let icon = Rect::new(449.0, -1.0, 32.0, 22.0);
+                        let clicked = is_mouse_button_pressed(MouseButton::Left)
+                            && icon.contains(Canvas::mouse());
+                        if is_key_pressed(KeyCode::Escape) || pad_pause || clicked {
+                            pause = Some(Pause::menu());
+                        }
                     }
-                }
-                let pad_leave = pad::pressed(pad::Button::Start) || pad::pressed(pad::Button::View);
-                let pad_done = pad::pressed(pad::Button::A) || pad::pressed(pad::Button::Start);
-                if is_key_pressed(KeyCode::Escape)
-                    || pad_leave
-                    || (over.is_some() && (is_key_pressed(KeyCode::Enter) || pad_done))
-                {
-                    let kind = match game.as_ref() {
-                        Some(g) if g.world < SURVIVAL => MenuKind::Stage(g.world),
-                        _ => MenuKind::Mode,
-                    };
-                    game = None;
-                    // The music belongs to the game screen.
-                    stop_sound(&music);
-                    music_on = false;
-                    menu_screen = build_menu(kind, &ui, &progress, true);
-                    screen = Screen::Menu(kind);
                 }
             }
         }
@@ -628,6 +739,9 @@ async fn main() {
             Screen::Game => {
                 if let Some(g) = game.as_ref() {
                     g.draw(&canvas, &play_assets);
+                    if let Some(p) = pause.as_ref() {
+                        p.draw(&canvas, &pause_assets, &play_assets.hud.font, g, &settings);
+                    }
                 }
             }
         }

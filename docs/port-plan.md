@@ -10,6 +10,7 @@
 - **Canvas:** 2D is a 480x320, y-down, top-left canvas (`Texture::draw(x, y, scale)` draws top-left anchored at image size x scale). The game world and menu backdrop are 3D: `Director` sets a perspective camera (`gluLookAt`, `glFrustumf`, rotated -90 for landscape) and `Background` is a curved mesh (`World::getOffsetZ`) multitexturing a base layer with a fog layer (unit 1 `GL_DECAL`).
 - **Tools:** `llvm-objdump --triple=armv6-apple-ios --mattr=+vfp2` works for spot reads. A decompiler (Ghidra) is wanted for the full game logic, and an emulator (touchHLE) for ground-truth 480x320 frames to diff against.
 - **Status:** main menu 2D layout exact (title at ((480-w)/2, 15); PLAY 160,176; HIGH SCORES 16,176; SETTINGS 336,176; HELP 336,246). Menu backdrop is a flat approximation of the 3D `Background`.
+- Pause, controls, upgrade, clear and game-over popups ported from `PausePopup`; layouts and gradients match the decompiled draw code and are verified with `MB_PAUSE` captures.
 - The earlier reimagined gameplay (wrapping 5760x3240 world, drones/turrets/slingers, heat, dash) is not the original's and will be replaced screen by screen.
 
 ## Phases
