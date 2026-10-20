@@ -41,7 +41,7 @@ Controls:
 - Keyboard and mouse: WASD moves, left mouse fires toward the cursor, Space boosts, right mouse or B bombs, Q or the wheel switches weapon.
 - Gravity gun: double-click, or E, while firing.
 - Pause: Esc opens; arrows/WASD move the selection, Enter/A activates, Esc/B goes back; mouse clicks activate items.
-- Game controller: mapped in `src/pad.rs`.
+- Game controller: mapped in `src/pad.rs`. Windows reads it through gilrs's XInput backend.
 
 Blocked: the Xbox Series controller (USB, 045e:0b12) on macOS gives no input.
 - GameController sees it, but every value reads zero, even as an .app (`tools/make-app.sh`).
@@ -53,7 +53,7 @@ Next:
 - Wire `PausePopup` settings save/load.
 - Pixel-diff the pause/results popups against emulator frames; replace the generic button art with the original pre-rendered/dynamic buttons.
 - Resolve controller input on macOS.
-- Windows: confirm X, Y, LB, RB, LT, RT, View, Start and the right stick with `MB_PAD_LOG=1` (A, B, D-pad and left stick verified).
+- Windows: confirm View and Start with `MB_PAD_LOG=1`. Everything else is verified through gilrs's XInput backend (the default WGI backend dropped most input).
 
 Test hooks (env):
 - `MB_START=w.s` starts a stage; `MB_WAVE=n` starts at wave n.
