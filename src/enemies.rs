@@ -6,6 +6,7 @@ use macroquad::prelude::*;
 use crate::boss::{self, Boss, BossState, Piece, Request};
 use crate::depot::{self, Depot};
 use crate::mine::{self, Mine};
+use crate::shyguy::{self, ShyGuy};
 use crate::waves::{Wave, ARCADE};
 
 /// World::WIDTH / HEIGHT.
@@ -35,6 +36,8 @@ const MAX_BREAK_SPEED: f32 = 50.0;
 pub const ROCK_POINTS: u32 = 10;
 /// Wave kind for depots.
 const KIND_DEPOT: i32 = 21;
+/// Wave kind for shy guys.
+const KIND_SHY_GUY: i32 = 13;
 /// Wave kind for mines.
 const KIND_MINE: i32 = 17;
 /// WaveManager::getWaveRemaining weights.
@@ -331,6 +334,14 @@ pub enum Event {
         sound: bool,
         sparks: bool,
     },
+    /// ShyGuy::setState(10007).
+    ShyGuyDestroyed {
+        pos: Vec2,
+        points: u32,
+        rings: u32,
+        sound: bool,
+        effects: bool,
+    },
     /// Mine::setState(10007).
     MineDestroyed {
         pos: Vec2,
@@ -365,6 +376,7 @@ pub struct Field {
     pub rocks: Vec<Rock>,
     pub depots: Vec<Depot>,
     pub mines: Vec<Mine>,
+    pub shy_guys: Vec<ShyGuy>,
     pub boss: Option<Boss>,
     pub pieces: Vec<Piece>,
     /// Animation frame counts by size: small atlas, medium, large, extra large.
@@ -380,6 +392,7 @@ impl Field {
             rocks: Vec::new(),
             depots: Vec::new(),
             mines: Vec::new(),
+            shy_guys: Vec::new(),
             boss: None,
             pieces: Vec::new(),
             frames,
@@ -410,7 +423,76 @@ impl Field {
         self.rocks.iter().map(|r| WEIGHT[r.size]).sum::<u32>()
             + self.depots.len() as u32
             + self.mines.len() as u32 * MINE_WEIGHT
+            + self.shy_guys.len() as u32
             + self.boss.is_some() as u32
+    }
+
+    fn spawn_shy_guy(&mut self, pos: Vec2) {
+        if self.shy_guys.len() < shyguy::POOL {
+            self.shy_guys.push(ShyGuy::new(pos));
+        }
+    }
+
+    /// ShyGuy::setState(10007).
+    pub fn destroy_shy_guy(&mut self, index: usize, score: bool, sound: bool, effects: bool) {
+        let g = self.shy_guys.swap_remove(index);
+        self.events.push(Event::ShyGuyDestroyed {
+            pos: g.pos,
+            points: if score { shyguy::POINTS } else { 0 },
+            rings: score as u32,
+            sound,
+            effects,
+        });
+    }
+
+    /// Active shy guys touching a circle (the ship).
+    pub fn touching_shy_guys(&self, centre: Vec2, radius: f32) -> Vec<usize> {
+        (0..self.shy_guys.len())
+            .filter(|&i| {
+                let g = &self.shy_guys[i];
+                let c = vec2(wrap_near(g.pos.x, centre.x), wrap_near(g.pos.y, centre.y));
+                g.active() && c.distance_squared(centre) < (shyguy::RADIUS + radius).powi(2)
+            })
+            .collect()
+    }
+
+    /// shyGuyCollision: shy guys push each other apart; rocks, mines,
+    /// depots and boss parts push them away.
+    fn shy_guy_collisions(&mut self) {
+        let n = self.shy_guys.len();
+        for i in 0..n {
+            if !self.shy_guys[i].active() {
+                continue;
+            }
+            for j in i + 1..n {
+                if !self.shy_guys[j].active() {
+                    continue;
+                }
+                let (left, right) = self.shy_guys.split_at_mut(j);
+                let (a, b) = (&mut left[i], &mut right[0]);
+                let bp = vec2(wrap_near(b.pos.x, a.pos.x), wrap_near(b.pos.y, a.pos.y));
+                let d = bp - a.pos;
+                let r = shyguy::RADIUS * 2.0;
+                if d != Vec2::ZERO && d.length_squared() < r * r {
+                    let push = d.normalize() * (r * r - d.length_squared()) * mine::REPEL;
+                    a.impulse -= push;
+                    b.impulse += push;
+                }
+            }
+            let mut others: Vec<(Vec2, f32)> = Vec::new();
+            others.extend(self.rocks.iter().filter(|r| r.active()).map(|r| (r.pos, r.radius())));
+            others.extend(self.mines.iter().filter(|m| m.active()).map(|m| (m.pos, mine::RADIUS)));
+            others.extend(self.depots.iter().filter(|d| d.active()).map(|d| (d.pos, depot::RADIUS)));
+            others.extend(self.pieces.iter().filter(|p| p.active()).map(|p| (p.pos, boss::PIECE_RADIUS)));
+            others.extend(self.boss.iter().filter(|b| b.active()).map(|b| (b.pos, boss::RADIUS)));
+            let g = &mut self.shy_guys[i];
+            for (pos, radius) in others {
+                let c = vec2(wrap_near(pos.x, g.pos.x), wrap_near(pos.y, g.pos.y));
+                if c.distance_squared(g.pos) < (shyguy::RADIUS + radius).powi(2) {
+                    g.push_from(c, radius, mine::REPEL * 2.0);
+                }
+            }
+        }
     }
 
     fn spawn_mine(&mut self, pos: Vec2) {
@@ -538,6 +620,10 @@ impl Field {
         while !self.depots.is_empty() {
             self.destroy_depot(0, false);
         }
+        while !self.shy_guys.is_empty() {
+            let effects = visible(self.shy_guys[0].pos);
+            self.destroy_shy_guy(0, false, false, effects);
+        }
         while !self.mines.is_empty() {
             let effects = visible(self.mines[0].pos);
             self.destroy_mine(0, false, false, effects);
@@ -607,6 +693,7 @@ impl Field {
             None if kind == KIND_DEPOT => self.depots.len(),
             None if kind == KIND_BOSS => self.boss.is_some() as usize,
             None if kind == KIND_MINE => self.mines.len(),
+            None if kind == KIND_SHY_GUY => self.shy_guys.len(),
             None => 0,
         }
     }
@@ -637,6 +724,10 @@ impl Field {
             m.update(dt, ship, centre);
         }
         self.mine_collisions();
+        for g in &mut self.shy_guys {
+            g.update(dt, ship, centre);
+        }
+        self.shy_guy_collisions();
         for d in &mut self.depots {
             d.update(dt, centre);
         }
@@ -734,6 +825,21 @@ impl Field {
                     self.events.push(Event::DepotHit);
                 } else {
                     self.destroy_depot(i, true);
+                }
+                return true;
+            }
+        }
+        for i in 0..self.shy_guys.len() {
+            let g = &self.shy_guys[i];
+            if !g.active() {
+                continue;
+            }
+            let c = vec2(wrap_near(g.pos.x, to.x), wrap_near(g.pos.y, to.y));
+            if segment_distance(c, from, to) < shyguy::RADIUS + radius {
+                if self.shy_guys[i].hit(damage) {
+                    self.destroy_shy_guy(i, true, true, true);
+                } else {
+                    self.events.push(Event::DepotHit);
                 }
                 return true;
             }
@@ -1062,6 +1168,9 @@ impl Script {
                     let p = self.origin + offset;
                     let p = vec2(wrap_near(p.x, ship.x), wrap_near(p.y, ship.y));
                     field.spawn_boss(p, self.world, self.stage, ship);
+                } else if wave.kind == KIND_SHY_GUY {
+                    let p = self.origin + offset;
+                    field.spawn_shy_guy(vec2(wrap_near(p.x, ship.x), wrap_near(p.y, ship.y)));
                 } else if wave.kind == KIND_MINE {
                     let p = self.origin + offset;
                     field.spawn_mine(vec2(wrap_near(p.x, ship.x), wrap_near(p.y, ship.y)));

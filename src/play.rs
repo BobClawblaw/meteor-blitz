@@ -175,6 +175,8 @@ pub struct PlayAssets {
     pub cannon: Texture2D,
     pub depot: Texture2D,
     pub mine: Texture2D,
+    /// shyGuyFrames.png: a 4x4 atlas of 32x32 frames.
+    pub shy_guy: Texture2D,
     /// bossInside.1-8 and ball.png (a boss piece).
     pub boss: Vec<Texture2D>,
     pub boss_piece: Texture2D,
@@ -727,6 +729,13 @@ impl Play {
                 hit = true;
             }
         }
+        // Shy guys die on contact and take the ship with them unless boosting.
+        let mut shy = self.field.touching_shy_guys(self.ship.pos, SHIP_RADIUS);
+        shy.sort_unstable_by(|a, b| b.cmp(a));
+        for i in shy {
+            self.field.destroy_shy_guy(i, true, true, true);
+            hit |= !boosting;
+        }
         // Mines blow up on contact and take the ship with them unless boosting.
         let mut mines = self.field.touching_mines(self.ship.pos, SHIP_RADIUS);
         mines.sort_unstable_by(|a, b| b.cmp(a));
@@ -964,6 +973,27 @@ impl Play {
                         self.effects.start(Kind::Point, 3, pos, away, false);
                     }
                 }
+                Event::ShyGuyDestroyed {
+                    pos,
+                    points,
+                    rings,
+                    sound,
+                    effects,
+                } => {
+                    if sound {
+                        self.sounds.push(SOUND_DEPOT_DESTROYED);
+                    }
+                    if effects {
+                        let a = rand::gen_range(0.0, 360.0);
+                        self.effects.start(Kind::Line, 5, pos, a, false);
+                        self.effects.start(Kind::Line, 5, pos, a + 180.0, false);
+                        self.effects.start(Kind::Ring, 0, pos, 0.0, false);
+                        self.effects.start(Kind::Sprite, 1, pos, 0.0, false);
+                    }
+                    self.score += (points * self.multiplier) as u64;
+                    self.pickups
+                        .drop(pos, MINE_RING_SPEED, rings, self.magnet > 0.0);
+                }
                 Event::MineDestroyed {
                     pos,
                     points,
@@ -1091,6 +1121,7 @@ impl Play {
             .map(|r| r.pos)
             .chain(self.field.depots.iter().filter(|d| d.active()).map(|d| d.pos))
             .chain(self.field.mines.iter().filter(|m| m.active()).map(|m| m.pos))
+            .chain(self.field.shy_guys.iter().filter(|g| g.active()).map(|g| g.pos))
             .chain(self.field.pieces.iter().filter(|p| p.active()).map(|p| p.pos))
             .chain(self.field.boss.iter().filter(|b| b.active()).map(|b| b.pos))
             .map(|p| vec2(wrap_near(p.x, ship.x), wrap_near(p.y, ship.y)))
@@ -1249,6 +1280,16 @@ impl Play {
             let color = Color::new(1.0, 1.0, 1.0, m.alpha);
             let draw = || draw_sprite(&assets.mine, s.x, s.y, m.angle, self.z + m.z, color);
             if m.flash {
+                canvas.flashing(draw);
+            } else {
+                draw();
+            }
+        }
+        for g in &self.field.shy_guys {
+            let s = self.to_screen(g.pos);
+            let color = Color::new(1.0, 1.0, 1.0, g.alpha);
+            let draw = || draw_atlas_sprite(&assets.shy_guy, 4, 4, g.frame, s.x, s.y, g.angle, self.z + g.z, color);
+            if g.flash {
                 canvas.flashing(draw);
             } else {
                 draw();

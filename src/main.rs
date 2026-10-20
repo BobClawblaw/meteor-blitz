@@ -11,6 +11,7 @@ mod mine;
 mod particles;
 mod play;
 mod progress;
+mod shyguy;
 mod waves;
 
 use std::collections::HashMap;
@@ -431,6 +432,7 @@ async fn load_play_assets() -> PlayAssets {
         spark: load_sprite("fire200").await,
         depot: load_sprite("depot").await,
         mine: load_sprite("mine").await,
+        shy_guy: load_sprite("shyGuyFrames").await,
         boss: {
             let mut frames = Vec::new();
             for i in 1..=8 {
