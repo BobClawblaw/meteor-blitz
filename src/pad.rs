@@ -131,9 +131,13 @@ mod raw {
     use super::*;
     use gilrs::{Axis, Button as G, Gilrs};
     use std::cell::RefCell;
+    use std::mem::ManuallyDrop;
 
+    // Never dropped: on Windows the thread-local destructors run inside
+    // ExitProcess, after the OS has killed gilrs's event thread, and its Drop
+    // then panics joining that thread (fail-fast on every window close).
     thread_local! {
-        static GILRS: RefCell<Option<Gilrs>> = RefCell::new(Gilrs::new().ok());
+        static GILRS: RefCell<ManuallyDrop<Option<Gilrs>>> = RefCell::new(ManuallyDrop::new(Gilrs::new().ok()));
     }
 
     pub fn read() -> Option<Raw> {
