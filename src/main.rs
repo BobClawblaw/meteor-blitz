@@ -1,13 +1,15 @@
 //! Meteor Blitz — modern port. Window, screens, input, audio, and loop.
 
 mod game;
+mod progress;
 mod render;
 
 use macroquad::prelude::*;
 use macroquad::audio::{load_sound, play_sound, PlaySoundParams, Sound};
 
 use game::{Event, Game, Input, Mode};
-use render::{Assets, Camera, Explosion, Particle};
+use progress::Progress;
+use render::{Assets, Camera, Explosion, Particle, UiAssets};
 
 fn window_conf() -> Conf {
     Conf {
@@ -26,6 +28,8 @@ enum Screen {
     Play,
     Pause,
     Over,
+    /// Upgrade shop; `from_over` says whether DONE returns to the run summary.
+    Upgrade { from_over: bool },
 }
 
 struct Audio {
@@ -45,15 +49,24 @@ async fn load_frames(start: usize, count: usize) -> Vec<Texture2D> {
     out
 }
 
-fn load_best() -> u64 {
-    std::fs::read_to_string("best.txt")
-        .ok()
-        .and_then(|s| s.trim().parse().ok())
-        .unwrap_or(0)
+async fn load_ui(name: &str) -> Texture2D {
+    load_texture(&format!("assets/ui/{}.png", name)).await.unwrap()
 }
 
-fn save_best(score: u64) {
-    let _ = std::fs::write("best.txt", score.to_string());
+async fn load_ui_assets() -> UiAssets {
+    const ICONS: [&str; game::UPGRADE_COUNT] = ["Standard", "Fire", "Laser", "Speed", "GravityGun", "Boost"];
+    let mut upgrade_icons = Vec::new();
+    let mut upgrade_icons_disabled = Vec::new();
+    for icon in ICONS {
+        upgrade_icons.push(load_ui(&format!("buttonUpgrade{}", icon)).await);
+        upgrade_icons_disabled.push(load_ui(&format!("buttonUpgrade{}Disabled", icon)).await);
+    }
+    UiAssets {
+        upgrade_icons,
+        upgrade_icons_disabled,
+        upgrade_background: load_ui("buttonUpgradeBackground").await,
+        captions: load_ui("captions").await,
+    }
 }
 
 #[macroquad::main(window_conf)]
@@ -76,6 +89,7 @@ async fn main() {
         enemy_turret: load_texture("original/sprites/frame_450.png").await.unwrap(),
         enemy_slinger: load_texture("original/sprites/frame_465.png").await.unwrap(),
         bullet: load_texture("original/sprites/frame_300.png").await.unwrap(),
+        ui: load_ui_assets().await,
     };
     for tex in [
         &assets.crust,
@@ -106,9 +120,10 @@ async fn main() {
     };
     let mut particles: Vec<Particle> = Vec::new();
     let mut explosions: Vec<Explosion> = Vec::new();
-    let mut unlocked: usize = 0;
-    let mut best = load_best();
+    let mut progress = Progress::load();
     let mut music_on = false;
+    // Ore from the finished run is banked once, when the run ends.
+    let mut banked = false;
 
     loop {
         let dt = get_frame_time().min(0.05);
@@ -119,7 +134,8 @@ async fn main() {
                     screen = Screen::Select;
                 }
                 if is_key_pressed(KeyCode::S) {
-                    game = Some(Game::new(Mode::Survival, 0, 1));
+                    game = Some(Game::new(Mode::Survival, 0, 1, progress.upgrades));
+                    banked = false;
                     cam.x = game::WORLD_W * 0.5;
                     cam.y = game::WORLD_H * 0.5;
                     particles.clear();
@@ -134,19 +150,23 @@ async fn main() {
                 if is_key_pressed(KeyCode::Escape) {
                     screen = Screen::Title;
                 }
+                if is_key_pressed(KeyCode::U) {
+                    screen = Screen::Upgrade { from_over: false };
+                }
                 if is_mouse_button_pressed(MouseButton::Left) {
                     let (mx, my) = mouse_position();
                     let start_x = screen_width() * 0.5 - 5.0 * 70.0 * 0.5;
                     for world in 0..6 {
                         for stage in 1..=5 {
                             let idx = world * 5 + stage - 1;
-                            if idx > unlocked {
+                            if idx > progress.unlocked {
                                 continue;
                             }
                             let x = start_x + (stage - 1) as f32 * 70.0;
                             let y = 120.0 + world as f32 * 70.0;
                             if mx >= x && mx <= x + 60.0 && my >= y && my <= y + 60.0 {
-                                game = Some(Game::new(Mode::Arcade, world, stage));
+                                game = Some(Game::new(Mode::Arcade, world, stage, progress.upgrades));
+                                banked = false;
                                 cam.x = game::WORLD_W * 0.5;
                                 cam.y = game::WORLD_H * 0.5;
                                 particles.clear();
@@ -169,18 +189,15 @@ async fn main() {
                     g.update(dt, &input);
                     cam.follow(g.player.x, g.player.y, dt);
                     handle_events(g, &audio, &mut particles, &mut explosions);
-                    if g.over {
-                        if g.score > best {
-                            best = g.score;
-                            save_best(best);
+                    if g.over || g.won {
+                        if g.won && g.mode == Mode::Arcade {
+                            progress.unlocked = progress.unlocked.max(g.world * 5 + g.stage);
                         }
-                        screen = Screen::Over;
-                    } else if g.won {
-                        if g.mode == Mode::Arcade {
-                            let idx = g.world * 5 + g.stage;
-                            if idx > unlocked {
-                                unlocked = idx;
-                            }
+                        if !banked {
+                            progress.best = progress.best.max(g.score);
+                            progress.ore += g.player.ore;
+                            progress.save();
+                            banked = true;
                         }
                         screen = Screen::Over;
                     }
@@ -194,7 +211,8 @@ async fn main() {
             Screen::Over => {
                 if is_key_pressed(KeyCode::Enter) {
                     if let Some(g) = game.as_ref() {
-                        game = Some(Game::new(g.mode, g.world, g.stage));
+                        game = Some(Game::new(g.mode, g.world, g.stage, progress.upgrades));
+                        banked = false;
                         cam.x = game::WORLD_W * 0.5;
                         cam.y = game::WORLD_H * 0.5;
                         particles.clear();
@@ -203,6 +221,31 @@ async fn main() {
                 }
                 if is_key_pressed(KeyCode::Escape) {
                     screen = Screen::Select;
+                }
+                if is_key_pressed(KeyCode::U) {
+                    screen = Screen::Upgrade { from_over: true };
+                }
+            }
+            Screen::Upgrade { from_over } => {
+                let keys = [KeyCode::Key1, KeyCode::Key2, KeyCode::Key3, KeyCode::Key4, KeyCode::Key5, KeyCode::Key6];
+                for (slot, key) in keys.into_iter().enumerate() {
+                    if is_key_pressed(key) && progress.buy(slot) {
+                        play_sound(&audio.shatter, PlaySoundParams { looped: false, volume: 0.5 });
+                    }
+                }
+                let (tiles, done) = render::upgrade_layout();
+                let mut close = is_key_pressed(KeyCode::Enter) || is_key_pressed(KeyCode::Escape);
+                if is_mouse_button_pressed(MouseButton::Left) {
+                    let m = vec2(mouse_position().0, mouse_position().1);
+                    for (slot, r) in tiles.iter().enumerate() {
+                        if r.contains(m) && progress.buy(slot) {
+                            play_sound(&audio.shatter, PlaySoundParams { looped: false, volume: 0.5 });
+                        }
+                    }
+                    close |= done.contains(m);
+                }
+                if close {
+                    screen = if from_over { Screen::Over } else { Screen::Select };
                 }
             }
         }
@@ -219,8 +262,9 @@ async fn main() {
         }
 
         match screen {
-            Screen::Title => render::draw_title(best),
-            Screen::Select => render::draw_stage_select(unlocked),
+            Screen::Title => render::draw_title(progress.best),
+            Screen::Select => render::draw_stage_select(progress.unlocked),
+            Screen::Upgrade { .. } => render::draw_upgrade(&assets.ui, &progress),
             Screen::Pause => render::draw_pause(),
             Screen::Over => {
                 if let Some(g) = game.as_ref() {

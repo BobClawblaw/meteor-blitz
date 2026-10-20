@@ -6,13 +6,17 @@
     <title>Meteor Blitz</title>
     <style>
       html, body { margin: 0; height: 100%; overflow: hidden; background: #05060a; }
-      canvas { display: block; width: 100vw; height: 100vh; }
+      canvas { display: block; width: 100vw; height: 100vh; outline: none; }
     </style>
   </head>
   <body>
-    <canvas id="glcanvas" width="1280" height="720"></canvas>
+    <canvas id="glcanvas" width="1280" height="720" tabindex="0"></canvas>
     <script src="./web/mq_js_bundle.js"></script>
     <script>
+      // miniquad reads keys from canvas.onkeydown, so the canvas must hold focus.
+      const canvas = document.getElementById("glcanvas");
+      canvas.focus();
+      canvas.addEventListener("mousedown", () => canvas.focus());
       load("./web/meteor-blitz.wasm");
     </script>
   </body>

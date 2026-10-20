@@ -5,6 +5,16 @@ pub const WORLD_H: f32 = 3240.0;
 pub const PLAYER_RADIUS: f32 = 14.0;
 pub const PLAYER_MAX_HEALTH: f32 = 150.0;
 
+/// Upgrade slots, in the original shop order.
+pub const UPGRADE_CANNON: usize = 0;
+pub const UPGRADE_FIRE: usize = 1;
+pub const UPGRADE_ICE: usize = 2;
+pub const UPGRADE_SPEED: usize = 3;
+pub const UPGRADE_GRAVITY: usize = 4;
+pub const UPGRADE_BOOST: usize = 5;
+pub const UPGRADE_COUNT: usize = 6;
+pub const UPGRADE_MAX: u8 = 4;
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Faction {
     Player,
@@ -64,7 +74,7 @@ pub struct Player {
     pub overheat_t: f32,
     pub fire_t: f32,
     pub weapon: u8,
-    pub upgrades: [u8; 4],
+    pub upgrades: [u8; UPGRADE_COUNT],
     pub ore: u32,
     pub bombs: u32,
     pub dash_cd: f32,
@@ -125,7 +135,7 @@ pub fn wrap_delta(from: f32, to: f32, size: f32) -> f32 {
 }
 
 impl Game {
-    pub fn new(mode: Mode, world: usize, stage: usize) -> Game {
+    pub fn new(mode: Mode, world: usize, stage: usize, upgrades: [u8; UPGRADE_COUNT]) -> Game {
         let mut g = Game {
             mode,
             world,
@@ -144,7 +154,7 @@ impl Game {
                 overheat_t: 0.0,
                 fire_t: 0.0,
                 weapon: 0,
-                upgrades: [0, 0, 0, 0],
+                upgrades,
                 ore: 0,
                 bombs: 3,
                 dash_cd: 0.0,
@@ -294,14 +304,16 @@ impl Game {
         p.aim_x = input.aim_x;
         p.aim_y = input.aim_y;
         p.weapon = input.weapon;
+        let boost = p.upgrades[UPGRADE_BOOST] as f32;
         if p.dash_t > 0.0 {
             p.dash_t -= dt;
-            p.vx = p.dash_dir_x * 900.0;
-            p.vy = p.dash_dir_y * 900.0;
+            p.vx = p.dash_dir_x * (900.0 + boost * 75.0);
+            p.vy = p.dash_dir_y * (900.0 + boost * 75.0);
         } else {
+            let speed = 320.0 + p.upgrades[UPGRADE_SPEED] as f32 * 40.0;
             let k = (12.0 * dt).min(1.0);
-            p.vx += (mx * 320.0 - p.vx) * k;
-            p.vy += (my * 320.0 - p.vy) * k;
+            p.vx += (mx * speed - p.vx) * k;
+            p.vy += (my * speed - p.vy) * k;
         }
         p.x = wrap(p.x + p.vx * dt, WORLD_W);
         p.y = wrap(p.y + p.vy * dt, WORLD_H);
@@ -321,7 +333,7 @@ impl Game {
             p.dash_dir_x = dx;
             p.dash_dir_y = dy;
             p.dash_t = 0.18;
-            p.dash_cd = 2.5;
+            p.dash_cd = 2.5 - boost * 0.35;
             p.invuln = 0.18;
             self.events.push(Event::Dash(p.x, p.y));
         }
@@ -342,9 +354,18 @@ impl Game {
             (p.weapon, p.upgrades, p.x, p.y, ax, ay)
         };
         let (damage, rate, heat, speed, range, pierce) = match weapon {
-            0 => (10.0 + upgrades[0] as f32 * 4.0, 12.0 + upgrades[0] as f32 * 2.0, 4.0, 900.0, 2.0, 0),
-            1 => (6.0 + upgrades[1] as f32 * 3.0, 20.0 + upgrades[1] as f32 * 2.0, 2.5, 520.0, 0.5, 0),
-            2 => (9.0 + upgrades[2] as f32 * 4.0, 6.0 + upgrades[2] as f32 * 0.5, 6.0, 1100.0, 2.0, upgrades[2] as i32),
+            0 => {
+                let l = upgrades[UPGRADE_CANNON] as f32;
+                (10.0 + l * 4.0, 12.0 + l * 2.0, 4.0, 900.0, 2.0, 0)
+            }
+            1 => {
+                let l = upgrades[UPGRADE_FIRE] as f32;
+                (6.0 + l * 3.0, 20.0 + l * 2.0, 2.5, 520.0, 0.5, 0)
+            }
+            2 => {
+                let l = upgrades[UPGRADE_ICE];
+                (9.0 + l as f32 * 4.0, 6.0 + l as f32 * 0.5, 6.0, 1100.0, 2.0, l as i32)
+            }
             _ => return,
         };
         if self.player.heat + heat > 100.0 {
@@ -388,7 +409,7 @@ impl Game {
         if p.dead {
             return;
         }
-        let radius = 300.0 + p.upgrades[3] as f32 * 40.0;
+        let radius = 300.0 + p.upgrades[UPGRADE_GRAVITY] as f32 * 40.0;
         if input.gravity && p.weapon == 3 {
             if p.grabbed == 0 {
                 let mut best = 0u64;

@@ -2,7 +2,8 @@
 
 use macroquad::prelude::*;
 
-use crate::game::{wrap_delta, Faction, Game, Mode, WORLD_H, WORLD_W};
+use crate::game::{wrap_delta, Faction, Game, Mode, UPGRADE_CANNON, UPGRADE_COUNT, UPGRADE_FIRE, UPGRADE_GRAVITY, UPGRADE_ICE, UPGRADE_MAX, WORLD_H, WORLD_W};
+use crate::progress::{Progress, UPGRADES};
 
 pub struct Assets {
     pub crust: Texture2D,
@@ -22,6 +23,15 @@ pub struct Assets {
     pub enemy_turret: Texture2D,
     pub enemy_slinger: Texture2D,
     pub bullet: Texture2D,
+    pub ui: UiAssets,
+}
+
+/// Original menu art, decoded from the iOS bundle by `tools/decode_ui.py`.
+pub struct UiAssets {
+    pub upgrade_icons: Vec<Texture2D>,
+    pub upgrade_icons_disabled: Vec<Texture2D>,
+    pub upgrade_background: Texture2D,
+    pub captions: Texture2D,
 }
 
 pub struct Particle {
@@ -387,8 +397,9 @@ pub fn draw_hud(game: &Game) {
     draw_text(&format!("BOMB {}", game.player.bombs), w - 226.0, 98.0, 14.0, amber);
 
     panel(20.0, h - 96.0, 240.0, 76.0);
-    let weapon_name = ["PLASMA", "FLAME", "ICE", "GRAVITY"][game.player.weapon as usize];
-    draw_text(&format!("{} {}", weapon_name, ["I", "II", "III"][game.player.upgrades[game.player.weapon as usize] as usize]), 34.0, h - 70.0, 18.0, Color::new(0.9, 1.0, 1.0, 1.0));
+    let slot = [UPGRADE_CANNON, UPGRADE_FIRE, UPGRADE_ICE, UPGRADE_GRAVITY][game.player.weapon as usize];
+    let level = ["I", "II", "III", "IV", "V"][game.player.upgrades[slot] as usize];
+    draw_text(&format!("{} {}", UPGRADES[slot].0, level), 34.0, h - 70.0, 18.0, Color::new(0.9, 1.0, 1.0, 1.0));
     draw_rectangle(34.0, h - 60.0, 200.0, 8.0, Color::new(1.0, 1.0, 1.0, 0.1));
     draw_rectangle(34.0, h - 60.0, 200.0 * (game.player.heat / 100.0), 8.0, if game.player.overheated { amber } else { Color::new(0.15, 0.85, 1.0, 1.0) });
     draw_text(&format!("DASH {:.1}", game.player.dash_cd), 34.0, h - 36.0, 14.0, muted);
@@ -433,7 +444,7 @@ pub fn draw_title(world_best: u64) {
     if world_best > 0 {
         text_center(&format!("BEST {}", world_best), w * 0.5, h * 0.46, 16.0, Color::new(1.0, 0.75, 0.25, 1.0));
     }
-    text_center("WASD move · mouse aim · LMB fire · RMB gravity · E polarity · Shift dash · 1/2/3/4 weapon · U upgrade · B bomb", w * 0.5, h * 0.56, 14.0, Color::new(0.55, 0.65, 0.75, 1.0));
+    text_center("WASD move · mouse aim · LMB fire · RMB gravity · Shift dash · 1/2/3/4 weapon · B bomb", w * 0.5, h * 0.56, 14.0, Color::new(0.55, 0.65, 0.75, 1.0));
     text_center("LAUNCH", w * 0.5, h * 0.68, 28.0, Color::new(0.15, 0.85, 1.0, 1.0));
     text_center("press ENTER", w * 0.5, h * 0.72, 14.0, Color::new(0.55, 0.65, 0.75, 1.0));
 }
@@ -455,7 +466,7 @@ pub fn draw_stage_select(unlocked: usize) {
             text_center(&format!("{}.{}", world + 1, stage), x + 30.0, y + 36.0, 18.0, color);
         }
     }
-    text_center("click a stage · ESC back", w * 0.5, h - 60.0, 14.0, Color::new(0.55, 0.65, 0.75, 1.0));
+    text_center("click a stage · U upgrade · ESC back", w * 0.5, h - 60.0, 14.0, Color::new(0.55, 0.65, 0.75, 1.0));
 }
 
 pub fn draw_pause() {
@@ -472,5 +483,86 @@ pub fn draw_over(score: u64, won: bool) {
     draw_rectangle(0.0, 0.0, w, h, Color::new(0.02, 0.03, 0.06, 0.7));
     text_center(if won { "STAGE CLEAR" } else { "HULL BREACH" }, w * 0.5, h * 0.40, 48.0, Color::new(0.9, 1.0, 1.0, 1.0));
     text_center(&format!("SCORE {}", score), w * 0.5, h * 0.48, 24.0, Color::new(1.0, 0.75, 0.25, 1.0));
-    text_center("ENTER retry · ESC menu", w * 0.5, h * 0.56, 16.0, Color::new(0.55, 0.65, 0.75, 1.0));
+    text_center("ENTER retry · U upgrade · ESC menu", w * 0.5, h * 0.56, 16.0, Color::new(0.55, 0.65, 0.75, 1.0));
+}
+
+/// Caption words in `captions.png`, as source rects (x, y, w, h).
+const CAPTION_UPGRADE: Rect = Rect { x: 0.0, y: 60.0, w: 86.0, h: 11.0 };
+const CAPTION_DONE: Rect = Rect { x: 0.0, y: 81.0, w: 50.0, h: 10.0 };
+
+fn draw_caption(ui: &UiAssets, src: Rect, cx: f32, y: f32, scale: f32, color: Color) {
+    let w = src.w * scale;
+    draw_texture_ex(
+        &ui.captions,
+        cx - w * 0.5,
+        y,
+        color,
+        DrawTextureParams { dest_size: Some(vec2(w, src.h * scale)), source: Some(src), ..Default::default() },
+    );
+}
+
+/// Screen rects of the six upgrade tiles (3x2, original order) and the DONE button.
+pub fn upgrade_layout() -> ([Rect; UPGRADE_COUNT], Rect) {
+    let (tile_w, tile_h, gap) = (300.0, 120.0, 24.0);
+    let x0 = screen_width() * 0.5 - (tile_w * 3.0 + gap * 2.0) * 0.5;
+    let y0 = screen_height() * 0.5 - tile_h - gap * 0.5;
+    let tiles = std::array::from_fn(|i| {
+        let (col, row) = ((i % 3) as f32, (i / 3) as f32);
+        Rect::new(x0 + col * (tile_w + gap), y0 + row * (tile_h + gap), tile_w, tile_h)
+    });
+    let done = Rect::new(screen_width() * 0.5 - 90.0, y0 + 2.0 * (tile_h + gap) + 20.0, 180.0, 56.0);
+    (tiles, done)
+}
+
+pub fn draw_upgrade(ui: &UiAssets, progress: &Progress) {
+    let w = screen_width();
+    let h = screen_height();
+    let muted = Color::new(0.55, 0.65, 0.75, 1.0);
+    let amber = Color::new(1.0, 0.75, 0.25, 1.0);
+    let cyan = Color::new(0.15, 0.85, 1.0, 1.0);
+    draw_rectangle(0.0, 0.0, w, h, Color::new(0.02, 0.03, 0.06, 0.85));
+
+    let (tiles, done) = upgrade_layout();
+    draw_caption(ui, CAPTION_UPGRADE, w * 0.5, tiles[0].y - 90.0, 4.0, WHITE);
+    let ore_text = format!("ORE {}", progress.ore);
+    text_center(&ore_text, w * 0.5, tiles[0].y - 26.0, 24.0, amber);
+
+    let (mx, my) = mouse_position();
+    for (slot, r) in tiles.iter().enumerate() {
+        let affordable = progress.can_buy(slot);
+        let hover = r.contains(vec2(mx, my));
+        panel(r.x, r.y, r.w, r.h);
+        if hover && affordable {
+            draw_rectangle_lines(r.x, r.y, r.w, r.h, 2.0, cyan);
+        }
+        let icon = if affordable { &ui.upgrade_icons[slot] } else { &ui.upgrade_icons_disabled[slot] };
+        let (ix, iy) = (r.x + 12.0, r.y + (r.h - 96.0) * 0.5);
+        draw_texture_ex(&ui.upgrade_background, ix - 8.0, iy, WHITE, DrawTextureParams { dest_size: Some(vec2(120.0, 96.0)), ..Default::default() });
+        draw_texture_ex(icon, ix, iy, WHITE, DrawTextureParams { dest_size: Some(vec2(105.0, 96.0)), ..Default::default() });
+
+        let tx = r.x + 136.0;
+        let name_color = if affordable { Color::new(0.9, 1.0, 1.0, 1.0) } else { muted };
+        draw_text(UPGRADES[slot].0, tx, r.y + 36.0, 22.0, name_color);
+        let cost_text = match progress.cost(slot) {
+            Some(cost) => format!("{} ORE", cost),
+            None => "MAX".to_owned(),
+        };
+        draw_text(&cost_text, tx, r.y + 62.0, 18.0, if affordable { amber } else { muted });
+        for pip in 0..UPGRADE_MAX {
+            let px = tx + pip as f32 * 26.0;
+            let filled = pip < progress.upgrades[slot];
+            if filled {
+                draw_rectangle(px, r.y + 80.0, 18.0, 18.0, cyan);
+            }
+            draw_rectangle_lines(px, r.y + 80.0, 18.0, 18.0, 2.0, if filled { cyan } else { muted });
+        }
+    }
+
+    let hover_done = done.contains(vec2(mx, my));
+    panel(done.x, done.y, done.w, done.h);
+    if hover_done {
+        draw_rectangle_lines(done.x, done.y, done.w, done.h, 2.0, cyan);
+    }
+    draw_caption(ui, CAPTION_DONE, w * 0.5, done.y + 12.0, 3.2, WHITE);
+    text_center("click to buy · 1-6 buy · ENTER done", w * 0.5, done.y + done.h + 36.0, 14.0, muted);
 }
