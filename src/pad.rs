@@ -63,7 +63,26 @@ mod raw {
     use super::*;
     use objc2_game_controller::{GCController, GCControllerButtonInput, GCDevice};
 
+    #[link(name = "CoreFoundation", kind = "framework")]
+    extern "C" {
+        static kCFRunLoopDefaultMode: *const std::ffi::c_void;
+        fn CFRunLoopRunInMode(mode: *const std::ffi::c_void, seconds: f64, return_after_source: u8) -> i32;
+    }
+
+    /// GameController posts its updates as blocks on the main queue, which
+    /// miniquad's event loop (a zero-timeout NSEvent poll) never lets run:
+    /// give the main run loop a turn so they arrive.
+    fn pump_main_queue() {
+        const HANDLED_SOURCE: i32 = 4;
+        for _ in 0..64 {
+            if unsafe { CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.0, 1) } != HANDLED_SOURCE {
+                break;
+            }
+        }
+    }
+
     pub fn read() -> Option<Raw> {
+        pump_main_queue();
         unsafe {
             GCController::setShouldMonitorBackgroundEvents(true);
             let controllers = GCController::controllers();

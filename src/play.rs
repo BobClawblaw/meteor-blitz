@@ -1357,7 +1357,12 @@ impl Play {
         );
         // A controller's left stick is the original's left wheel: speed
         // follows how far it is pushed.
-        let pad_stick = pad::left();
+        // MB_DRIFT=x,y holds the stick there, for screenshot runs.
+        let drift = std::env::var("MB_DRIFT").ok().and_then(|v| {
+            let (x, y) = v.split_once(',')?;
+            Some(vec2(x.parse().ok()?, y.parse().ok()?))
+        });
+        let pad_stick = drift.unwrap_or_else(pad::left);
         if stick != Vec2::ZERO {
             self.ship.vel = stick.normalize() * WHEEL_MAX * SHIP_SPEED;
         } else if pad_stick != Vec2::ZERO {
