@@ -6,6 +6,7 @@ use macroquad::prelude::*;
 use crate::arrow::{self, Arrow};
 use crate::boss::{self, Boss, BossState, Piece, Request};
 use crate::depot::{self, Depot};
+use crate::lobber::{self, Lobber};
 use crate::mine::{self, Mine};
 use crate::seeker::{self, Seeker};
 use crate::shyguy::{self, ShyGuy};
@@ -42,6 +43,13 @@ pub const ROCK_POINTS: u32 = 10;
 const KIND_DEPOT: i32 = 21;
 /// Wave kind for shy guys.
 const KIND_SHY_GUY: i32 = 13;
+/// Wave kind for lobbers.
+const KIND_LOBBER: i32 = 20;
+const LOBBER_WEIGHT: u32 = 4;
+/// Lobber::setState(10007): Enemy::activateBonuses(50, 8).
+const LOBBER_RINGS: u32 = 8;
+/// EnemyManager pool for type 23 (boss pieces and lobber balls).
+const BALL_POOL: usize = 36;
 /// Wave kind for seekers.
 const KIND_SEEKER: i32 = 18;
 const SEEKER_WEIGHT: u32 = 2;
@@ -355,6 +363,14 @@ pub enum Event {
         sound: bool,
         sparks: bool,
     },
+    /// Lobber::setState(10007).
+    LobberDestroyed {
+        pos: Vec2,
+        points: u32,
+        rings: u32,
+        sound: bool,
+        effects: bool,
+    },
     /// Seeker::setState(10007).
     SeekerDestroyed {
         pos: Vec2,
@@ -440,6 +456,7 @@ pub struct Field {
     pub arrows: Vec<Arrow>,
     pub towers: Vec<Tower>,
     pub seekers: Vec<Seeker>,
+    pub lobbers: Vec<Lobber>,
     pub boss: Option<Boss>,
     pub pieces: Vec<Piece>,
     /// Animation frame counts by size: small atlas, medium, large, extra large.
@@ -460,6 +477,7 @@ impl Field {
             arrows: Vec::new(),
             towers: Vec::new(),
             seekers: Vec::new(),
+            lobbers: Vec::new(),
             boss: None,
             pieces: Vec::new(),
             frames,
@@ -495,7 +513,114 @@ impl Field {
             + self.arrows.len() as u32
             + self.towers.len() as u32 * TOWER_WEIGHT
             + self.seekers.len() as u32 * SEEKER_WEIGHT
+            + self.lobbers.len() as u32 * LOBBER_WEIGHT
             + self.boss.is_some() as u32
+    }
+
+    fn spawn_lobber(&mut self, pos: Vec2) {
+        if self.lobbers.len() < lobber::POOL {
+            self.lobbers.push(Lobber::new(pos));
+        }
+    }
+
+    /// Lobber::setState(10007); a ball it still holds dies with it.
+    pub fn destroy_lobber(&mut self, index: usize, score: bool, sound: bool, effects: bool) {
+        let l = self.lobbers.swap_remove(index);
+        self.events.push(Event::LobberDestroyed {
+            pos: l.pos,
+            points: if score { lobber::POINTS } else { 0 },
+            rings: if score { LOBBER_RINGS } else { 0 },
+            sound,
+            effects,
+        });
+        if let Some(mut ball) = l.ball {
+            // BossOutside::detach(0, 0, 0) then setState(10007): free, so it
+            // whooshes and bursts.
+            ball.throw(Vec2::ZERO);
+            self.events.push(Event::PieceDestroyed {
+                pos: ball.pos,
+                sound: true,
+                effects: true,
+                attached: false,
+            });
+        }
+    }
+
+    /// The ball lobber `index` holds is destroyed.
+    pub fn destroy_held_ball(&mut self, index: usize) {
+        if let Some(ball) = self.lobbers[index].ball.take() {
+            self.events.push(Event::PieceDestroyed {
+                pos: ball.pos,
+                sound: false,
+                effects: true,
+                attached: true,
+            });
+        }
+    }
+
+    /// Lobbers, and lobbers whose held ball, touch a circle (the ship).
+    pub fn touching_lobbers(&self, centre: Vec2, radius: f32) -> (Vec<usize>, Vec<usize>) {
+        let near = |p: Vec2, r: f32| {
+            let c = vec2(wrap_near(p.x, centre.x), wrap_near(p.y, centre.y));
+            c.distance_squared(centre) < (r + radius).powi(2)
+        };
+        let bodies = (0..self.lobbers.len())
+            .filter(|&i| self.lobbers[i].active() && near(self.lobbers[i].pos, lobber::RADIUS))
+            .collect();
+        let balls = (0..self.lobbers.len())
+            .filter(|&i| {
+                self.lobbers[i]
+                    .ball
+                    .as_ref()
+                    .is_some_and(|b| b.active() && near(b.pos, boss::PIECE_RADIUS))
+            })
+            .collect();
+        (bodies, balls)
+    }
+
+    /// lobberCollision: lobbers push each other apart; towers, depots and
+    /// boss parts push them away; rocks bounce off them.
+    fn lobber_collisions(&mut self) {
+        let n = self.lobbers.len();
+        for i in 0..n {
+            if !self.lobbers[i].active() {
+                continue;
+            }
+            for j in i + 1..n {
+                if !self.lobbers[j].active() {
+                    continue;
+                }
+                let (left, right) = self.lobbers.split_at_mut(j);
+                let (a, b) = (&mut left[i], &mut right[0]);
+                let bp = vec2(wrap_near(b.pos.x, a.pos.x), wrap_near(b.pos.y, a.pos.y));
+                let d = bp - a.pos;
+                let r = lobber::RADIUS * 2.0;
+                if d != Vec2::ZERO && d.length_squared() < r * r {
+                    let push = d.normalize() * (r * r - d.length_squared()) * mine::REPEL;
+                    a.impulse -= push;
+                    b.impulse += push;
+                }
+            }
+            let mut others: Vec<(Vec2, f32)> = Vec::new();
+            others.extend(self.towers.iter().filter(|t| t.active()).map(|t| (t.pos, tower::RADIUS)));
+            others.extend(self.depots.iter().filter(|d| d.active()).map(|d| (d.pos, depot::RADIUS)));
+            others.extend(self.pieces.iter().filter(|p| p.active()).map(|p| (p.pos, boss::PIECE_RADIUS)));
+            others.extend(self.boss.iter().filter(|b| b.active()).map(|b| (b.pos, boss::RADIUS)));
+            let l = &mut self.lobbers[i];
+            for (pos, radius) in others {
+                let c = vec2(wrap_near(pos.x, l.pos.x), wrap_near(pos.y, l.pos.y));
+                if c.distance_squared(l.pos) < (lobber::RADIUS + radius).powi(2) {
+                    l.push_from(c, radius, mine::REPEL * 2.0);
+                }
+            }
+            let lp = l.pos;
+            for rock in self.rocks.iter_mut().filter(|r| r.active()) {
+                let c = vec2(wrap_near(lp.x, rock.pos.x), wrap_near(lp.y, rock.pos.y));
+                if c.distance_squared(rock.pos) < (rock.radius() + lobber::RADIUS).powi(2) {
+                    bounce_off(rock, c, lobber::MASS);
+                }
+            }
+        }
     }
 
     fn spawn_seeker(&mut self, pos: Vec2) {
@@ -596,6 +721,7 @@ impl Field {
     fn obstacles(&self) -> Vec<(Vec2, f32)> {
         let mut out = Vec::new();
         out.extend(self.towers.iter().filter(|t| t.active()).map(|t| (t.pos, tower::RADIUS)));
+        out.extend(self.lobbers.iter().filter(|l| l.active()).map(|l| (l.pos, lobber::RADIUS)));
         out.extend(self.depots.iter().filter(|d| d.active()).map(|d| (d.pos, depot::RADIUS)));
         out.extend(self.pieces.iter().filter(|p| p.active()).map(|p| (p.pos, boss::PIECE_RADIUS)));
         out.extend(self.boss.iter().filter(|b| b.active()).map(|b| (b.pos, boss::RADIUS)));
@@ -926,6 +1052,10 @@ impl Field {
         while !self.depots.is_empty() {
             self.destroy_depot(0, false);
         }
+        while !self.lobbers.is_empty() {
+            let effects = visible(self.lobbers[0].pos);
+            self.destroy_lobber(0, false, false, effects);
+        }
         while !self.seekers.is_empty() {
             let effects = visible(self.seekers[0].pos);
             self.destroy_seeker(0, false, false, effects);
@@ -1020,6 +1150,7 @@ impl Field {
             None if kind == KIND_ARROW => self.arrows.len(),
             None if kind == KIND_TOWER => self.towers.len(),
             None if kind == KIND_SEEKER => self.seekers.len(),
+            None if kind == KIND_LOBBER => self.lobbers.len(),
             None => 0,
         }
     }
@@ -1070,6 +1201,14 @@ impl Field {
         for k in &mut self.seekers {
             k.update(dt, ship, centre);
         }
+        for i in 0..self.lobbers.len() {
+            let held = self.lobbers.iter().filter(|l| l.ball.is_some()).count();
+            let can_load = self.pieces.len() + held < BALL_POOL;
+            if let Some(ball) = self.lobbers[i].update(dt, ship, centre, can_load) {
+                self.pieces.push(ball);
+            }
+        }
+        self.lobber_collisions();
         self.seeker_collisions();
         // towerCollision: towers never move, but push depots (repelOther),
         // and rocks bounce off them (Enemy::bounceThis).
@@ -1186,6 +1325,30 @@ impl Field {
                     self.events.push(Event::DepotHit);
                 } else {
                     self.destroy_depot(i, true);
+                }
+                return true;
+            }
+        }
+        for i in 0..self.lobbers.len() {
+            let l = &self.lobbers[i];
+            if let Some(b) = l.ball.as_ref().filter(|b| b.active()) {
+                let c = vec2(wrap_near(b.pos.x, to.x), wrap_near(b.pos.y, to.y));
+                if segment_distance(c, from, to) < boss::PIECE_RADIUS + radius {
+                    let dead = self.lobbers[i].ball.as_mut().is_some_and(|b| b.hit(damage));
+                    if dead {
+                        self.destroy_held_ball(i);
+                    } else {
+                        self.events.push(Event::BossHit);
+                    }
+                    return true;
+                }
+            }
+            let c = vec2(wrap_near(l.pos.x, to.x), wrap_near(l.pos.y, to.y));
+            if l.active() && segment_distance(c, from, to) < lobber::RADIUS + radius {
+                if self.lobbers[i].hit(damage) {
+                    self.destroy_lobber(i, true, true, true);
+                } else {
+                    self.events.push(Event::DepotHit);
                 }
                 return true;
             }
@@ -1591,6 +1754,9 @@ impl Script {
                     let p = self.origin + offset;
                     let p = vec2(wrap_near(p.x, ship.x), wrap_near(p.y, ship.y));
                     field.spawn_boss(p, self.world, self.stage, ship);
+                } else if wave.kind == KIND_LOBBER {
+                    let p = self.origin + offset;
+                    field.spawn_lobber(vec2(wrap_near(p.x, ship.x), wrap_near(p.y, ship.y)));
                 } else if wave.kind == KIND_SEEKER {
                     let p = self.origin + offset;
                     field.spawn_seeker(vec2(wrap_near(p.x, ship.x), wrap_near(p.y, ship.y)));

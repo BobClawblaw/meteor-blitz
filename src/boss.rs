@@ -171,7 +171,7 @@ fn around(mut a: f32, reference: f32) -> f32 {
 }
 
 impl Piece {
-    fn new(pos: Vec2) -> Piece {
+    pub fn new(pos: Vec2) -> Piece {
         Piece {
             pos,
             vel: Vec2::ZERO,
@@ -208,6 +208,28 @@ impl Piece {
             None => self.vel = vel,
             Some(c) => self.carrier = Some(c),
         }
+    }
+
+    /// BossOutside::update while a lobber holds it: it rides at `pos`.
+    pub fn hold(&mut self, dt: f32, pos: Vec2) {
+        self.flash = false;
+        self.pos = pos;
+        if !self.active {
+            self.z = (self.z + dt * DROP_IN_SPEED).min(0.0);
+            self.alpha += dt * FADE_IN_SPEED;
+            if self.alpha >= 1.0 {
+                self.active = true;
+                self.alpha = 1.0;
+                self.z = 0.0;
+            }
+        } else {
+            self.angle = (self.angle + self.spin * dt) % 360.0;
+        }
+    }
+
+    /// BossOutside::detach(0, v): thrown free.
+    pub fn throw(&mut self, vel: Vec2) {
+        self.detach(vel, None);
     }
 
     /// BossOutside::update. Returns true when a free piece runs out of time.

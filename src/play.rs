@@ -109,6 +109,8 @@ pub const SOUND_POWER: usize = 2;
 pub const SOUND_SLOW: usize = 16;
 /// Mine::setState(10007): Enemy::activateBonuses(50, 1).
 const MINE_RING_SPEED: f32 = 50.0;
+/// Lobber::setState(10007): its two ring bursts sit 10 units either side.
+const LOBBER_RING_SPREAD: f32 = 10.0;
 /// BossInside::setState(10006) and (10007).
 pub const SOUND_BOSS_DYING: usize = 6;
 pub const SOUND_BOSS_DEAD: usize = 7;
@@ -179,6 +181,7 @@ pub struct PlayAssets {
     pub arrow: Texture2D,
     pub tower: Texture2D,
     pub seeker: Texture2D,
+    pub lobber: Texture2D,
     /// shyGuyFrames.png: a 4x4 atlas of 32x32 frames.
     pub shy_guy: Texture2D,
     /// pillHead.1.png and pillBody.1.png.
@@ -764,6 +767,22 @@ impl Play {
         if !boosting && self.field.beam_hits(self.ship.pos, SHIP_RADIUS) {
             hit = true;
         }
+        // Lobbers die on contact and take the ship with them unless
+        // boosting; a held ball is smashed by a boost and deadly otherwise.
+        let (bodies, balls) = self.field.touching_lobbers(self.ship.pos, SHIP_RADIUS);
+        for &i in &balls {
+            if boosting {
+                self.field.destroy_held_ball(i);
+            } else {
+                hit = true;
+            }
+        }
+        let mut bodies = bodies;
+        bodies.sort_unstable_by(|a, b| b.cmp(a));
+        for i in bodies {
+            self.field.destroy_lobber(i, true, true, true);
+            hit |= !boosting;
+        }
         // Seekers die on contact and take the ship with them unless boosting.
         let mut seekers = self.field.touching_seekers(self.ship.pos, SHIP_RADIUS);
         seekers.sort_unstable_by(|a, b| b.cmp(a));
@@ -1022,6 +1041,26 @@ impl Play {
                         self.effects.start(Kind::Point, 3, pos, away, false);
                     }
                 }
+                Event::LobberDestroyed {
+                    pos,
+                    points,
+                    rings,
+                    sound,
+                    effects,
+                } => {
+                    if sound {
+                        self.sounds.push(SOUND_DEPOT_DESTROYED);
+                    }
+                    if effects {
+                        self.effects.start(Kind::Sprite, 5, pos, 0.0, false);
+                        self.effects.start(Kind::Ring, 3, pos + vec2(LOBBER_RING_SPREAD, 0.0), 0.0, false);
+                        self.effects.start(Kind::Ring, 3, pos - vec2(LOBBER_RING_SPREAD, 0.0), 0.0, false);
+                        self.effects.start(Kind::Point, 5, pos, 0.0, false);
+                    }
+                    self.score += (points * self.multiplier) as u64;
+                    self.pickups
+                        .drop(pos, MINE_RING_SPEED, rings, self.magnet > 0.0);
+                }
                 Event::SeekerDestroyed {
                     pos,
                     points,
@@ -1266,6 +1305,7 @@ impl Play {
             .chain(self.field.arrows.iter().filter(|a| a.active()).map(|a| a.pos))
             .chain(self.field.towers.iter().filter(|t| t.active()).map(|t| t.pos))
             .chain(self.field.seekers.iter().filter(|k| k.active()).map(|k| k.pos))
+            .chain(self.field.lobbers.iter().filter(|l| l.active()).map(|l| l.pos))
             .chain(self.field.pieces.iter().filter(|p| p.active()).map(|p| p.pos))
             .chain(self.field.boss.iter().filter(|b| b.active()).map(|b| b.pos))
             .map(|p| vec2(wrap_near(p.x, ship.x), wrap_near(p.y, ship.y)))
@@ -1455,6 +1495,25 @@ impl Play {
                 canvas.flashing(draw);
             } else {
                 draw();
+            }
+        }
+        for l in &self.field.lobbers {
+            let s = self.to_screen(l.pos);
+            let color = Color::new(1.0, 1.0, 1.0, l.alpha);
+            let draw = || draw_sprite(&assets.lobber, s.x, s.y, l.angle, self.z + l.z, color);
+            if l.flash {
+                canvas.flashing(draw);
+            } else {
+                draw();
+            }
+            if let Some(b) = &l.ball {
+                let color = Color::new(1.0, 1.0, 1.0, b.alpha);
+                let draw = || draw_sprite(&assets.boss_piece, s.x, s.y, b.angle, self.z + b.z, color);
+                if b.flash {
+                    canvas.flashing(draw);
+                } else {
+                    draw();
+                }
             }
         }
         for k in &self.field.seekers {

@@ -8,6 +8,7 @@ mod enemies;
 mod gfx;
 mod hud;
 mod menu;
+mod lobber;
 mod mine;
 mod particles;
 mod play;
@@ -439,6 +440,7 @@ async fn load_play_assets() -> PlayAssets {
         arrow: load_sprite("arrow").await,
         tower: load_sprite("tower.1").await,
         seeker: load_sprite("seeker").await,
+        lobber: load_sprite("lobber").await,
         shy_guy: load_sprite("shyGuyFrames").await,
         snake_head: load_sprite("pillHead.1").await,
         snake_body: load_sprite("pillBody.1").await,
