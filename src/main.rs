@@ -475,6 +475,11 @@ async fn load_play_assets() -> PlayAssets {
 
 #[macroquad::main(window_conf)]
 async fn main() {
+    // MB_ROOT points at the project (assets and original/) when the game
+    // starts from elsewhere, as an .app bundle does.
+    if let Some(root) = std::env::var_os("MB_ROOT") {
+        let _ = std::env::set_current_dir(root);
+    }
     let ui = load_ui_set().await;
     let menu_assets = load_menu_assets().await;
     let play_assets = load_play_assets().await;
