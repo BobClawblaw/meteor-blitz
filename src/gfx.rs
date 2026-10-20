@@ -373,8 +373,12 @@ impl Canvas {
         // with the play plane instead (see `glued_scroll`); clouds keep
         // their 1.5x lead over it.
         let k = if menu { ORIGINAL_SCROLL } else { glued_scroll() };
-        self.backdrop_material.set_uniform("Scroll0", wrap(k));
-        self.backdrop_material.set_uniform("Scroll1", wrap(k * 1.5));
+        // The mesh's v runs against y (GL textures start at the bottom), so
+        // in game the vertical scroll goes the other way for the ground to
+        // move opposite the ship, as it does horizontally.
+        let flip = |v: Vec2| if menu { v } else { vec2(v.x, (1.0 - v.y).fract()) };
+        self.backdrop_material.set_uniform("Scroll0", flip(wrap(k)));
+        self.backdrop_material.set_uniform("Scroll1", flip(wrap(k * 1.5)));
         gl_use_material(&self.backdrop_material);
         draw_mesh(&mesh);
         gl_use_default_material();
