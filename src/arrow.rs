@@ -4,6 +4,7 @@
 
 use macroquad::prelude::*;
 
+use crate::gravity::Grav;
 use crate::enemies::{wrap_near, DROP_IN_HEIGHT, DROP_IN_SPEED, FADE_IN_START, FADE_IN_SPEED};
 
 /// Arrow::Arrow: cpCircleShapeNew radius 11.
@@ -18,6 +19,8 @@ const DRAG: f32 = 0.3;
 const THRUST: f32 = 500.0;
 
 pub struct Arrow {
+    /// In the gravity gun's grip, or just thrown by it.
+    pub grav: Option<Grav>,
     pub pos: Vec2,
     impulse: Vec2,
     dir: Vec2,
@@ -35,6 +38,7 @@ impl Arrow {
         let a = heading.to_radians();
         Arrow {
             pos,
+            grav: None,
             impulse: Vec2::ZERO,
             dir: vec2(a.sin(), -a.cos()),
             angle: heading,
@@ -47,11 +51,14 @@ impl Arrow {
     }
 
     pub fn active(&self) -> bool {
-        self.active
+        self.active && self.grav.is_none()
     }
 
     /// Arrow::update.
     pub fn update(&mut self, dt: f32, centre: Vec2) {
+        if self.grav.is_some() {
+            return;
+        }
         self.flash = false;
         if self.active {
             self.impulse += self.dir * THRUST * dt;

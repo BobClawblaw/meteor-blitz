@@ -3,6 +3,7 @@
 
 use macroquad::prelude::*;
 
+use crate::gravity::Grav;
 use crate::enemies::{wrap_near, DROP_IN_HEIGHT, DROP_IN_SPEED, FADE_IN_START, FADE_IN_SPEED};
 
 /// ShyGuy::ShyGuy: cpCircleShapeNew radius 10.
@@ -20,6 +21,8 @@ pub const FRAMES: usize = 16;
 const FRAME_SECONDS: f32 = 0.05;
 
 pub struct ShyGuy {
+    /// In the gravity gun's grip, or just thrown by it.
+    pub grav: Option<Grav>,
     pub pos: Vec2,
     pub impulse: Vec2,
     pub angle: f32,
@@ -36,6 +39,7 @@ impl ShyGuy {
     pub fn new(pos: Vec2) -> ShyGuy {
         ShyGuy {
             pos,
+            grav: None,
             impulse: Vec2::ZERO,
             angle: 0.0,
             z: -DROP_IN_HEIGHT,
@@ -49,7 +53,7 @@ impl ShyGuy {
     }
 
     pub fn active(&self) -> bool {
-        self.active
+        self.active && self.grav.is_none()
     }
 
     fn animate(&mut self, dt: f32) {
@@ -60,6 +64,9 @@ impl ShyGuy {
 
     /// ShyGuy::update.
     pub fn update(&mut self, dt: f32, ship: Vec2, centre: Vec2) {
+        if self.grav.is_some() {
+            return;
+        }
         self.flash = false;
         if self.active {
             let to = vec2(wrap_near(ship.x, self.pos.x), wrap_near(ship.y, self.pos.y)) - self.pos;

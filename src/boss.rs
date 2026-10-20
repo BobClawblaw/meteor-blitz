@@ -8,6 +8,7 @@
 
 use macroquad::prelude::*;
 
+use crate::gravity::Grav;
 use crate::enemies::{wrap_near, Element, DROP_IN_HEIGHT, DROP_IN_SPEED, FADE_IN_START, FADE_IN_SPEED};
 
 /// BossInside::BossInside: cpCircleShapeNew radius 16, mass 30.
@@ -115,6 +116,8 @@ pub struct Boss {
     pub death_effect: u64,
     /// Killed by a bomb: worth half (BossInside::handleEvent(10)).
     pub bombed: bool,
+    /// Killed by something thrown with the gravity gun: worth double.
+    pub thrown_at: bool,
 }
 
 pub struct Piece {
@@ -141,6 +144,8 @@ pub struct Piece {
     /// pattern 2's orbiting throw, None for a straight throw.
     carrier: Option<(Vec2, Vec2, f32)>,
     life: f32,
+    /// In the gravity gun's grip, or just thrown by it.
+    pub grav: Option<Grav>,
 }
 
 /// Something the boss asks the field to do.
@@ -194,11 +199,17 @@ impl Piece {
             radius_rate: 0.0,
             carrier: None,
             life: 0.0,
+            grav: None,
         }
     }
 
     pub fn active(&self) -> bool {
-        self.active
+        self.active && self.grav.is_none()
+    }
+
+    /// BossOutside::handleEvent(5): a free piece comes to the gravity gun.
+    pub fn catchable(&self) -> bool {
+        self.active() && !self.attached
     }
 
     /// BossOutside::detach.
@@ -237,6 +248,9 @@ impl Piece {
     /// BossOutside::update. Returns true when a free piece runs out of time.
     pub fn update(&mut self, dt: f32, centre: Vec2) -> bool {
         self.flash = false;
+        if self.grav.is_some() {
+            return false;
+        }
         let mut expired = false;
         if !self.active {
             self.z = (self.z + dt * DROP_IN_SPEED).min(0.0);
@@ -322,6 +336,7 @@ impl Boss {
             last_boost: None,
             death_effect: 0,
             bombed: false,
+            thrown_at: false,
         }
     }
 

@@ -6,6 +6,7 @@ mod boss;
 mod depot;
 mod enemies;
 mod gfx;
+mod gravity;
 mod hud;
 mod menu;
 mod lobber;

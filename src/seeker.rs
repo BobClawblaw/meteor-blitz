@@ -3,6 +3,7 @@
 
 use macroquad::prelude::*;
 
+use crate::gravity::Grav;
 use crate::enemies::{wrap_near, DROP_IN_HEIGHT, DROP_IN_SPEED, FADE_IN_START, FADE_IN_SPEED};
 
 /// Seeker::Seeker / reset: radius 15; pool for type 18.
@@ -19,6 +20,8 @@ const STEER: f32 = 200.0;
 const LOOP: f32 = 800.0;
 
 pub struct Seeker {
+    /// In the gravity gun's grip, or just thrown by it.
+    pub grav: Option<Grav>,
     pub pos: Vec2,
     pub impulse: Vec2,
     pub angle: f32,
@@ -34,6 +37,7 @@ impl Seeker {
     pub fn new(pos: Vec2) -> Seeker {
         Seeker {
             pos,
+            grav: None,
             impulse: Vec2::ZERO,
             angle: rand::gen_range(0.0, 360.0),
             z: -DROP_IN_HEIGHT,
@@ -46,11 +50,14 @@ impl Seeker {
     }
 
     pub fn active(&self) -> bool {
-        self.active
+        self.active && self.grav.is_none()
     }
 
     /// Seeker::update.
     pub fn update(&mut self, dt: f32, ship: Vec2, centre: Vec2) {
+        if self.grav.is_some() {
+            return;
+        }
         self.flash = false;
         if self.active {
             let to = vec2(wrap_near(ship.x, self.pos.x), wrap_near(ship.y, self.pos.y)) - self.pos;

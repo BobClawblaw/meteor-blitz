@@ -4,6 +4,7 @@
 
 use macroquad::prelude::*;
 
+use crate::gravity::Grav;
 use crate::enemies::{wrap_near, DROP_IN_HEIGHT, DROP_IN_SPEED, FADE_IN_START, FADE_IN_SPEED};
 
 /// Mine::Mine: cpCircleShapeNew radius 14.
@@ -26,6 +27,8 @@ const SPARK_UPDATES: i32 = 8;
 pub const REPEL: f32 = 0.01;
 
 pub struct Mine {
+    /// In the gravity gun's grip, or just thrown by it.
+    pub grav: Option<Grav>,
     pub pos: Vec2,
     pub impulse: Vec2,
     pub angle: f32,
@@ -43,6 +46,7 @@ impl Mine {
     pub fn new(pos: Vec2) -> Mine {
         Mine {
             pos,
+            grav: None,
             impulse: Vec2::ZERO,
             angle: 0.0,
             spin: SPIN,
@@ -57,11 +61,14 @@ impl Mine {
     }
 
     pub fn active(&self) -> bool {
-        self.active
+        self.active && self.grav.is_none()
     }
 
     /// Mine::update.
     pub fn update(&mut self, dt: f32, ship: Vec2, centre: Vec2) {
+        if self.grav.is_some() {
+            return;
+        }
         self.flash = false;
         if self.active {
             let to = vec2(wrap_near(ship.x, self.pos.x), wrap_near(ship.y, self.pos.y)) - self.pos;

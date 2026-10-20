@@ -16,6 +16,7 @@ use macroquad::prelude::*;
 use crate::enemies::{wrap_near, Element, Event, Field, Rock, Script, Weapon};
 use crate::gfx::{draw_atlas_sprite, draw_quad, draw_sprite, Canvas};
 use crate::bonus::{Power, Rings};
+use crate::gravity;
 use crate::boss::{self, BossState};
 use crate::tower;
 use crate::weapons::{self, FireGun, LaserGun};
@@ -105,6 +106,8 @@ pub const SOUND_BOOST_READY: usize = 5;
 pub const SOUND_WAVE: usize = 11;
 /// Ship::bomb.
 pub const SOUND_BOMB: usize = 3;
+/// GameScreen::updateStateReady: the double press for the gravity gun.
+const DOUBLE_PRESS: f32 = 0.3;
 /// Bonus::setState(0): the ring pickup chime.
 pub const SOUND_RING: usize = 9;
 /// BigBonus::setState(0): power-up pickup, and the slow-motion one.
@@ -615,6 +618,8 @@ pub struct Play {
     pickups: Rings,
     /// Global::bonusAlwaysGoToShipSeconds: new rings home in at once.
     magnet: f32,
+    /// GameScreen 0x30: seconds since the last trigger press.
+    since_press: f32,
     time: TimeScale,
     high_score: u64,
     /// `Audio::play` ids raised this update, for the caller to play.
@@ -656,6 +661,7 @@ impl Play {
             multiplier_base: 0,
             pickups: Rings::default(),
             magnet: 0.0,
+            since_press: 1.0,
             time: TimeScale::default(),
             high_score,
             sounds: Vec::new(),
@@ -745,6 +751,8 @@ impl Play {
 
         self.script.update(dt, self.ship.pos, &mut self.field);
         self.time.update(dt);
+        self.field.time_factor = self.time.factor;
+        self.field.aim = self.ship.aim_dir;
         self.field.update(dt * self.time.factor, self.ship.pos);
         self.follow_boss_death();
         self.update_rings(dt);
@@ -911,6 +919,7 @@ impl Play {
 
     /// Ship::setState(4).
     fn kill_ship(&mut self) {
+        self.field.gun_release();
         self.ship.life = Life::Dead(0.0);
         self.ship.bullets.clear();
         self.ship.aiming = false;
@@ -1118,6 +1127,10 @@ impl Play {
                 }
                 Event::WaveIncoming => self.sounds.push(SOUND_WAVE),
                 Event::DepotHit | Event::BossHit => self.sounds.push(SOUND_DEPOT_HIT),
+                Event::GravityBurst { pos } => {
+                    self.effects.start(Kind::Ring, 7, pos, 0.0, false);
+                }
+                Event::Shake => self.camera.shake(0.75, 7.5),
                 Event::MineHit { pos, sound, sparks } => {
                     if sound {
                         self.sounds.push(SOUND_DEPOT_HIT);
@@ -1380,14 +1393,37 @@ impl Play {
             if dir != Vec2::ZERO {
                 self.ship.shoot(dt, dir);
             }
+            // MB_GUN: reach out every 2 s and throw 1.5 s later.
+            if std::env::var_os("MB_GUN").is_some() {
+                let phase = self.elapsed % 2.0;
+                if phase < dt {
+                    self.field.gun.activate();
+                } else if (1.5..1.5 + dt).contains(&phase) {
+                    self.field.gun_release();
+                }
+            }
         } else if is_mouse_button_down(MouseButton::Left) {
             let dir = (Canvas::mouse() - self.to_screen(self.ship.pos)).normalize_or_zero();
             if dir != Vec2::ZERO {
                 self.ship.shoot(dt, dir);
             }
+            // GameScreen::updateStateReady: a second press within 0.3 s of
+            // the last (or E here) reaches out with the gravity gun.
+            if is_mouse_button_pressed(MouseButton::Left) {
+                if self.since_press < DOUBLE_PRESS {
+                    self.field.gun.activate();
+                }
+                self.since_press = 0.0;
+            }
+            if is_key_pressed(KeyCode::E) {
+                self.field.gun.activate();
+            }
         } else {
             self.ship.hold_fire();
+            // Letting go of the trigger throws what the gun holds.
+            self.field.gun_release();
         }
+        self.since_press += dt;
     }
 
     fn nearest_rock(&self) -> Option<Vec2> {
@@ -1432,6 +1468,38 @@ impl Play {
                 }
             }
         }
+    }
+
+    /// GravityGun::draw and CustomSpriteSystem::draw: the reaching cone (or
+    /// the tether to what it holds) and the sparkle trails, all additive.
+    fn draw_gravity(&self, canvas: &Canvas, assets: &PlayAssets) {
+        let sparks: Vec<(Vec2, Color)> = self.field.sparks.points().map(|(p, c)| (self.to_screen(p), c)).collect();
+        for (p, c) in &sparks {
+            canvas.draw_points(&assets.spark, &[(*p, gravity::SPARK_SIZE)], self.z, *c);
+        }
+        let ship = self.to_screen(self.ship.pos);
+        let gripped = self.field.gripped();
+        if !self.field.gun.active && gripped.is_none() {
+            return;
+        }
+        let white = Color::new(1.0, 1.0, 1.0, 0.5);
+        let clear = Color::new(1.0, 1.0, 0.0, 0.0);
+        let (len, dir) = match gripped {
+            Some(p) => {
+                let d = self.to_screen(p) - ship;
+                (d.length(), d.normalize_or_zero())
+            }
+            None => (gravity::REACH, self.ship.aim_dir),
+        };
+        let spread = if gripped.is_some() { 5.0f32.to_radians().tan() * len } else { 5.0 };
+        let side = vec2(-dir.y, dir.x);
+        let tip = ship + dir * len;
+        let verts = vec![
+            Vertex::new(ship.x, ship.y, self.z, 0.0, 0.0, white),
+            Vertex::new(tip.x - side.x * spread, tip.y - side.y * spread, self.z, 0.0, 0.0, clear),
+            Vertex::new(tip.x + side.x * spread, tip.y + side.y * spread, self.z, 0.0, 0.0, clear),
+        ];
+        canvas.draw_triangles(verts, vec![0, 1, 2], None, true);
     }
 
     /// Texture::drawMultiple2D / drawMultipleBlend2D for one weapon's shots.
@@ -1703,6 +1771,7 @@ impl Play {
         self.draw_shots(canvas, &assets.laser, Weapon::Laser, weapons::LASER_DRAW_BACK, false);
         self.draw_shots(canvas, &assets.flame, Weapon::Fire, weapons::FIRE_DRAW_BACK, true);
 
+        self.draw_gravity(canvas, assets);
         self.draw_ship(assets);
         self.effects
             .draw(canvas, &assets.spark, self.z, |p| self.to_screen(p));

@@ -6,6 +6,7 @@ use macroquad::prelude::*;
 use crate::arrow::{self, Arrow};
 use crate::boss::{self, Boss, BossState, Piece, Request};
 use crate::depot::{self, Depot};
+use crate::gravity::{self, Grav, GravityGun, Phase, Sparks};
 use crate::lobber::{self, Lobber};
 use crate::mine::{self, Mine};
 use crate::seeker::{self, Seeker};
@@ -161,6 +162,8 @@ pub struct Rock {
     pub points: u32,
     /// Enemy 0x4d: scores and drops rings (not the boss's rocks).
     scored: bool,
+    /// In the gravity gun's grip, or just thrown by it.
+    pub grav: Option<Grav>,
 }
 
 impl Rock {
@@ -187,6 +190,7 @@ impl Rock {
             sparked: false,
             points: ROCK_POINTS,
             scored: true,
+            grav: None,
         };
         // Animation::setRandomFrame.
         rock.frame = rand::gen_range(0, frames.max(1));
@@ -198,7 +202,7 @@ impl Rock {
     }
 
     pub fn active(&self) -> bool {
-        self.state == State::Active
+        self.state == State::Active && self.grav.is_none()
     }
 
     fn mass(&self) -> f32 {
@@ -221,6 +225,9 @@ impl Rock {
 
     /// Rock::update after Enemy::update.
     fn update(&mut self, dt: f32, centre: Vec2) {
+        if self.grav.is_some() {
+            return;
+        }
         match self.state {
             State::DropIn => {
                 self.z = (self.z + dt * DROP_IN_SPEED).min(0.0);
@@ -331,6 +338,47 @@ fn bounced(pa: Vec2, va: Vec2, ma: f32, pb: Vec2, vb: Vec2, mb: f32) -> (Vec2, V
     (va - n * (mb * k), vb + n * (ma * k))
 }
 
+/// An enemy, by kind and index into its list.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Target {
+    Rock(usize),
+    Depot(usize),
+    Mine(usize),
+    ShyGuy(usize),
+    Arrow(usize),
+    Seeker(usize),
+    Snake(usize),
+    Tower(usize),
+    Lobber(usize),
+    Piece(usize),
+    Boss,
+}
+
+impl Target {
+    fn index(&self) -> usize {
+        match *self {
+            Target::Rock(i)
+            | Target::Depot(i)
+            | Target::Mine(i)
+            | Target::ShyGuy(i)
+            | Target::Arrow(i)
+            | Target::Seeker(i)
+            | Target::Snake(i)
+            | Target::Tower(i)
+            | Target::Lobber(i)
+            | Target::Piece(i) => i,
+            Target::Boss => 0,
+        }
+    }
+
+    fn same_list(&self, other: &Target) -> bool {
+        std::mem::discriminant(self) == std::mem::discriminant(other)
+    }
+}
+
+/// Mine/ShyGuy/Arrow/Seeker explosion shapes: radius 50.
+const GRAVITY_BLAST: f32 = 50.0;
+
 /// What happened during an update, for effects, sounds and scoring.
 pub enum Event {
     RockDestroyed {
@@ -428,6 +476,12 @@ pub enum Event {
         sound: bool,
         effects: bool,
     },
+    /// A thrown enemy burst or struck the boss (ring effect 7).
+    GravityBurst {
+        pos: Vec2,
+    },
+    /// Camera::shake(0.75, 7.5) without other effects.
+    Shake,
     /// A bullet hit the boss core or a piece without destroying it.
     BossHit,
     /// BossInside::setState(10006): the core starts its death throes.
@@ -470,6 +524,14 @@ pub struct Field {
     /// Inside Field::bomb: kills score nothing (Enemy 0x74 = 0), but rings
     /// still drop.
     bombing: bool,
+    /// Gravity-gun kills score double (Enemy 0x74 << 1).
+    point_mult: u32,
+    pub gun: GravityGun,
+    pub sparks: Sparks,
+    /// The ship's aim, for the gravity gun (Ship 0x84).
+    pub aim: Vec2,
+    /// TimeManager::multiplier this update: gripped enemies ignore it.
+    pub time_factor: f32,
 }
 
 impl Field {
@@ -490,6 +552,11 @@ impl Field {
             events: Vec::new(),
             centre: Vec2::ZERO,
             bombing: false,
+            point_mult: 1,
+            gun: GravityGun::new(0),
+            sparks: Sparks::default(),
+            aim: vec2(0.0, -1.0),
+            time_factor: 1.0,
         }
     }
 
@@ -535,7 +602,7 @@ impl Field {
         let l = self.lobbers.swap_remove(index);
         self.events.push(Event::LobberDestroyed {
             pos: l.pos,
-            points: if score && !self.bombing { lobber::POINTS } else { 0 },
+            points: if score && !self.bombing { lobber::POINTS * self.point_mult } else { 0 },
             rings: if score { LOBBER_RINGS } else { 0 },
             sound,
             effects,
@@ -641,7 +708,7 @@ impl Field {
         let k = self.seekers.swap_remove(index);
         self.events.push(Event::SeekerDestroyed {
             pos: k.pos,
-            points: if score && !self.bombing { seeker::POINTS } else { 0 },
+            points: if score && !self.bombing { seeker::POINTS * self.point_mult } else { 0 },
             rings: if score { SEEKER_RINGS } else { 0 },
             sound,
             effects,
@@ -708,7 +775,7 @@ impl Field {
         let t = self.towers.swap_remove(index);
         self.events.push(Event::TowerDestroyed {
             pos: t.pos,
-            points: if score && !self.bombing { tower::POINTS } else { 0 },
+            points: if score && !self.bombing { tower::POINTS * self.point_mult } else { 0 },
             rings: if score { TOWER_RINGS } else { 0 },
             sound,
             effects,
@@ -746,7 +813,7 @@ impl Field {
         let a = self.arrows.swap_remove(index);
         self.events.push(Event::ArrowDestroyed {
             pos: a.pos,
-            points: if score && !self.bombing { arrow::POINTS } else { 0 },
+            points: if score && !self.bombing { arrow::POINTS * self.point_mult } else { 0 },
             rings: score as u32,
             sound,
             effects,
@@ -782,7 +849,7 @@ impl Field {
         }
         self.events.push(Event::SnakeDestroyed {
             pos: s.pos,
-            points: if score && !self.bombing { snake::POINTS } else { 0 },
+            points: if score && !self.bombing { snake::POINTS * self.point_mult } else { 0 },
             rings: if score { SNAKE_RINGS } else { 0 },
             sound,
             effects,
@@ -881,7 +948,7 @@ impl Field {
         let g = self.shy_guys.swap_remove(index);
         self.events.push(Event::ShyGuyDestroyed {
             pos: g.pos,
-            points: if score && !self.bombing { shyguy::POINTS } else { 0 },
+            points: if score && !self.bombing { shyguy::POINTS * self.point_mult } else { 0 },
             rings: score as u32,
             sound,
             effects,
@@ -947,7 +1014,7 @@ impl Field {
         let m = self.mines.swap_remove(index);
         self.events.push(Event::MineDestroyed {
             pos: m.pos,
-            points: if score && !self.bombing { mine::POINTS } else { 0 },
+            points: if score && !self.bombing { mine::POINTS * self.point_mult } else { 0 },
             rings: score as u32,
             sound,
             effects,
@@ -1096,9 +1163,268 @@ impl Field {
     /// The death effect has finished: BossInside::setState(10007).
     pub fn boss_dead(&mut self) {
         if let Some(b) = self.boss.take() {
-            let points = if b.bombed { boss::POINTS / 2 } else { boss::POINTS };
+            let points = if b.bombed {
+                boss::POINTS / 2
+            } else if b.thrown_at {
+                boss::POINTS * 2
+            } else {
+                boss::POINTS
+            };
             self.events.push(Event::BossDead { pos: b.pos, points });
         }
+    }
+
+    /// GravityGun::release: whatever is pulled or held is thrown.
+    pub fn gun_release(&mut self) {
+        self.gun.active = false;
+        let aim = self.aim;
+        let throw = |g: &mut Option<Grav>| {
+            if let Some(g) = g.as_mut().filter(|g| !g.thrown()) {
+                g.release(aim);
+            }
+        };
+        self.rocks.iter_mut().for_each(|r| throw(&mut r.grav));
+        self.mines.iter_mut().for_each(|r| throw(&mut r.grav));
+        self.shy_guys.iter_mut().for_each(|r| throw(&mut r.grav));
+        self.arrows.iter_mut().for_each(|r| throw(&mut r.grav));
+        self.seekers.iter_mut().for_each(|r| throw(&mut r.grav));
+        self.pieces.iter_mut().for_each(|r| throw(&mut r.grav));
+    }
+
+    /// The enemy in the gun's grip (pulled or held), if any.
+    pub fn gripped(&self) -> Option<Vec2> {
+        let held = |g: &Option<Grav>| g.as_ref().is_some_and(|g| !g.thrown());
+        None.or_else(|| self.rocks.iter().find(|e| held(&e.grav)).map(|e| e.pos))
+            .or_else(|| self.mines.iter().find(|e| held(&e.grav)).map(|e| e.pos))
+            .or_else(|| self.shy_guys.iter().find(|e| held(&e.grav)).map(|e| e.pos))
+            .or_else(|| self.arrows.iter().find(|e| held(&e.grav)).map(|e| e.pos))
+            .or_else(|| self.seekers.iter().find(|e| held(&e.grav)).map(|e| e.pos))
+            .or_else(|| self.pieces.iter().find(|e| held(&e.grav)).map(|e| e.pos))
+    }
+
+    /// GravityGun reaching out, Enemy states 10003-10005 and the collisions
+    /// of thrown enemies.
+    fn update_gravity(&mut self, dt: f32, centre: Vec2) {
+        let ship = centre;
+        let aim = self.aim;
+        self.gun.update(dt);
+        self.sparks.update(centre);
+        // GravityGun::clearCollisionSpace: the nearest catchable enemy on
+        // the reach segment comes, and the gun stops reaching.
+        if self.gun.active && self.gripped().is_none() {
+            let (a, b) = (ship, ship + aim * gravity::REACH);
+            let level = self.gun.level;
+            let on = |p: Vec2, r: f32| {
+                let c = vec2(wrap_near(p.x, a.x), wrap_near(p.y, a.y));
+                segment_distance(c, a, b) < r + gravity::BEAM_RADIUS
+            };
+            let dist = |p: Vec2| vec2(wrap_near(p.x, a.x), wrap_near(p.y, a.y)).distance_squared(a);
+            let mut best: Option<(f32, Target)> = None;
+            let mut consider = |t: Target, p: Vec2| {
+                let d = dist(p);
+                if best.as_ref().is_none_or(|(bd, _)| d < *bd) {
+                    best = Some((d, t));
+                }
+            };
+            for (i, e) in self.rocks.iter().enumerate() {
+                if e.active() && gravity::catches_rock(e.size, level) && on(e.pos, e.radius()) {
+                    consider(Target::Rock(i), e.pos);
+                }
+            }
+            for (i, e) in self.mines.iter().enumerate() {
+                if e.active() && on(e.pos, mine::RADIUS) {
+                    consider(Target::Mine(i), e.pos);
+                }
+            }
+            for (i, e) in self.shy_guys.iter().enumerate() {
+                if e.active() && on(e.pos, shyguy::RADIUS) {
+                    consider(Target::ShyGuy(i), e.pos);
+                }
+            }
+            for (i, e) in self.arrows.iter().enumerate() {
+                if e.active() && on(e.pos, arrow::RADIUS) {
+                    consider(Target::Arrow(i), e.pos);
+                }
+            }
+            for (i, e) in self.seekers.iter().enumerate() {
+                if e.active() && on(e.pos, seeker::RADIUS) {
+                    consider(Target::Seeker(i), e.pos);
+                }
+            }
+            for (i, e) in self.pieces.iter().enumerate() {
+                if e.catchable() && on(e.pos, boss::PIECE_RADIUS) {
+                    consider(Target::Piece(i), e.pos);
+                }
+            }
+            if let Some((_, t)) = best {
+                self.gun.active = false;
+                match t {
+                    Target::Rock(i) => { let e = &mut self.rocks[i]; e.grav = Some(Grav::new(e.pos, e.angle)); }
+                    Target::Mine(i) => { let e = &mut self.mines[i]; e.grav = Some(Grav::new(e.pos, e.angle)); }
+                    Target::ShyGuy(i) => { let e = &mut self.shy_guys[i]; e.grav = Some(Grav::new(e.pos, e.angle)); }
+                    Target::Arrow(i) => { let e = &mut self.arrows[i]; e.grav = Some(Grav::new(e.pos, e.angle)); }
+                    Target::Seeker(i) => { let e = &mut self.seekers[i]; e.grav = Some(Grav::new(e.pos, e.angle)); }
+                    Target::Piece(i) => { let e = &mut self.pieces[i]; e.grav = Some(Grav::new(e.pos, e.angle)); }
+                    _ => {}
+                }
+            }
+        }
+        // Move everything in (or flung from) the gun's grip.
+        let mut expired = Vec::new();
+        macro_rules! carry {
+            ($list:expr, $kind:ident) => {
+                for (i, e) in $list.iter_mut().enumerate() {
+                    if let Some(g) = e.grav.as_mut() {
+                        if g.carry(&mut e.pos, &mut e.angle, dt, ship, aim, centre, &mut self.sparks) {
+                            expired.push(Target::$kind(i));
+                        }
+                    }
+                }
+            };
+        }
+        carry!(self.rocks, Rock);
+        carry!(self.mines, Mine);
+        carry!(self.shy_guys, ShyGuy);
+        carry!(self.arrows, Arrow);
+        carry!(self.seekers, Seeker);
+        carry!(self.pieces, Piece);
+        // A thrown enemy blows when its time is up (largest index first).
+        expired.sort_by_key(|t| std::cmp::Reverse(t.index()));
+        for t in expired {
+            self.destroy_target(t, true);
+        }
+        self.gravity_collisions();
+    }
+
+    /// Enemy::handleCollision in states 10003 and 10005: a pulled or thrown
+    /// enemy wrecks what it touches (handleEvent(9)). Rocks and boss pieces
+    /// fly on unless they hit the boss; mines, shy guys, arrows and seekers
+    /// burst, hitting everything within 50 units (handleEvent(8)).
+    fn gravity_collisions(&mut self) {
+        loop {
+            let movers = self.flying();
+            let mut hit = None;
+            'outer: for (m, mp, mr) in &movers {
+                for (t, p, r) in self.targets() {
+                    let c = vec2(wrap_near(p.x, mp.x), wrap_near(p.y, mp.y));
+                    if c.distance_squared(*mp) < (r + mr).powi(2) {
+                        hit = Some((*m, *mp, t));
+                        break 'outer;
+                    }
+                }
+            }
+            let Some((m, mp, t)) = hit else { break };
+            let bursts = matches!(m, Target::Mine(_) | Target::ShyGuy(_) | Target::Arrow(_) | Target::Seeker(_));
+            let hits_boss = matches!(t, Target::Boss | Target::Piece(_));
+            if bursts {
+                // handlePostCollision: the mover goes, and its explosion
+                // hits everything within 50 units.
+                self.destroy_target(m, true);
+                self.events.push(Event::GravityBurst { pos: mp });
+                let mut near: Vec<Target> = self
+                    .targets()
+                    .into_iter()
+                    .filter(|(_, p, r)| vec2(wrap_near(p.x, mp.x), wrap_near(p.y, mp.y)).distance(mp) < r + GRAVITY_BLAST)
+                    .map(|(t, _, _)| t)
+                    .collect();
+                near.sort_by_key(|t| std::cmp::Reverse(t.index()));
+                for t in near {
+                    self.gravity_hit(t, false);
+                }
+            } else {
+                // The target may sit before the mover in the same list:
+                // take the mover out first when it dies.
+                if hits_boss {
+                    self.events.push(Event::GravityBurst { pos: mp });
+                    if t.index() > m.index() || !t.same_list(&m) {
+                        self.gravity_hit(t, true);
+                        self.destroy_target(m, true);
+                    } else {
+                        self.destroy_target(m, true);
+                        self.gravity_hit(t, true);
+                    }
+                } else {
+                    self.gravity_hit(t, true);
+                }
+            }
+        }
+    }
+
+    /// Pulled or thrown enemies: (which, position, radius).
+    fn flying(&self) -> Vec<(Target, Vec2, f32)> {
+        let moving = |g: &Option<Grav>| g.as_ref().is_some_and(|g| g.phase != Phase::Locked);
+        let mut out = Vec::new();
+        out.extend(self.rocks.iter().enumerate().filter(|(_, e)| moving(&e.grav)).map(|(i, e)| (Target::Rock(i), e.pos, e.radius())));
+        out.extend(self.mines.iter().enumerate().filter(|(_, e)| moving(&e.grav)).map(|(i, e)| (Target::Mine(i), e.pos, mine::RADIUS)));
+        out.extend(self.shy_guys.iter().enumerate().filter(|(_, e)| moving(&e.grav)).map(|(i, e)| (Target::ShyGuy(i), e.pos, shyguy::RADIUS)));
+        out.extend(self.arrows.iter().enumerate().filter(|(_, e)| moving(&e.grav)).map(|(i, e)| (Target::Arrow(i), e.pos, arrow::RADIUS)));
+        out.extend(self.seekers.iter().enumerate().filter(|(_, e)| moving(&e.grav)).map(|(i, e)| (Target::Seeker(i), e.pos, seeker::RADIUS)));
+        out.extend(self.pieces.iter().enumerate().filter(|(_, e)| moving(&e.grav)).map(|(i, e)| (Target::Piece(i), e.pos, boss::PIECE_RADIUS)));
+        out
+    }
+
+    /// Every landed enemy a thrown one can hit: (which, position, radius).
+    fn targets(&self) -> Vec<(Target, Vec2, f32)> {
+        let mut out = Vec::new();
+        out.extend(self.rocks.iter().enumerate().filter(|(_, e)| e.active()).map(|(i, e)| (Target::Rock(i), e.pos, e.radius())));
+        out.extend(self.depots.iter().enumerate().filter(|(_, e)| e.active()).map(|(i, e)| (Target::Depot(i), e.pos, depot::RADIUS)));
+        out.extend(self.mines.iter().enumerate().filter(|(_, e)| e.active()).map(|(i, e)| (Target::Mine(i), e.pos, mine::RADIUS)));
+        out.extend(self.shy_guys.iter().enumerate().filter(|(_, e)| e.active()).map(|(i, e)| (Target::ShyGuy(i), e.pos, shyguy::RADIUS)));
+        out.extend(self.arrows.iter().enumerate().filter(|(_, e)| e.active()).map(|(i, e)| (Target::Arrow(i), e.pos, arrow::RADIUS)));
+        out.extend(self.seekers.iter().enumerate().filter(|(_, e)| e.active()).map(|(i, e)| (Target::Seeker(i), e.pos, seeker::RADIUS)));
+        out.extend(self.snakes.iter().enumerate().filter(|(_, e)| e.active()).map(|(i, e)| (Target::Snake(i), e.pos, snake::RADIUS)));
+        out.extend(self.towers.iter().enumerate().filter(|(_, e)| e.active()).map(|(i, e)| (Target::Tower(i), e.pos, tower::RADIUS)));
+        out.extend(self.lobbers.iter().enumerate().filter(|(_, e)| e.active()).map(|(i, e)| (Target::Lobber(i), e.pos, lobber::RADIUS)));
+        out.extend(self.pieces.iter().enumerate().filter(|(_, e)| e.active()).map(|(i, e)| (Target::Piece(i), e.pos, boss::PIECE_RADIUS)));
+        out.extend(self.boss.iter().filter(|b| b.active()).map(|b| (Target::Boss, b.pos, boss::RADIUS)));
+        out
+    }
+
+    /// The usual death of a gripped or thrown enemy (or a target).
+    fn destroy_target(&mut self, t: Target, score: bool) {
+        match t {
+            Target::Rock(i) => self.destroy(i, score),
+            Target::Depot(i) => self.destroy_depot(i, score),
+            Target::Mine(i) => self.destroy_mine(i, score, true, true),
+            Target::ShyGuy(i) => self.destroy_shy_guy(i, score, true, true),
+            Target::Arrow(i) => self.destroy_arrow(i, score, true, true),
+            Target::Seeker(i) => self.destroy_seeker(i, score, true, true),
+            Target::Snake(i) => self.destroy_snake(i, score, true, true),
+            Target::Tower(i) => self.destroy_tower(i, score, true, true),
+            Target::Lobber(i) => self.destroy_lobber(i, score, true, true),
+            Target::Piece(i) => self.destroy_piece(i, true, true),
+            Target::Boss => {}
+        }
+    }
+
+    /// handleEvent(9) (`heavy`, a direct hit) or handleEvent(8) (a burst).
+    fn gravity_hit(&mut self, t: Target, heavy: bool) {
+        self.point_mult = 2;
+        match t {
+            Target::Snake(i) => self.ram_snake(i),
+            Target::Piece(i) => {
+                let damage = if heavy { 15.0 } else { 5.0 };
+                if self.pieces[i].hit(damage) {
+                    self.destroy_piece(i, true, true);
+                } else {
+                    self.events.push(Event::BossHit);
+                }
+            }
+            Target::Boss => {
+                let damage = if heavy { 15.0 } else { boss::RAM_DAMAGE };
+                let dead = self.boss.as_mut().is_some_and(|b| {
+                    let dead = b.hit(damage);
+                    b.thrown_at |= dead;
+                    dead
+                });
+                self.events.push(Event::Shake);
+                if dead {
+                    self.boss_dying();
+                }
+            }
+            other => self.destroy_target(other, true),
+        }
+        self.point_mult = 1;
     }
 
     /// EnemyManager::sharedHandleEvent(10) from Ship::bomb: every enemy
@@ -1192,7 +1518,7 @@ impl Field {
         let d = self.depots.swap_remove(index);
         self.events.push(Event::DepotDestroyed {
             pos: d.pos,
-            points: if score && !self.bombing { depot::POINTS } else { 0 },
+            points: if score && !self.bombing { depot::POINTS * self.point_mult } else { 0 },
         });
     }
 
@@ -1249,6 +1575,7 @@ impl Field {
             }
         }
         self.boss_collisions();
+        self.update_gravity(dt / self.time_factor.max(0.01), centre);
         let ship = centre;
         for m in &mut self.mines {
             m.update(dt, ship, centre);
@@ -1622,7 +1949,7 @@ impl Field {
         self.events.push(Event::RockDestroyed {
             pos: rock.pos,
             element: rock.element,
-            points: if score && !self.bombing { rock.points } else { 0 },
+            points: if score && !self.bombing { rock.points * self.point_mult } else { 0 },
             // Rock::setState(10007): a scored small rock drops one ring.
             rings: if score && rock.size == 0 { 1 } else { 0 },
             sound,
@@ -1883,5 +2210,74 @@ impl Script {
             }
         }
         self.entry >= spawns.len()
+    }
+}
+
+#[cfg(test)]
+mod gravity_tests {
+    use super::*;
+    use crate::gravity::Phase;
+
+    fn landed_mine(field: &mut Field, pos: Vec2) {
+        field.spawn_mine(pos);
+        // Let it drop in.
+        for _ in 0..120 {
+            field.update(1.0 / 60.0, Vec2::ZERO);
+        }
+    }
+
+    #[test]
+    fn catches_holds_throws_and_bursts_a_mine() {
+        let mut field = Field::new([16, 1, 1, 1]);
+        field.aim = vec2(0.0, -1.0);
+        landed_mine(&mut field, vec2(0.0, -100.0));
+        assert!(field.mines[0].active());
+        field.gun.activate();
+        field.update(1.0 / 60.0, Vec2::ZERO);
+        assert_eq!(field.mines[0].grav.as_ref().map(|g| g.phase), Some(Phase::Pulled));
+        // Pulled in, then held 20 units out along the aim.
+        for _ in 0..60 {
+            field.update(1.0 / 60.0, Vec2::ZERO);
+        }
+        assert_eq!(field.mines[0].grav.as_ref().map(|g| g.phase), Some(Phase::Locked));
+        assert!(field.mines[0].pos.distance(vec2(0.0, -20.0)) < 1.0);
+        // Thrown: gone within half a second, as a scored kill.
+        field.gun_release();
+        field.events.clear();
+        for _ in 0..40 {
+            field.update(1.0 / 60.0, Vec2::ZERO);
+        }
+        assert!(field.mines.is_empty());
+        assert!(field.events.iter().any(|e| matches!(e, Event::MineDestroyed { points: 20, .. })));
+    }
+
+    #[test]
+    fn a_thrown_mine_bursts_on_another_and_takes_it_out_for_double() {
+        let mut field = Field::new([16, 1, 1, 1]);
+        field.aim = vec2(0.0, -1.0);
+        landed_mine(&mut field, vec2(0.0, -100.0));
+        field.gun.activate();
+        for _ in 0..60 {
+            field.update(1.0 / 60.0, Vec2::ZERO);
+        }
+        // A second mine straight ahead, past the first one's reach.
+        field.mines.push(Mine::new(vec2(0.0, -200.0)));
+        for _ in 0..60 {
+            let i = field.mines.len() - 1;
+            if field.mines[i].active() {
+                break;
+            }
+            field.mines[i].update(1.0 / 60.0, vec2(0.0, 500.0), Vec2::ZERO);
+        }
+        field.gun_release();
+        field.events.clear();
+        // 720 units/s covers the 150 units to contact in ~13 updates,
+        // well inside the half-second fuse.
+        for _ in 0..25 {
+            field.update(1.0 / 60.0, vec2(0.0, 0.0));
+        }
+        assert!(field.mines.is_empty(), "both mines gone");
+        assert!(field.events.iter().any(|e| matches!(e, Event::MineDestroyed { points: 40, .. })));
+        assert!(field.events.iter().any(|e| matches!(e, Event::GravityBurst { .. })));
     }
 }
