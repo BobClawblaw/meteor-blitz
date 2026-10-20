@@ -384,8 +384,10 @@ pub fn draw_backdrop(canvas: &Canvas, assets: &MenuAssets, fx: &ScreenFx) {
         indices: canvas.backdrop.indices.clone(),
         texture: canvas.backdrop.texture.clone(),
     };
+    // MB_BG_Z overrides the backdrop depth while it is being verified.
+    let bg_z = std::env::var("MB_BG_Z").ok().and_then(|v| v.parse().ok()).unwrap_or(BACKDROP_Z);
     for v in &mut mesh.vertices {
-        v.position += vec3(BACKDROP_X, BACKDROP_Y, BACKDROP_Z);
+        v.position += vec3(BACKDROP_X, BACKDROP_Y, bg_z);
         v.color = [255, 255, 255, (color.a * 255.0) as u8];
     }
     let wrap = |k: f32| vec2((canvas.scroll.x * k).rem_euclid(TOTAL) / TOTAL, (canvas.scroll.y * k).rem_euclid(TOTAL) / TOTAL);

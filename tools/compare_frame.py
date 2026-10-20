@@ -25,8 +25,11 @@ EXE = ROOT / "target" / "debug" / "meteor-blitz"
 SHOT = ROOT / "shots" / "compare_port.png"
 
 
-def render(scroll: float | None) -> Image.Image:
+def render(scroll: float | None, extra=()) -> Image.Image:
     env = dict(os.environ, MB_WINDOW="480x320", MB_SHOT=str(SHOT))
+    for item in extra:
+        name, value = item.split("=", 1)
+        env[name] = value
     if scroll is not None:
         env["MB_SCROLL"] = str(scroll)
     SHOT.unlink(missing_ok=True)
@@ -42,11 +45,27 @@ def score(ref: np.ndarray, port: np.ndarray, masks) -> float:
     return float(diff[keep].mean())
 
 
+def phase_peak(ref: np.ndarray, port: np.ndarray, region) -> float:
+    """Phase-correlation peak of a region: high when the two images share
+    structure at the same scale, whatever the brightness or scroll phase.
+    Returned negated so that lower is better, like `score`."""
+    x0, y0, x1, y1 = region
+    a = ref[y0:y1, x0:x1].mean(axis=2).astype(float)
+    b = port[y0:y1, x0:x1].mean(axis=2).astype(float)
+    a -= a.mean()
+    b -= b.mean()
+    r = np.fft.fft2(a) * np.conj(np.fft.fft2(b))
+    r /= np.abs(r) + 1e-9
+    return -float(np.real(np.fft.ifft2(r)).max())
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("ref")
     ap.add_argument("--scan", nargs=3, type=float, metavar=("START", "STOP", "STEP"))
     ap.add_argument("--mask", action="append", default=[], help="x0,y0,x1,y1 to exclude")
+    ap.add_argument("--phase", help="x0,y0,x1,y1: score by phase-correlation peak of this region instead")
+    ap.add_argument("--env", action="append", default=[], help="extra NAME=VALUE for the port")
     args = ap.parse_args()
     masks = [tuple(int(v) for v in m.split(",")) for m in args.mask]
     ref_im = Image.open(args.ref).convert("RGB")
@@ -60,8 +79,11 @@ def main():
         candidates = list(np.arange(start, stop, step))
     best = None
     for scroll in candidates:
-        port_im = render(scroll)
-        s = score(ref, np.asarray(port_im), masks)
+        port_im = render(scroll, args.env)
+        if args.phase:
+            s = phase_peak(ref, np.asarray(port_im), tuple(int(v) for v in args.phase.split(",")))
+        else:
+            s = score(ref, np.asarray(port_im), masks)
         print(f"scroll={scroll}: mean abs diff {s:.2f}")
         if best is None or s < best[0]:
             best = (s, scroll, port_im)
