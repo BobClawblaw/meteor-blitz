@@ -175,6 +175,7 @@ pub struct PlayAssets {
     pub cannon: Texture2D,
     pub depot: Texture2D,
     pub mine: Texture2D,
+    pub arrow: Texture2D,
     /// shyGuyFrames.png: a 4x4 atlas of 32x32 frames.
     pub shy_guy: Texture2D,
     /// pillHead.1.png and pillBody.1.png.
@@ -741,6 +742,13 @@ impl Play {
         for i in heads {
             self.field.ram_snake(i);
         }
+        // Arrows die on contact and take the ship with them unless boosting.
+        let mut arrows = self.field.touching_arrows(self.ship.pos, SHIP_RADIUS);
+        arrows.sort_unstable_by(|a, b| b.cmp(a));
+        for i in arrows {
+            self.field.destroy_arrow(i, true, true, true);
+            hit |= !boosting;
+        }
         // Shy guys die on contact and take the ship with them unless boosting.
         let mut shy = self.field.touching_shy_guys(self.ship.pos, SHIP_RADIUS);
         shy.sort_unstable_by(|a, b| b.cmp(a));
@@ -985,6 +993,26 @@ impl Play {
                         self.effects.start(Kind::Point, 3, pos, away, false);
                     }
                 }
+                Event::ArrowDestroyed {
+                    pos,
+                    points,
+                    rings,
+                    sound,
+                    effects,
+                } => {
+                    if sound {
+                        self.sounds.push(SOUND_DEPOT_DESTROYED);
+                    }
+                    if effects {
+                        let away = self.towards_ship(pos) + 180.0;
+                        self.effects.start(Kind::Diamond, 4, pos, away, false);
+                        self.effects.start(Kind::Sprite, 4, pos, 0.0, false);
+                        self.effects.start(Kind::Point, 18, pos, 0.0, false);
+                    }
+                    self.score += (points * self.multiplier) as u64;
+                    self.pickups
+                        .drop(pos, MINE_RING_SPEED, rings, self.magnet > 0.0);
+                }
                 Event::SegmentDestroyed { pos, points, sound } => {
                     if sound {
                         self.sounds.push(SOUND_DEPOT_DESTROYED);
@@ -1165,6 +1193,7 @@ impl Play {
             .chain(self.field.mines.iter().filter(|m| m.active()).map(|m| m.pos))
             .chain(self.field.shy_guys.iter().filter(|g| g.active()).map(|g| g.pos))
             .chain(self.field.snakes.iter().filter(|s| s.active()).map(|s| s.pos))
+            .chain(self.field.arrows.iter().filter(|a| a.active()).map(|a| a.pos))
             .chain(self.field.pieces.iter().filter(|p| p.active()).map(|p| p.pos))
             .chain(self.field.boss.iter().filter(|b| b.active()).map(|b| b.pos))
             .map(|p| vec2(wrap_near(p.x, ship.x), wrap_near(p.y, ship.y)))
@@ -1323,6 +1352,16 @@ impl Play {
             let color = Color::new(1.0, 1.0, 1.0, m.alpha);
             let draw = || draw_sprite(&assets.mine, s.x, s.y, m.angle, self.z + m.z, color);
             if m.flash {
+                canvas.flashing(draw);
+            } else {
+                draw();
+            }
+        }
+        for a in &self.field.arrows {
+            let s = self.to_screen(a.pos);
+            let color = Color::new(1.0, 1.0, 1.0, a.alpha);
+            let draw = || draw_sprite(&assets.arrow, s.x, s.y, a.angle, self.z + a.z, color);
+            if a.flash {
                 canvas.flashing(draw);
             } else {
                 draw();

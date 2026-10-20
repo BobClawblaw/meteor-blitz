@@ -3,6 +3,7 @@
 
 use macroquad::prelude::*;
 
+use crate::arrow::{self, Arrow};
 use crate::boss::{self, Boss, BossState, Piece, Request};
 use crate::depot::{self, Depot};
 use crate::mine::{self, Mine};
@@ -39,6 +40,8 @@ pub const ROCK_POINTS: u32 = 10;
 const KIND_DEPOT: i32 = 21;
 /// Wave kind for shy guys.
 const KIND_SHY_GUY: i32 = 13;
+/// Wave kind for arrows.
+const KIND_ARROW: i32 = 14;
 /// Wave kind for snakes.
 const KIND_SNAKE: i32 = 16;
 const SNAKE_WEIGHT: u32 = 4;
@@ -340,6 +343,14 @@ pub enum Event {
         sound: bool,
         sparks: bool,
     },
+    /// Arrow::setState(10007).
+    ArrowDestroyed {
+        pos: Vec2,
+        points: u32,
+        rings: u32,
+        sound: bool,
+        effects: bool,
+    },
     /// SnakeBody::setState(10007).
     SegmentDestroyed {
         pos: Vec2,
@@ -398,6 +409,7 @@ pub struct Field {
     pub mines: Vec<Mine>,
     pub shy_guys: Vec<ShyGuy>,
     pub snakes: Vec<Snake>,
+    pub arrows: Vec<Arrow>,
     pub boss: Option<Boss>,
     pub pieces: Vec<Piece>,
     /// Animation frame counts by size: small atlas, medium, large, extra large.
@@ -415,6 +427,7 @@ impl Field {
             mines: Vec::new(),
             shy_guys: Vec::new(),
             snakes: Vec::new(),
+            arrows: Vec::new(),
             boss: None,
             pieces: Vec::new(),
             frames,
@@ -447,7 +460,37 @@ impl Field {
             + self.mines.len() as u32 * MINE_WEIGHT
             + self.shy_guys.len() as u32
             + self.snakes.len() as u32 * SNAKE_WEIGHT
+            + self.arrows.len() as u32
             + self.boss.is_some() as u32
+    }
+
+    fn spawn_arrow(&mut self, pos: Vec2, heading: f32) {
+        if self.arrows.len() < arrow::POOL {
+            self.arrows.push(Arrow::new(pos, heading));
+        }
+    }
+
+    /// Arrow::setState(10007).
+    pub fn destroy_arrow(&mut self, index: usize, score: bool, sound: bool, effects: bool) {
+        let a = self.arrows.swap_remove(index);
+        self.events.push(Event::ArrowDestroyed {
+            pos: a.pos,
+            points: if score { arrow::POINTS } else { 0 },
+            rings: score as u32,
+            sound,
+            effects,
+        });
+    }
+
+    /// Active arrows touching a circle (the ship).
+    pub fn touching_arrows(&self, centre: Vec2, radius: f32) -> Vec<usize> {
+        (0..self.arrows.len())
+            .filter(|&i| {
+                let a = &self.arrows[i];
+                let c = vec2(wrap_near(a.pos.x, centre.x), wrap_near(a.pos.y, centre.y));
+                a.active() && c.distance_squared(centre) < (arrow::RADIUS + radius).powi(2)
+            })
+            .collect()
     }
 
     fn spawn_snake(&mut self, pos: Vec2, follow: bool) {
@@ -751,6 +794,10 @@ impl Field {
         while !self.depots.is_empty() {
             self.destroy_depot(0, false);
         }
+        while !self.arrows.is_empty() {
+            let effects = visible(self.arrows[0].pos);
+            self.destroy_arrow(0, false, false, effects);
+        }
         while !self.snakes.is_empty() {
             let effects = visible(self.snakes[0].pos);
             self.destroy_snake(0, false, false, effects);
@@ -830,6 +877,7 @@ impl Field {
             None if kind == KIND_MINE => self.mines.len(),
             None if kind == KIND_SHY_GUY => self.shy_guys.len(),
             None if kind == KIND_SNAKE => self.snakes.len(),
+            None if kind == KIND_ARROW => self.arrows.len(),
             None => 0,
         }
     }
@@ -870,6 +918,9 @@ impl Field {
         self.shy_guy_collisions();
         for s in &mut self.snakes {
             s.update(dt, ship, ship_moved, centre);
+        }
+        for a in &mut self.arrows {
+            a.update(dt, centre);
         }
         self.snake_collisions();
         for d in &mut self.depots {
@@ -969,6 +1020,18 @@ impl Field {
                     self.events.push(Event::DepotHit);
                 } else {
                     self.destroy_depot(i, true);
+                }
+                return true;
+            }
+        }
+        for i in 0..self.arrows.len() {
+            let a = &self.arrows[i];
+            let c = vec2(wrap_near(a.pos.x, to.x), wrap_near(a.pos.y, to.y));
+            if a.active() && segment_distance(c, from, to) < arrow::RADIUS + radius {
+                if self.arrows[i].hit(damage) {
+                    self.destroy_arrow(i, true, true, true);
+                } else {
+                    self.events.push(Event::DepotHit);
                 }
                 return true;
             }
@@ -1338,6 +1401,10 @@ impl Script {
                     let p = self.origin + offset;
                     let p = vec2(wrap_near(p.x, ship.x), wrap_near(p.y, ship.y));
                     field.spawn_boss(p, self.world, self.stage, ship);
+                } else if wave.kind == KIND_ARROW {
+                    let p = self.origin + offset;
+                    let p = vec2(wrap_near(p.x, ship.x), wrap_near(p.y, ship.y));
+                    field.spawn_arrow(p, e.heading + self.rotation);
                 } else if wave.kind == KIND_SNAKE {
                     let p = self.origin + offset;
                     let follow = wave.flags & 2 != 0;

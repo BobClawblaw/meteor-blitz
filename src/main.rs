@@ -1,5 +1,6 @@
 //! Meteor Blitz — a port of the 2009 iPhone game. Window, screens, and loop.
 
+mod arrow;
 mod bonus;
 mod boss;
 mod depot;
@@ -433,6 +434,7 @@ async fn load_play_assets() -> PlayAssets {
         spark: load_sprite("fire200").await,
         depot: load_sprite("depot").await,
         mine: load_sprite("mine").await,
+        arrow: load_sprite("arrow").await,
         shy_guy: load_sprite("shyGuyFrames").await,
         snake_head: load_sprite("pillHead.1").await,
         snake_body: load_sprite("pillBody.1").await,
