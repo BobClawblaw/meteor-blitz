@@ -22,9 +22,13 @@
 
 ## Windows builds
 
-Run on `xamd4090` (SSH alias, key auth installed). Node 24.14, git 2.53, MSVC Build Tools and rustup (stable, MSVC) present. Long paths break the MSVC linker; keep `CARGO_TARGET_DIR` short.
+Run on `xamd4090` (local checkout `C:\src\meteor-blitz`, or SSH alias with key auth). Node 24.14, git 2.53, MSVC Build Tools and rustup (stable, MSVC) present.
+- Cargo lives in the rustup home and may not be on PATH in a fresh shell; prepend the `.cargobin` directory.
+- Long paths break the MSVC linker; keep `CARGO_TARGET_DIR` short (build under `C:\src`).
+- This checkout has only the `origin` remote (GitHub); the NAS remote is not configured here.
+- Controller: Xbox Wireless Controller over Bluetooth LE (045e:0b13). It sleeps when idle and XInput then reports it as not connected; press the Xbox button to wake it.
 
-## Resume status (2026-10-20)
+## Resume status (2026-10-20, Windows controller session)
 
 Done (faithful to the binary unless noted):
 - Menus, game screen, HUD, sounds, particle effects (`systems.dat`), rings, multiplier, power-ups.
@@ -41,9 +45,9 @@ Controls:
 - Keyboard and mouse: WASD moves, left mouse fires toward the cursor, Space boosts, right mouse or B bombs, Q or the wheel switches weapon.
 - Gravity gun: double-click, or E, while firing.
 - Pause: Esc opens; arrows/WASD move the selection, Enter/A activates, Esc/B goes back; mouse clicks activate items.
-- Game controller: mapped in `src/pad.rs`. Windows reads it through gilrs's XInput backend.
+- Game controller: mapped in `src/pad.rs`. Windows reads it through gilrs's XInput backend (verified 2026-10-20: A, B, X, Y, LB, RB, LT, RT, D-pad, both sticks full range; View and Start not yet pressed in a logged run). The default WGI backend dropped most input from the Bluetooth LE pad, and its Drop failed fast on window close; `Gilrs` is kept in `ManuallyDrop`.
 
-Blocked: the Xbox Series controller (USB, 045e:0b12) on macOS gives no input.
+Blocked (macOS only; Windows works): the Xbox Series controller (USB, 045e:0b12) on macOS gives no input.
 - GameController sees it, but every value reads zero, even as an .app (`tools/make-app.sh`).
 - gilrs sees no sticks, and raw IOHID sees no reports.
 - First check: System Settings > Game Controllers. If that page reacts, rerun the probes while buttons are pressed.
@@ -53,13 +57,13 @@ Next:
 - Wire `PausePopup` settings save/load.
 - Pixel-diff the pause/results popups against emulator frames; replace the generic button art with the original pre-rendered/dynamic buttons.
 - Resolve controller input on macOS.
-- Windows: confirm View and Start with `MB_PAD_LOG=1`. Everything else is verified through gilrs's XInput backend (the default WGI backend dropped most input).
+- Windows: press View and Start with `MB_PAD_LOG=1` and confirm they log; then play a full stage on the pad (move, aim, RT fire, LT gravity, A/LB boost, B/RB bomb, X/Y weapon, pause navigation).
 
 Test hooks (env):
 - `MB_START=w.s` starts a stage; `MB_WAVE=n` starts at wave n.
 - `MB_SHOT` and `MB_SHOT_FRAME` capture a frame and exit.
 - `MB_PAUSE=<menu|controls|upgrade|clear|gameover>` opens a pause page for screenshot runs.
 - `MB_AUTOFIRE`, `MB_GUN`, `MB_BOMB_AT`, `MB_WEAPON` and `MB_DRIFT` drive play unattended.
-- `MB_PAD_LOG` prints controller input.
+- `MB_PAD_LOG` prints controller input. To tell a game bug from a driver one on Windows, run an XInput reader (`XInputGetState` on xinput1_4.dll) alongside and compare.
 - `cargo test` covers the boss patterns, the gravity gun and the ground scroll.
 
