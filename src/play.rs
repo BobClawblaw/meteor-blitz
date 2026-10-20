@@ -84,6 +84,17 @@ const SURVIVAL_LIVES: u32 = 2;
 const BOMBS: u32 = 3;
 const SURVIVAL: usize = 6;
 
+// Audio::play ids (sounds.raw).
+pub const SOUND_BOOST: usize = 4;
+pub const SOUND_BOOST_READY: usize = 5;
+pub const SOUND_WAVE: usize = 11;
+pub const SOUND_ROCK: [usize; 3] = [12, 13, 14];
+pub const SOUND_SHIP_DESTROYED: usize = 15;
+/// Ship::update: the boost-ready cue starts 1.3 to 0.65 s before the boost
+/// has recharged.
+const BOOST_CUE_EARLY: f32 = 1.3;
+const BOOST_CUE_LATE: f32 = 0.65;
+
 /// One element's meteor art: the small-rock 4x4 atlas, then the medium,
 /// large and extra-large rotation frames.
 pub struct RockArt {
@@ -158,6 +169,8 @@ enum Life {
 
 struct Ship {
     life: Life,
+    /// The boost-ready cue has played for this recharge.
+    boost_cued: bool,
     pos: Vec2,
     vel: Vec2,
     boost_vel: Vec2,
@@ -182,6 +195,7 @@ impl Ship {
     fn new() -> Ship {
         Ship {
             life: Life::Spawning(SPAWN_SHIELD),
+            boost_cued: true,
             pos: Vec2::ZERO,
             vel: Vec2::ZERO,
             boost_vel: Vec2::ZERO,
@@ -221,6 +235,7 @@ impl Ship {
     /// Ship::boost: kick along the current velocity.
     fn boost(&mut self, dt: f32) {
         self.boost_charge = 0.0;
+        self.boost_cued = false;
         self.boost_time = BOOST_SECONDS;
         self.invincible = BOOST_INVINCIBLE;
         self.boost_dir = self.vel.normalize_or_zero();
@@ -376,6 +391,8 @@ pub struct Play {
     pub bombs: u32,
     pub rings: u32,
     high_score: u64,
+    /// `Audio::play` ids raised this update, for the caller to play.
+    pub sounds: Vec<usize>,
 }
 
 impl Play {
@@ -401,6 +418,7 @@ impl Play {
             bombs: BOMBS,
             rings: 0,
             high_score,
+            sounds: Vec::new(),
         }
     }
 
@@ -513,13 +531,17 @@ impl Play {
         self.ship.aiming = false;
         self.camera.shake(0.75, 7.5);
         self.script.delay();
+        self.sounds.push(SOUND_SHIP_DESTROYED);
     }
 
     fn handle_events(&mut self) {
         for event in self.field.events.drain(..) {
             match event {
-                Event::RockDestroyed { points, .. } => self.score += (points * self.multiplier) as u64,
-                Event::WaveIncoming => {}
+                Event::RockDestroyed { points, .. } => {
+                    self.score += (points * self.multiplier) as u64;
+                    self.sounds.push(SOUND_ROCK[rand::gen_range(0, 3)]);
+                }
+                Event::WaveIncoming => self.sounds.push(SOUND_WAVE),
             }
         }
     }
@@ -537,6 +559,12 @@ impl Play {
         if is_key_pressed(KeyCode::Space) && self.ship.can_boost() {
             self.ship.boost(dt);
             self.camera.shake(0.75, 7.5);
+            self.sounds.push(SOUND_BOOST);
+        }
+        let charge = self.ship.boost_charge;
+        if !self.ship.boost_cued && charge >= BOOST_RECHARGE - BOOST_CUE_EARLY && charge < BOOST_RECHARGE - BOOST_CUE_LATE {
+            self.ship.boost_cued = true;
+            self.sounds.push(SOUND_BOOST_READY);
         }
         if is_mouse_button_down(MouseButton::Left) {
             let dir = (Canvas::mouse() - self.to_screen(self.ship.pos)).normalize_or_zero();

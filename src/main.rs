@@ -10,7 +10,7 @@ mod waves;
 
 use std::collections::HashMap;
 
-use macroquad::audio::{load_sound, play_sound, PlaySoundParams};
+use macroquad::audio::{load_sound, play_sound, stop_sound, PlaySoundParams, Sound};
 use macroquad::prelude::*;
 
 use gfx::Canvas;
@@ -51,6 +51,14 @@ enum MenuKind {
     /// StageSelectScreen (14): stage of `world`
     Stage(usize),
 }
+
+/// sounds.raw holds effects 1-17 (music.raw is id 0).
+const SOUND_COUNT: usize = 17;
+/// Audio::play id for button presses.
+const SOUND_BUTTON: usize = 9;
+// The original's untouched Settings screen: music full, effects at half.
+const MUSIC_VOLUME: f32 = 1.0;
+const EFFECT_VOLUME: f32 = 0.5;
 
 /// `Global::level` for survival (worlds are 0-5).
 const SURVIVAL: usize = 6;
@@ -282,6 +290,15 @@ async fn main() {
     let menu_assets = load_menu_assets().await;
     let play_assets = load_play_assets().await;
     let music = load_sound("original/audio/music.wav").await.unwrap();
+    let mut sounds: Vec<Option<Sound>> = vec![None];
+    for id in 1..=SOUND_COUNT {
+        sounds.push(Some(load_sound(&format!("original/audio/sound_{:02}.wav", id)).await.unwrap()));
+    }
+    let play_effect = |id: usize| {
+        if let Some(Some(sound)) = sounds.get(id) {
+            play_sound(sound, PlaySoundParams { looped: false, volume: EFFECT_VOLUME });
+        }
+    };
     let canvas = Canvas::new();
     let mut backdrop = MenuBackdrop::new();
     let mut progress = Progress::load();
@@ -309,6 +326,7 @@ async fn main() {
             Screen::Menu(kind) => {
                 backdrop.update(dt);
                 if let Some(event) = menu_screen.update(dt) {
+                    play_effect(SOUND_BUTTON);
                     if let Some(next) = menu_event(kind, event) {
                         menu_next = Some(next);
                         menu_screen.fx.leave();
@@ -328,7 +346,7 @@ async fn main() {
                             game = Some(Play::new(world, stage, progress.best, &play_assets));
                             screen = Screen::Game;
                             if !music_on {
-                                play_sound(&music, PlaySoundParams { looped: true, volume: 0.35 });
+                                play_sound(&music, PlaySoundParams { looped: true, volume: MUSIC_VOLUME });
                                 music_on = true;
                             }
                         }
@@ -339,6 +357,9 @@ async fn main() {
             Screen::Game => {
                 if let Some(g) = game.as_mut() {
                     g.update(dt);
+                    for id in g.sounds.drain(..) {
+                        play_effect(id);
+                    }
                 }
                 // Until the pause and results popups are ported: Escape leaves
                 // to stage select, as does Enter once the stage is over.
@@ -358,6 +379,9 @@ async fn main() {
                         _ => MenuKind::Mode,
                     };
                     game = None;
+                    // The music belongs to the game screen.
+                    stop_sound(&music);
+                    music_on = false;
                     menu_screen = build_menu(kind, &ui, &progress, true);
                     screen = Screen::Menu(kind);
                 }
