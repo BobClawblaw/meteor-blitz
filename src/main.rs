@@ -76,10 +76,15 @@ struct Audio {
 /// Menu art by file stem (`assets/ui/<name>.png`).
 type Ui = HashMap<String, Texture2D>;
 
-async fn load_frames(start: usize, count: usize) -> Vec<Texture2D> {
+/// Sprites unpacked from the original sheet by `tools/decode_sheet.py`.
+async fn load_sprite(name: &str) -> Texture2D {
+    load_texture(&format!("original/sprites/{}.png", name)).await.unwrap()
+}
+
+async fn load_sprites(names: &[&str]) -> Vec<Texture2D> {
     let mut out = Vec::new();
-    for i in start..start + count {
-        out.push(load_texture(&format!("original/sprites/frame_{:03}.png", i)).await.unwrap());
+    for name in names {
+        out.push(load_sprite(name).await);
     }
     out
 }
@@ -235,16 +240,18 @@ async fn main() {
         fog_black_red: load_texture("assets/terrain/fogBlackRed.png").await.unwrap(),
         clouds: load_texture("assets/terrain/clouds.png").await.unwrap(),
         space: load_texture("assets/terrain/space4deep.png").await.unwrap(),
-        ship: load_texture("original/sprites/frame_380.png").await.unwrap(),
-        meteors: load_frames(0, 6).await,
-        debris: load_frames(40, 4).await,
-        explosion: load_frames(20, 4).await,
-        planets: load_frames(60, 4).await,
-        fire: load_frames(80, 4).await,
-        enemy_drone: load_texture("original/sprites/frame_435.png").await.unwrap(),
-        enemy_turret: load_texture("original/sprites/frame_450.png").await.unwrap(),
-        enemy_slinger: load_texture("original/sprites/frame_465.png").await.unwrap(),
-        bullet: load_texture("original/sprites/frame_300.png").await.unwrap(),
+        // Placeholder gameplay still uses a few of the real sprites until the
+        // original's game logic is ported.
+        ship: load_sprite("ship.1").await,
+        meteors: load_sprites(&["rock1.1", "rock1.2", "rock1.3", "rock1.4", "rock1.5", "rock1.6"]).await,
+        debris: load_sprites(&["rock3A.1", "rock3A.2", "rock3A.3", "rock3A.4"]).await,
+        explosion: load_sprites(&["fire100", "fire200", "fire100", "fire200"]).await,
+        planets: load_sprites(&["freeze1.1", "cinder1.1", "freeze1.2", "cinder1.2"]).await,
+        fire: load_sprites(&["fire100", "fire200", "fire100", "fire200"]).await,
+        enemy_drone: load_sprite("seeker").await,
+        enemy_turret: load_sprite("tower.1").await,
+        enemy_slinger: load_sprite("lobber").await,
+        bullet: load_sprite("laser").await,
         ui: load_ui_assets().await,
     };
     for tex in [
