@@ -30,6 +30,8 @@ pub struct MenuAssets {
 /// The shared menu backdrop's scroll (`BasicScreen::update` drifts it 50/s).
 pub struct MenuBackdrop {
     scroll: Vec2,
+    /// MB_BG_Z, read once: env lookups take the process environment lock.
+    bg_z: Option<f32>,
 }
 
 impl MenuBackdrop {
@@ -37,7 +39,11 @@ impl MenuBackdrop {
         // MB_SCROLL=<units> starts the scroll at a given phase, for matching
         // an emulator frame taken at an unknown time.
         let x = std::env::var("MB_SCROLL").ok().and_then(|v| v.parse().ok()).unwrap_or(0.0);
-        MenuBackdrop { scroll: vec2(x, 0.0) }
+        let bg_z = std::env::var("MB_BG_Z").ok().and_then(|v| v.parse().ok());
+        MenuBackdrop {
+            scroll: vec2(x, 0.0),
+            bg_z,
+        }
     }
 
     pub fn update(&mut self, dt: f32) {
@@ -48,7 +54,7 @@ impl MenuBackdrop {
     /// backdrop at (240, 155, 100), then the horizon at the origin, scale 1.25.
     fn draw(&self, canvas: &Canvas, assets: &MenuAssets, alpha: f32) {
         // MB_BG_Z overrides the backdrop depth while it is being verified.
-        let z = std::env::var("MB_BG_Z").ok().and_then(|v| v.parse().ok()).unwrap_or(BACKDROP_Z);
+        let z = self.bg_z.unwrap_or(BACKDROP_Z);
         canvas.draw_backdrop(true, &assets.space, &assets.fog, vec3(BACKDROP_X, BACKDROP_Y, z), self.scroll, alpha);
         draw_quad(&assets.horizon, 0.0, 0.0, HORIZON_SCALE, 0.0, Color::new(1.0, 1.0, 1.0, alpha));
     }

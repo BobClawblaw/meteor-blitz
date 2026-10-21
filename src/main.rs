@@ -24,6 +24,8 @@ mod waves;
 mod weapons;
 
 use std::collections::HashMap;
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::{Duration, Instant};
 
 use macroquad::audio::{
     load_sound, play_sound, set_sound_volume, stop_sound, PlaySoundParams, Sound,
@@ -592,8 +594,45 @@ async fn main() {
         });
     }
 
+    // MB_PROF prints update and draw CPU time per window; MB_PROF_FRAMES=N
+    // exits after N frames, for unattended benchmarks.
+    let prof = std::env::var_os("MB_PROF").is_some();
+    let prof_frames: u32 = std::env::var("MB_PROF_FRAMES")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+    let mut prof_update = 0.0f64;
+    let mut prof_draw = 0.0f64;
+    let mut prof_max_update = 0.0f64;
+    let mut prof_max_draw = 0.0f64;
+    let mut prof_dt = 0.0f64;
+    let mut prof_window = 0u32;
+    // Read once: env lookups take the process environment lock.
+    let shot_frame: u32 = std::env::var("MB_SHOT_FRAME")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(20);
+    let shot_path = std::env::var("MB_SHOT").ok();
+    // The original runs its simulation at 60 Hz. miniquad's display-link
+    // pacing is not reliable (an occluded or unfocused window can run the
+    // loop uncapped and peg a core), so pace it here. MB_FPS=0 disables the
+    // cap, for benchmarks. Screenshot runs stay uncapped unless MB_FPS is
+    // given, so MB_SHOT_FRAME keeps selecting the same simulation state as
+    // before pacing existed.
+    #[cfg(not(target_arch = "wasm32"))]
+    let frame_period = {
+        let target_fps: f64 = std::env::var("MB_FPS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(if shot_path.is_some() { 0.0 } else { 60.0 });
+        (target_fps > 0.0).then(|| Duration::from_secs_f64(1.0 / target_fps))
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    let mut next_deadline = Instant::now();
+
     loop {
         let dt = get_frame_time().min(0.05);
+        let t0 = get_time();
         pad::poll();
         if music_on {
             set_sound_volume(&music, settings.music);
@@ -733,6 +772,8 @@ async fn main() {
             }
         }
 
+        let t1 = get_time();
+
         canvas.begin();
         match screen {
             Screen::Menu(_) => menu_screen.draw(&canvas, &menu_assets, &backdrop),
@@ -746,17 +787,41 @@ async fn main() {
             }
         }
         canvas.end();
+        let t2 = get_time();
+
+        if prof {
+            let update_ms = (t1 - t0) * 1000.0;
+            let draw_ms = (t2 - t1) * 1000.0;
+            prof_update += update_ms;
+            prof_draw += draw_ms;
+            prof_max_update = prof_max_update.max(update_ms);
+            prof_max_draw = prof_max_draw.max(draw_ms);
+            prof_dt += dt as f64;
+            prof_window += 1;
+            if prof_window == 120 {
+                let n = prof_window as f64;
+                eprintln!(
+                    "perf: update {:.2}ms avg / {:.2}ms max, draw {:.2}ms avg / {:.2}ms max, frame {:.2}ms ({:.1} fps)",
+                    prof_update / n,
+                    prof_max_update,
+                    prof_draw / n,
+                    prof_max_draw,
+                    prof_dt * 1000.0 / n,
+                    n / prof_dt
+                );
+                prof_update = 0.0;
+                prof_draw = 0.0;
+                prof_max_update = 0.0;
+                prof_max_draw = 0.0;
+                prof_dt = 0.0;
+                prof_window = 0;
+            }
+        }
 
         // F12 saves the frame for pixel comparison against emulator frames;
         // MB_SHOT=<file> saves frame MB_SHOT_FRAME (default 20) there and exits.
         frame_count += 1;
-        let shot_frame = std::env::var("MB_SHOT_FRAME")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(20);
-        let auto_shot = std::env::var("MB_SHOT")
-            .ok()
-            .filter(|_| frame_count == shot_frame);
+        let auto_shot = shot_path.as_deref().filter(|_| frame_count == shot_frame);
         if auto_shot.is_some() {
             if let Some(g) = game.as_ref() {
                 eprintln!("shot: ship at {:?}", g.ship_pos());
@@ -765,13 +830,47 @@ async fn main() {
         if is_key_pressed(KeyCode::F12) || auto_shot.is_some() {
             let _ = std::fs::create_dir_all("shots");
             let name = auto_shot
-                .clone()
+                .map(str::to_owned)
                 .unwrap_or_else(|| format!("shots/port_{}.png", (get_time() * 1000.0) as u64));
             get_screen_data().export_png(&name);
             if auto_shot.is_some() {
                 std::process::exit(0);
             }
         }
+        if prof && prof_frames > 0 && frame_count >= prof_frames {
+            if let Some(g) = game.as_ref() {
+                eprintln!(
+                    "perf: end score {} rings {} ship {:?}",
+                    g.score,
+                    g.rings,
+                    g.ship_pos()
+                );
+            }
+            if prof_window > 0 {
+                let n = prof_window as f64;
+                eprintln!(
+                    "perf: final update {:.2}ms avg / {:.2}ms max, draw {:.2}ms avg / {:.2}ms max, frame {:.2}ms",
+                    prof_update / n,
+                    prof_max_update,
+                    prof_draw / n,
+                    prof_max_draw,
+                    prof_dt * 1000.0 / n
+                );
+            }
+            std::process::exit(0);
+        }
         next_frame().await;
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(period) = frame_period {
+            next_deadline += period;
+            let now = Instant::now();
+            if next_deadline > now {
+                std::thread::sleep(next_deadline - now);
+            } else if now.duration_since(next_deadline) > period {
+                // A long stall (window drag, shader compile): resynchronise
+                // instead of trying to catch up frame by frame.
+                next_deadline = now;
+            }
+        }
     }
 }

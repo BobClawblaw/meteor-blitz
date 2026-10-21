@@ -62,6 +62,13 @@ fn stick(x: f32, y_up: f32) -> Vec2 {
 mod raw {
     use super::*;
     use objc2_game_controller::{GCController, GCControllerButtonInput, GCDevice};
+    use std::cell::Cell;
+
+    thread_local! {
+        /// Setting this posts a KVO notification through LaunchServices (a
+        /// synchronous XPC round trip), so do it once, not every frame.
+        static MONITORING: Cell<bool> = const { Cell::new(false) };
+    }
 
     #[link(name = "CoreFoundation", kind = "framework")]
     extern "C" {
@@ -84,7 +91,12 @@ mod raw {
     pub fn read() -> Option<Raw> {
         pump_main_queue();
         unsafe {
-            GCController::setShouldMonitorBackgroundEvents(true);
+            MONITORING.with(|m| {
+                if !m.get() {
+                    GCController::setShouldMonitorBackgroundEvents(true);
+                    m.set(true);
+                }
+            });
             let controllers = GCController::controllers();
             let (c, gp) = controllers.iter().find_map(|c| c.extendedGamepad().map(|g| (c, g)))?;
             let name = c.vendorName().map(|n| n.to_string()).unwrap_or_else(|| "controller".into());
@@ -178,10 +190,11 @@ mod raw {
 #[cfg(not(target_arch = "wasm32"))]
 mod backend {
     use super::*;
-    use std::cell::RefCell;
+    use std::cell::{Cell, RefCell};
 
     thread_local! {
         static STATE: RefCell<State> = RefCell::new(State::default());
+        static PAD_LOG: Cell<Option<bool>> = const { Cell::new(None) };
     }
 
     pub fn poll() {
@@ -205,7 +218,12 @@ mod backend {
             }
             // MB_PAD_LOG=1 prints presses and stick positions, to check a
             // controller's layout.
-            if std::env::var_os("MB_PAD_LOG").is_some() && (!s.pressed.is_empty() || s.left != Vec2::ZERO || s.right != Vec2::ZERO) {
+            let log = PAD_LOG.with(|c| c.get().unwrap_or_else(|| {
+                let on = std::env::var_os("MB_PAD_LOG").is_some();
+                c.set(Some(on));
+                on
+            }));
+            if log && (!s.pressed.is_empty() || s.left != Vec2::ZERO || s.right != Vec2::ZERO) {
                 eprintln!("pad: pressed {:?} left {:.2?} right {:.2?}", s.pressed, s.left, s.right);
             }
         });

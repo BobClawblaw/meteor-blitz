@@ -26,6 +26,11 @@
 9. **Desktop/web** — macOS app, Windows build on `xamd4090`, WASM web build.
 10. **QA** — perf, playtest, release.
 
+## Performance
+
+- The loop is paced at 60 Hz (the original's simulation rate); `MB_FPS=0` disables the cap for benchmarks, `MB_PROF`/`MB_PROF_FRAMES` report update/draw CPU (see `AGENTS.md`).
+- Platform input and per-frame test hooks are read once, not per frame.
+
 ## Asset notes
 
 - Terrain: `original/textures/*.png` (decoded from PVRTC). Tint per world.

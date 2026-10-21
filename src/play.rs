@@ -700,12 +700,25 @@ pub struct Play {
     /// `Audio::play` ids raised this update, for the caller to play.
     pub sounds: Vec<usize>,
     effects: Effects,
+    /// Test hooks, read once: env lookups take the process environment lock
+    /// and `var` allocates a String.
+    drift: Option<Vec2>,
+    auto_fire: bool,
+    gun: bool,
+    auto_bomb: Option<f32>,
+    bg_z: Option<f32>,
 }
 
 impl Play {
     /// `world` 0-5 for arcade worlds, 6 for survival.
     pub fn new(world: usize, stage: usize, high_score: u64, assets: &PlayAssets) -> Play {
         let level = if world == SURVIVAL { 1 } else { world.min(5) };
+        let drift = std::env::var("MB_DRIFT").ok().and_then(|v| {
+            let (x, y) = v.split_once(',')?;
+            Some(vec2(x.parse().ok()?, y.parse().ok()?))
+        });
+        let auto_bomb = std::env::var("MB_BOMB_AT").ok().and_then(|v| v.parse().ok());
+        let bg_z = std::env::var("MB_BG_Z").ok().and_then(|v| v.parse().ok());
         Play {
             world,
             stage,
@@ -746,6 +759,11 @@ impl Play {
             high_score,
             sounds: Vec::new(),
             effects: Effects::load(&assets.systems),
+            drift,
+            auto_fire: std::env::var_os("MB_AUTOFIRE").is_some(),
+            gun: std::env::var_os("MB_GUN").is_some(),
+            auto_bomb,
+            bg_z,
         }
     }
 
@@ -1563,11 +1581,7 @@ impl Play {
         // A controller's left stick is the original's left wheel: speed
         // follows how far it is pushed.
         // MB_DRIFT=x,y holds the stick there, for screenshot runs.
-        let drift = std::env::var("MB_DRIFT").ok().and_then(|v| {
-            let (x, y) = v.split_once(',')?;
-            Some(vec2(x.parse().ok()?, y.parse().ok()?))
-        });
-        let pad_stick = drift.unwrap_or_else(pad::left);
+        let pad_stick = self.drift.unwrap_or_else(pad::left);
         if stick != Vec2::ZERO {
             self.ship.vel = stick.normalize() * WHEEL_MAX * self.speed();
         } else if pad_stick != Vec2::ZERO {
@@ -1585,9 +1599,8 @@ impl Play {
         }
         // Bombs: the original's on-screen bomb button; right mouse or B here.
         // MB_BOMB_AT=<seconds> drops one unattended, for screenshot runs.
-        let auto_bomb = std::env::var("MB_BOMB_AT")
-            .ok()
-            .and_then(|v| v.parse::<f32>().ok())
+        let auto_bomb = self
+            .auto_bomb
             .is_some_and(|t| self.elapsed >= t && self.elapsed - dt < t);
         if auto_bomb
             || is_mouse_button_pressed(MouseButton::Right)
@@ -1614,17 +1627,14 @@ impl Play {
             self.sounds.push(SOUND_BOOST_READY);
         }
         // MB_AUTOFIRE aims at the nearest rock, for unattended screenshot runs.
-        let auto = std::env::var_os("MB_AUTOFIRE")
-            .is_some()
-            .then(|| self.nearest_rock())
-            .flatten();
+        let auto = self.auto_fire.then(|| self.nearest_rock()).flatten();
         if let Some(target) = auto {
             let dir = (target - self.ship.pos).normalize_or_zero();
             if dir != Vec2::ZERO {
                 self.ship.shoot(dt, dir);
             }
             // MB_GUN: reach out every 2 s and throw 1.5 s later.
-            if std::env::var_os("MB_GUN").is_some() {
+            if self.gun {
                 let phase = self.elapsed % 2.0;
                 if phase < dt {
                     self.field.gun.activate();
@@ -1972,10 +1982,7 @@ impl Play {
         let cam = self.camera.offset();
         let (base, decal) = &assets.backdrops[self.world.min(assets.backdrops.len() - 1)];
         // MB_BG_Z overrides the backdrop depth while it is being verified.
-        let bg_z = std::env::var("MB_BG_Z")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(BACKGROUND_Z);
+        let bg_z = self.bg_z.unwrap_or(BACKGROUND_Z);
         let origin = vec3(
             SCREEN_CENTRE.x + cam.x,
             SCREEN_CENTRE.y + cam.y,
