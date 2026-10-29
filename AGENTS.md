@@ -17,7 +17,7 @@
 ## Repos
 
 - Primary: `nas` → `ssh://agentnas/volume1/storage/git/meteor-blitz.git`
-- Secondary mirror: `github` → `BobClawblaw/meteor-blitz` (private)
+- Secondary mirror: `github` → `BobClawblaw/meteor-blitz` (public; releases are published there)
 - Push to both. Never force-push without listing what dies first.
 
 ## Windows builds
