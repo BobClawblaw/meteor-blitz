@@ -46,6 +46,7 @@ Done (faithful to the binary unless noted):
 - Lighting and effects (port addition, Options > Lighting and effects, `settings.txt` `visual_fx`, default on; `MB_FX_OFF=1` forces off): the game backdrop shader takes a normal map per planet (`tools/normalmaps.py` -> `assets/normals/`, `assets/4x/normals/`, brightness as height, wrap-around gradients) lit by a fixed key light from the upper left (clouds flatten it), plus up to 12 point lights on the canvas (`gfx::Light`): fading glows from explosions, hits, bombs, the boss and ship deaths (`event_light`), shots (every 2nd-4th bullet), and the ship. The backdrop vertex shader maps clip space back to the canvas (`ndc_to_canvas`, unit-tested). Enemy, rock and ring sprites use the `lit` material, tinted by the same lights (`Play::tint`, vertex colour 0.5 = unlit).
 - Post effects (with Lighting and effects): the final blit runs `POST_FRAGMENT`: up to 4 shockwave rings (`gfx::Wave`; bombs, the boss dying and dead, depots, the ship's death, large and extra-large rocks via `event_shock`; a ring grows with ease-out and fades) bend the image with a slight colour split, then per-world colour grading (`world_grade`: lift, gain, saturation) and a 0.25 vignette. Menus keep the plain blit.
 - Scorch marks (with Lighting and effects): destroyed rocks (by size), enemies, depots and the boss leave burn marks on the play plane (`event_scorch`; texture generated at startup by `play::scorch_texture`), up to 96, lasting 15 s and fading over the last 5.
+- Ship effects (with Lighting and effects): a green engine trail (16 samples, shown in proportion to speed), boost speed lines, a pulsing shield rim, and streaks behind enemies the gravity gun threw (`draw_ship_fx`, `draw_shield_rim`), all additive so they glow.
 - Stage advance keeps the run: `Play::advance_stage` starts the next stage in the same screen, carrying score, rings, upgrade points, upgrades, lives, bombs and multiplier, like the original's `GameScreen::handleEvent` next-stage case; only the stage's world state restarts.
 
 Approximations / not yet faithful:
@@ -82,7 +83,7 @@ Test hooks (env):
 - `MB_LABEL_SCALE=<n>` pins the pause button label scale (default 0.54), for comparing label sizes against the emulator.
 - `MB_LABEL_DY=<n>` nudges the pause labels vertically (default 1.0), for matching the emulator's label placement.
 - `MB_BG_BASE` / `MB_BG_DECAL_TEX` override the menu backdrop textures (defaults `space4deep`/`fogRed`), for comparing against emulator frames.
-- `MB_AUTOFIRE`, `MB_GUN`, `MB_BOMB_AT`, `MB_WEAPON` and `MB_DRIFT` drive play unattended.
+- `MB_AUTOFIRE`, `MB_GUN`, `MB_BOMB_AT`, `MB_BOOST_AT`, `MB_WEAPON` and `MB_DRIFT` drive play unattended. `MB_FX_OFF=1` turns Lighting and effects off for a run.
 - `MB_FPS=<n>` overrides the 60 Hz frame cap (`0` = uncapped). `MB_PROF=1` prints update/draw CPU per 120 frames; `MB_PROF_FRAMES=n` exits after n frames for benchmarks. Screenshot runs are uncapped unless `MB_FPS` is given, so `MB_SHOT_FRAME` still selects the same state.
 - `MB_PAD_LOG` prints controller input. To tell a game bug from a driver one on Windows, run an XInput reader (`XInputGetState` on xinput1_4.dll) alongside and compare.
 - `MB_MENU=<main|mode|options|controls|scores|scores-arcade|scores-survival|scores-global>` opens a menu screen directly, for captures (`help` = `controls`).

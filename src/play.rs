@@ -741,6 +741,7 @@ pub struct Play {
     auto_fire: bool,
     gun: bool,
     auto_bomb: Option<f32>,
+    auto_boost: Option<f32>,
     bg_z: Option<f32>,
     /// Global::level 7: the tutorial runs in this game.
     tutorial: Option<Tutorial>,
@@ -758,6 +759,9 @@ pub struct Play {
     shocks: Vec<Shock>,
     /// Burn marks on the ground, oldest first.
     scorches: Vec<Scorch>,
+    /// The ship's recent positions and speeds, newest first, for its
+    /// engine trail.
+    trail: VecDeque<(Vec2, f32)>,
     /// This frame's lights on the canvas, for tinting sprites.
     frame_lights: std::cell::RefCell<Vec<Light>>,
 }
@@ -799,6 +803,11 @@ struct Scorch {
     angle: f32,
     age: f32,
 }
+
+/// Engine trail: samples kept (one per step), and the speed at which it
+/// shows fully.
+const TRAIL_POINTS: usize = 16;
+const TRAIL_FULL_SPEED: f32 = 300.0;
 
 const SCORCH_LIFE: f32 = 15.0;
 const SCORCH_FADE: f32 = 5.0;
@@ -961,6 +970,7 @@ impl Play {
             auto_fire: std::env::var_os("MB_AUTOFIRE").is_some(),
             gun: std::env::var_os("MB_GUN").is_some(),
             auto_bomb,
+            auto_boost: std::env::var("MB_BOOST_AT").ok().and_then(|v| v.parse().ok()),
             bg_z,
             tutorial: None,
             prev: Snapshot::default(),
@@ -969,6 +979,7 @@ impl Play {
             glows: Vec::new(),
             shocks: Vec::new(),
             scorches: Vec::new(),
+            trail: VecDeque::new(),
             frame_lights: std::cell::RefCell::new(Vec::new()),
         }
     }
@@ -1370,6 +1381,12 @@ impl Play {
         self.ship.update(dt);
         let total = self.ship.vel + self.ship.boost_vel;
         self.scroll += total * dt;
+        if matches!(self.ship.life, Life::Dead(_)) {
+            self.trail.clear();
+        } else {
+            self.trail.push_front((self.ship.pos, total.length()));
+            self.trail.truncate(TRAIL_POINTS);
+        }
         self.camera.update(dt, total * CAMERA_LEAD);
 
         if self.tutorial.is_none() {
@@ -2127,7 +2144,11 @@ impl Play {
                 t.using_bomb();
             }
         }
-        let boost = bindings::pressed(Action::Boost);
+        // MB_BOOST_AT=<seconds> boosts unattended, for screenshot runs.
+        let auto_boost = self
+            .auto_boost
+            .is_some_and(|t| self.elapsed >= t && self.elapsed - dt < t);
+        let boost = auto_boost || bindings::pressed(Action::Boost);
         if boost && self.ship.can_boost() && self.allowed(Tutorial::can_boost) {
             self.ship.boost(dt);
             self.camera.shake(0.75, 7.5);
@@ -2783,10 +2804,109 @@ impl Play {
         );
 
         self.draw_gravity(canvas, assets);
+        if self.fx {
+            self.draw_ship_fx(canvas, assets);
+        }
         self.draw_ship(assets);
+        if self.fx {
+            self.draw_shield_rim(canvas, assets);
+        }
         self.effects
             .draw(canvas, &assets.spark, self.z, |p| self.to_screen(p));
         self.draw_hud(canvas, assets);
+    }
+
+    /// Port addition: the engine trail, boost streaks, and streaks behind
+    /// enemies the gravity gun threw, all additive.
+    fn draw_ship_fx(&self, canvas: &Canvas, assets: &PlayAssets) {
+        let mut verts = Vec::new();
+        let mut indices: Vec<u16> = Vec::new();
+        let mut quad = |verts: &mut Vec<Vertex>, c: Vec2, h: f32, color: Color| {
+            let n = verts.len() as u16;
+            for (x, y, u, v) in [(-1.0, -1.0, 0.0, 0.0), (1.0, -1.0, 1.0, 0.0), (1.0, 1.0, 1.0, 1.0), (-1.0, 1.0, 0.0, 1.0)] {
+                verts.push(Vertex::new(c.x + x * h, c.y + y * h, self.z, u, v, color));
+            }
+            indices.extend_from_slice(&[n, n + 1, n + 2, n, n + 2, n + 3]);
+        };
+        // The trail: older samples smaller and fainter, and only while
+        // moving (a still ship would pile it into a blob).
+        let n = self.trail.len().max(1) as f32;
+        for (i, &(pos, speed)) in self.trail.iter().enumerate().skip(1) {
+            let k = 1.0 - i as f32 / n;
+            let a = 0.45 * k * (speed / TRAIL_FULL_SPEED).min(1.0) * self.ship.alpha;
+            if a > 0.01 {
+                quad(&mut verts, self.to_screen(pos), 3.0 + 6.0 * k, Color::new(0.35, 1.0, 0.5, a));
+            }
+        }
+        canvas.draw_triangles(verts, indices, Some(&assets.spark), true);
+
+        // Streaks: boost lines behind the ship, and thrown enemies.
+        let mut verts = Vec::new();
+        let mut indices: Vec<u16> = Vec::new();
+        let mut line = |a: Vec2, b: Vec2, width: f32, head: Color| {
+            let side = (b - a).perp().normalize_or_zero() * width * 0.5;
+            let tail = Color::new(head.r, head.g, head.b, 0.0);
+            let n = verts.len() as u16;
+            verts.push(Vertex::new(a.x + side.x, a.y + side.y, self.z, 0.0, 0.0, head));
+            verts.push(Vertex::new(a.x - side.x, a.y - side.y, self.z, 0.0, 0.0, head));
+            verts.push(Vertex::new(b.x - side.x, b.y - side.y, self.z, 0.0, 0.0, tail));
+            verts.push(Vertex::new(b.x + side.x, b.y + side.y, self.z, 0.0, 0.0, tail));
+            indices.extend_from_slice(&[n, n + 1, n + 2, n, n + 2, n + 3]);
+        };
+        if self.ship.invincible > 0.0 && !matches!(self.ship.life, Life::Dead(_)) {
+            let k = (self.ship.invincible / BOOST_INVINCIBLE).clamp(0.0, 1.0);
+            let back = -(self.ship.vel + self.ship.boost_vel).normalize_or_zero();
+            if back != Vec2::ZERO {
+                let p = self.to_screen(self.view_ship());
+                let side = back.perp();
+                // Uneven speed lines, longest at the centre.
+                for (off, len) in [(-9.0, 34.0), (-4.5, 52.0), (0.0, 70.0), (5.0, 46.0), (10.0, 30.0)] {
+                    let start = p + side * off + back * 6.0;
+                    line(start, start + back * len * k, 1.5, Color::new(0.6, 1.0, 0.7, 0.35 * k));
+                }
+            }
+        }
+        let thrown = |g: &Option<gravity::Grav>| g.as_ref().filter(|g| g.thrown()).map(|g| g.vel);
+        let flung = self
+            .field
+            .rocks
+            .iter()
+            .filter_map(|r| thrown(&r.grav).map(|v| (r.pos, v)))
+            .chain(self.field.mines.iter().filter_map(|e| thrown(&e.grav).map(|v| (e.pos, v))))
+            .chain(self.field.shy_guys.iter().filter_map(|e| thrown(&e.grav).map(|v| (e.pos, v))))
+            .chain(self.field.arrows.iter().filter_map(|e| thrown(&e.grav).map(|v| (e.pos, v))))
+            .chain(self.field.seekers.iter().filter_map(|e| thrown(&e.grav).map(|v| (e.pos, v))))
+            .chain(self.field.pieces.iter().filter_map(|e| thrown(&e.grav).map(|v| (e.pos, v))));
+        for (pos, vel) in flung {
+            let p = self.to_screen(pos);
+            line(p, p - vel * 0.08, 8.0, Color::new(0.6, 0.85, 1.0, 0.45));
+        }
+        canvas.draw_triangles(verts, indices, None, true);
+    }
+
+    /// Port addition: a soft pulse around the shield while it is up.
+    fn draw_shield_rim(&self, canvas: &Canvas, assets: &PlayAssets) {
+        let ship = &self.ship;
+        let up = match ship.life {
+            Life::Dead(_) => 0.0,
+            Life::Spawning(_) => 1.0,
+            Life::Fading(t) => t.max(ship.shield as u8 as f32),
+            Life::Alive => ship.shield as u8 as f32,
+        };
+        if up <= 0.0 {
+            return;
+        }
+        let p = self.to_screen(self.view_ship());
+        let pulse = 0.5 + 0.5 * (self.elapsed * 6.0).sin();
+        let (w, _) = tex_size(&assets.shield);
+        let h = w * (0.55 + 0.05 * pulse);
+        let color = Color::new(0.4, 0.9, 1.0, (0.15 + 0.2 * pulse) * up * ship.alpha);
+        let n = 0u16;
+        let verts: Vec<Vertex> = [(-1.0, -1.0, 0.0, 0.0), (1.0, -1.0, 1.0, 0.0), (1.0, 1.0, 1.0, 1.0), (-1.0, 1.0, 0.0, 1.0)]
+            .iter()
+            .map(|&(x, y, u, v)| Vertex::new(p.x + x * h, p.y + y * h, self.z, u, v, color))
+            .collect();
+        canvas.draw_triangles(verts, vec![n, n + 1, n + 2, n, n + 2, n + 3], Some(&assets.shield), true);
     }
 
     /// Burn marks on the play plane, in one batch.
