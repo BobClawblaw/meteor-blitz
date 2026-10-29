@@ -337,6 +337,69 @@ void main() {
     gl_FragColor = vec4(t.rgb * color.rgb * 2.0, t.a * color.a);
 }"#;
 
+/// The final blit with post effects (port addition): shockwave rings that
+/// bend the image (with a slight colour split at the ring), then colour
+/// grading and a vignette. `uv` is the portrait target's; Canvas maps it
+/// to the landscape canvas.
+const POST_FRAGMENT: &str = r#"#version 100
+precision highp float;
+varying lowp vec4 color;
+varying highp vec2 uv;
+uniform sampler2D Texture;
+uniform vec2 View;
+uniform vec4 Waves[4];
+uniform vec3 Lift;
+uniform vec3 Gain;
+uniform float Saturation;
+uniform float Vignette;
+vec2 to_canvas(vec2 t) {
+    return vec2(View.x * (1.0 - t.y) - View.y, 320.0 * (1.0 - t.x));
+}
+vec2 to_uv(vec2 c) {
+    return vec2(1.0 - c.y / 320.0, 1.0 - (c.x + View.y) / View.x);
+}
+void main() {
+    vec2 c = to_canvas(uv);
+    vec2 shift = vec2(0.0);
+    for (int i = 0; i < 4; i++) {
+        vec2 d = c - Waves[i].xy;
+        float dist = length(d);
+        float band = (dist - Waves[i].z) / 14.0;
+        shift += d / max(dist, 1.0) * Waves[i].w * exp(-band * band);
+    }
+    float split = length(shift) * 0.25;
+    vec2 dir = shift / max(length(shift), 0.001);
+    vec3 rgb = vec3(
+        texture2D(Texture, to_uv(c - shift - dir * split)).r,
+        texture2D(Texture, to_uv(c - shift)).g,
+        texture2D(Texture, to_uv(c - shift + dir * split)).b);
+    float luma = dot(rgb, vec3(0.299, 0.587, 0.114));
+    rgb = mix(vec3(luma), rgb, Saturation);
+    rgb = Lift + rgb * Gain;
+    vec2 v = (c - vec2(240.0, 160.0)) / vec2(View.x * 0.5, 160.0);
+    rgb *= 1.0 - Vignette * dot(v, v) * 0.5;
+    gl_FragColor = vec4(rgb, 1.0) * color;
+}"#;
+
+/// A shockwave ring on the canvas: centre, radius and how far it pushes.
+#[derive(Clone, Copy, Debug)]
+pub struct Wave {
+    pub pos: Vec2,
+    pub radius: f32,
+    pub strength: f32,
+}
+
+/// Colour grading: lift (added), gain (multiplied), saturation, vignette.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Grade {
+    pub lift: Vec3,
+    pub gain: Vec3,
+    pub saturation: f32,
+    pub vignette: f32,
+}
+
+pub const MAX_WAVES: usize = 4;
+
 /// Point lights the ground shader takes at most.
 pub const MAX_LIGHTS: usize = 12;
 
@@ -485,6 +548,9 @@ pub struct Canvas {
     additive: Material,
     flash: Material,
     lit: Material,
+    post: Material,
+    /// The next blit's shockwaves and grading (None: the plain blit).
+    post_fx: RefCell<Option<(Vec<Wave>, Grade)>>,
     /// Sprites are drawn with `lit` (Canvas::lighting).
     lighting_on: Cell<bool>,
     /// The ground's lights and normal map for the next `draw_backdrop`.
@@ -558,6 +624,21 @@ impl Canvas {
             },
         )
         .expect("lit shader");
+        let post = load_material(
+            ShaderSource::Glsl { vertex: DEFAULT_VERTEX, fragment: POST_FRAGMENT },
+            MaterialParams {
+                uniforms: vec![
+                    UniformDesc::new("View", UniformType::Float2),
+                    UniformDesc::new("Waves", UniformType::Float4).array(MAX_WAVES),
+                    UniformDesc::new("Lift", UniformType::Float3),
+                    UniformDesc::new("Gain", UniformType::Float3),
+                    UniformDesc::new("Saturation", UniformType::Float1),
+                    UniformDesc::new("Vignette", UniformType::Float1),
+                ],
+                ..Default::default()
+            },
+        )
+        .expect("post shader");
         let additive = load_material(
             ShaderSource::Glsl {
                 vertex: DEFAULT_VERTEX,
@@ -595,6 +676,8 @@ impl Canvas {
             additive,
             flash,
             lit,
+            post,
+            post_fx: RefCell::new(None),
             lighting_on: Cell::new(false),
             lights: RefCell::new(Vec::new()),
             normal: RefCell::new(None),
@@ -692,6 +775,12 @@ impl Canvas {
         clear_background(BLACK);
         self.emitters.borrow_mut().clear();
         self.glowing.set(false);
+        *self.post_fx.borrow_mut() = None;
+    }
+
+    /// Shockwaves and grading for this frame's blit (set after `begin`).
+    pub fn set_post(&self, waves: &[Wave], grade: Grade) {
+        *self.post_fx.borrow_mut() = Some((waves.iter().take(MAX_WAVES).copied().collect(), grade));
     }
 
     /// Blit the portrait target as the landscape image. Landscape (x, y) is
@@ -726,7 +815,24 @@ impl Canvas {
             indices: vec![0, 1, 2, 0, 2, 3],
             texture: Some(self.target.borrow().texture.clone()),
         };
-        draw_mesh(&quad);
+        let post = self.post_fx.borrow();
+        if let Some((waves, grade)) = post.as_ref() {
+            let mut w = [Vec4::ZERO; MAX_WAVES];
+            for (i, wave) in waves.iter().enumerate() {
+                w[i] = vec4(wave.pos.x, wave.pos.y, wave.radius, wave.strength);
+            }
+            self.post.set_uniform("View", vec2(view_w, edge()));
+            self.post.set_uniform_array("Waves", &w);
+            self.post.set_uniform("Lift", grade.lift);
+            self.post.set_uniform("Gain", grade.gain);
+            self.post.set_uniform("Saturation", grade.saturation);
+            self.post.set_uniform("Vignette", grade.vignette);
+            gl_use_material(&self.post);
+            draw_mesh(&quad);
+            gl_use_default_material();
+        } else {
+            draw_mesh(&quad);
+        }
         if bloom {
             let glow = Mesh {
                 vertices: quad

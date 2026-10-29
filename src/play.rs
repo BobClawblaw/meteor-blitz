@@ -18,7 +18,7 @@ use crate::bindings::{self, Action};
 use crate::boss::{self, BossState, Piece};
 use crate::depot::{self, Depot};
 use crate::enemies::{wrap_near, Element, Event, Field, Rock, Script, Weapon};
-use crate::gfx::{draw_atlas_sprite, draw_quad, draw_sprite, tex_size, Canvas, Light, CANVAS_H, CANVAS_W, MAX_LIGHTS};
+use crate::gfx::{draw_atlas_sprite, draw_quad, draw_sprite, tex_size, Canvas, Grade, Light, Wave, CANVAS_H, CANVAS_W, MAX_LIGHTS};
 use crate::gravity;
 use crate::hud::{self, HudAssets, HudValues, Show};
 use crate::pad;
@@ -724,6 +724,8 @@ pub struct Play {
     pub fx: bool,
     /// Lights from explosions and hits, fading out.
     glows: Vec<Glow>,
+    /// Shockwave rings from big explosions.
+    shocks: Vec<Shock>,
     /// This frame's lights on the canvas, for tinting sprites.
     frame_lights: std::cell::RefCell<Vec<Light>>,
 }
@@ -756,6 +758,41 @@ fn event_light(event: &Event) -> Option<(Vec2, Vec3, f32, f32)> {
         Event::GravityBurst { pos } => (*pos, ICE_LIGHT, 110.0, 0.4),
         _ => return None,
     })
+}
+
+/// A shockwave ring: it grows to `radius` over `life` seconds and fades.
+struct Shock {
+    pos: Vec2,
+    radius: f32,
+    strength: f32,
+    age: f32,
+    life: f32,
+}
+
+/// The shockwave an event sends out (port addition): reach, push, seconds.
+fn event_shock(event: &Event) -> Option<(Vec2, f32, f32, f32)> {
+    Some(match event {
+        Event::RockDestroyed { pos, size: 2, .. } => (*pos, 80.0, 4.0, 0.4),
+        Event::RockDestroyed { pos, size: 3, .. } => (*pos, 110.0, 6.0, 0.45),
+        Event::DepotDestroyed { pos, .. } => (*pos, 130.0, 6.0, 0.5),
+        Event::BossDying { pos } => (*pos, 120.0, 5.0, 0.5),
+        Event::BossDead { pos, .. } => (*pos, 300.0, 12.0, 0.9),
+        _ => return None,
+    })
+}
+
+/// Colour grading per world (port addition): blue, fire, green, sprawl,
+/// craters, then space for world 6 and survival.
+fn world_grade(world: usize) -> Grade {
+    let g = |lift: Vec3, gain: Vec3, saturation: f32| Grade { lift, gain, saturation, vignette: 0.25 };
+    match world {
+        0 => g(vec3(0.0, 0.005, 0.015), vec3(0.98, 1.0, 1.06), 1.1),
+        1 => g(vec3(0.02, 0.005, 0.0), vec3(1.08, 0.98, 0.9), 1.15),
+        2 => g(Vec3::ZERO, vec3(0.97, 1.05, 0.97), 1.1),
+        3 => g(vec3(0.01, 0.0, 0.01), vec3(1.05, 0.97, 1.0), 1.05),
+        4 => g(vec3(0.01, 0.01, 0.0), vec3(1.02, 1.04, 0.95), 1.08),
+        _ => g(Vec3::ZERO, vec3(1.0, 0.98, 1.06), 1.15),
+    }
 }
 
 /// A light left by an explosion or hit, in world coordinates.
@@ -869,6 +906,7 @@ impl Play {
             blend: 1.0,
             fx: true,
             glows: Vec::new(),
+            shocks: Vec::new(),
             frame_lights: std::cell::RefCell::new(Vec::new()),
         }
     }
@@ -1091,6 +1129,30 @@ impl Play {
         }
     }
 
+    fn shock(&mut self, pos: Vec2, radius: f32, strength: f32, life: f32) {
+        if self.shocks.len() < 8 {
+            self.shocks.push(Shock { pos, radius, strength, age: 0.0, life });
+        }
+    }
+
+    /// The shockwaves on the canvas this frame, strongest first.
+    fn waves(&self) -> Vec<Wave> {
+        let mut waves: Vec<Wave> = self
+            .shocks
+            .iter()
+            .map(|s| {
+                let t = s.age / s.life;
+                Wave {
+                    pos: self.to_screen(s.pos),
+                    radius: s.radius * (1.0 - (1.0 - t) * (1.0 - t)),
+                    strength: s.strength * (1.0 - t),
+                }
+            })
+            .collect();
+        waves.sort_by(|a, b| b.strength.total_cmp(&a.strength));
+        waves
+    }
+
     /// The frame's strongest lights on the canvas: fading explosion glows,
     /// then shots and the ship.
     fn collect_lights(&self) -> Vec<Light> {
@@ -1211,6 +1273,10 @@ impl Play {
         self.glows.retain_mut(|g| {
             g.life -= dt;
             g.life > 0.0
+        });
+        self.shocks.retain_mut(|s| {
+            s.age += dt;
+            s.age < s.life
         });
         self.elapsed += dt;
     }
@@ -1473,6 +1539,7 @@ impl Play {
         self.script.delay();
         self.sounds.push(SOUND_SHIP_DESTROYED);
         self.glow(self.ship.pos, SHIP_LIGHT, 200.0, 0.7);
+        self.shock(self.ship.pos, 160.0, 8.0, 0.6);
         // Ship::setState(4): the multiplier starts over from this score.
         self.multiplier = 1;
         self.multiplier_base = self.score;
@@ -1598,7 +1665,10 @@ impl Play {
         }
         self.bombs -= 1;
         self.sounds.push(SOUND_BOMB);
-        self.glow(self.ship.pos, WHITE_LIGHT, 420.0, 0.8);
+        // The original's flash already whitens the screen; the light only
+        // warms the ground around it.
+        self.glow(self.ship.pos, WHITE_LIGHT * 0.5, 420.0, 0.8);
+        self.shock(self.ship.pos, 260.0, 10.0, 0.7);
         self.field.bomb();
         self.effects.flash(Color::new(0.8, 0.8, 0.8, 1.0));
         self.camera.shake(0.75, 7.5);
@@ -1642,10 +1712,14 @@ impl Play {
             if let Some((pos, color, radius, seconds)) = event_light(&event) {
                 self.glow(pos, color, radius, seconds);
             }
+            if let Some((pos, radius, strength, seconds)) = event_shock(&event) {
+                self.shock(pos, radius, strength, seconds);
+            }
             match event {
                 Event::RockDestroyed {
                     pos,
                     element,
+                    size: _,
                     points,
                     rings,
                     sound,
@@ -2404,6 +2478,9 @@ impl Play {
         let normal = assets.normals.get(self.world.min(assets.normals.len().saturating_sub(1)));
         canvas.set_ground_lighting(normal.filter(|_| self.fx), &lights);
         *self.frame_lights.borrow_mut() = lights;
+        if self.fx {
+            canvas.set_post(&self.waves(), world_grade(self.world));
+        }
         canvas.draw_backdrop(false, base, decal, origin, scroll, 1.0);
         canvas.set_glowing(true);
         canvas.lighting(self.fx);

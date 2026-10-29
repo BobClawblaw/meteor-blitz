@@ -384,6 +384,8 @@ pub enum Event {
     RockDestroyed {
         pos: Vec2,
         element: Element,
+        /// 0 small .. 3 extra large (port addition: shockwaves by size).
+        size: usize,
         points: u32,
         /// Rings to drop (Enemy::activateBonuses).
         rings: u32,
@@ -1968,6 +1970,7 @@ impl Field {
         self.events.push(Event::RockDestroyed {
             pos: rock.pos,
             element: rock.element,
+            size: rock.size,
             points: if score && !self.bombing { rock.points * self.point_mult } else { 0 },
             // Rock::setState(10007): a scored small rock drops one ring.
             rings: if score && rock.size == 0 { 1 } else { 0 },
