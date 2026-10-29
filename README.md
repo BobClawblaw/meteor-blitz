@@ -18,12 +18,14 @@ Playable end to end:
 - Menus and the pause/controls/upgrade/clear/game-over popups, ported from `PausePopup`; settings persist across launches; local high-score tables with name entry; HELP/tutorial captions and in-game hints.
 - Keyboard/mouse and game controller input (Xbox pads on macOS through GameController and on Windows through XInput). The web build has no controller backend yet.
 - Native-resolution rendering: the canvas renders at the window's fitted resolution with a 1:1 blit, and the pixel font uses nearest filtering. The original 480×320 framebuffer stays available via `MB_RENDER_SCALE=1` for emulator comparisons.
+- HD art on desktop: 4x sprites, UI and font atlas, and 2x terrain textures, generated from the originals by `tools/upscale4x.py` (xBR for pixel art, Real-ESRGAN for the terrain). `MB_HD=0` selects the untouched originals, which is what the emulator-frame comparisons use; the web build stays on the originals.
 
 Verified against emulator frames: the main-menu buttons are pixel-exact, and the pause panel's bands, rules, button nine-slice and slider knob match the decompiled drawing and the emulator pause frame. `cargo test` covers the boss patterns, gravity gun, ground scroll, settings, scores, tutorial gates and stick menu navigation.
 
 Known approximations:
 
 - The 3D planet backdrop uses the decompiled curved mesh and the original textures; the menu's texture axes are matched to the emulator frame, but the play-plane backdrop still differs in scroll phase and brightness.
+- HD art is a generated approximation, not the original art: xBR smooths the pixel sprites/UI and the ESRGAN terrain is reinterpreted. The emulator-frame comparisons therefore run with `MB_HD=0` (originals); with HD on, the main-menu frame diff rises from 7.5 to 8.3.
 - Pause button labels are drawn with the original `ngage` font at the measured atlas scale rather than from the engine's per-label atlas, so glyph pixels differ slightly.
 - The Global high-score tab reports that the leaderboard is offline, because the original Game Center server is gone.
 
@@ -31,6 +33,12 @@ Known approximations:
 
 ```bash
 cargo run --release
+```
+
+The HD art set is committed under `assets/4x/`; `cargo run` picks it up on desktop. To regenerate it (needs `ffmpeg`; the Real-ESRGAN ncnn binary is optional and falls back to Lanczos):
+
+```bash
+python3 tools/upscale4x.py --only all
 ```
 
 macOS app bundle (GameController routes controller input to app bundles):
@@ -77,7 +85,7 @@ Settings and local scores live in `settings.txt` and `scores.txt` next to the ex
 ## Layout
 
 - `src/` — the port: game screen, enemies, weapons, HUD, menus, pause popups, scores, controller input.
-- `assets/` — decoded UI, terrain, sprites and audio used at runtime.
+- `assets/` — decoded UI, terrain, sprites and audio used at runtime; `assets/4x/` holds the generated HD copies.
 - `tools/` — asset decoders, the web build, the macOS app wrapper and the emulator-frame comparison tool.
 - `docs/port-plan.md`, `AGENTS.md`, `worklog/` — plan, ground rules/resume status, and the development log.
 

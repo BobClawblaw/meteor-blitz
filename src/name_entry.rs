@@ -6,7 +6,7 @@
 
 use macroquad::prelude::*;
 
-use crate::gfx::{Canvas, CANVAS_W};
+use crate::gfx::{draw_quad, tex_size, Canvas, CANVAS_W};
 use crate::hud::{Align, Font};
 use crate::menu::{MenuAssets, MenuBackdrop};
 
@@ -46,7 +46,15 @@ impl NameEntry {
         font: &Font,
     ) {
         backdrop.draw(canvas, assets, 1.0);
-        draw_texture(label, ((CANVAS_W - label.width()) * 0.5).floor(), 70.0, WHITE);
+        let (label_w, _) = tex_size(label);
+        draw_quad(
+            label,
+            ((CANVAS_W - label_w) * 0.5).floor(),
+            70.0,
+            1.0,
+            0.0,
+            WHITE,
+        );
         font.text(&self.name, 240.0, 160.0, 3.0, Align::Centre, WHITE);
         // The font has no underscore or punctuation, so the caret is a quad.
         if (get_time() * 2.0) as u64 % 2 == 0 {

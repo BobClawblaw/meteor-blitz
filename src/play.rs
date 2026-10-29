@@ -17,7 +17,7 @@ use crate::bonus::{Power, Rings};
 use crate::boss::{self, BossState};
 use crate::depot::{self, Depot};
 use crate::enemies::{wrap_near, Element, Event, Field, Rock, Script, Weapon};
-use crate::gfx::{draw_atlas_sprite, draw_quad, draw_sprite, Canvas};
+use crate::gfx::{draw_atlas_sprite, draw_quad, draw_sprite, tex_size, Canvas};
 use crate::gravity;
 use crate::hud::{self, HudAssets, HudValues};
 use crate::pad::{self, Button};
@@ -1923,7 +1923,7 @@ impl Play {
         back: f32,
         additive: bool,
     ) {
-        let (w, h) = (tex.width(), tex.height());
+        let (w, h) = tex_size(tex);
         let mut verts = Vec::new();
         let mut indices: Vec<u16> = Vec::new();
         for b in self.ship.bullets.iter().filter(|b| b.weapon == weapon) {
@@ -1957,9 +1957,10 @@ impl Play {
         let label = &assets.depot_label;
         for d in self.field.depots.iter().filter(|d| d.active()) {
             let p = self.to_screen(d.pos);
+            let (label_w, _) = tex_size(label);
             draw_quad(
                 label,
-                p.x - label.width() * 0.5,
+                p.x - label_w * 0.5,
                 p.y + depot::LABEL_DROP,
                 1.0,
                 self.z,
@@ -2094,9 +2095,10 @@ impl Play {
             let p = self.to_screen(r.pos);
             let label = &assets.power_labels[power.frame()];
             let color = Color::new(1.0, 1.0, 1.0, r.alpha * depot::LABEL_ALPHA);
+            let (label_w, _) = tex_size(label);
             draw_quad(
                 label,
-                p.x - label.width() * 0.5,
+                p.x - label_w * 0.5,
                 p.y + POWER_LABEL_DROP,
                 1.0,
                 self.z,

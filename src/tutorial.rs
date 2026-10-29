@@ -6,7 +6,7 @@
 
 use macroquad::prelude::*;
 
-use crate::gfx::{Canvas, CANVAS_W};
+use crate::gfx::{draw_quad, Canvas, CANVAS_W};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Hint {
@@ -82,10 +82,12 @@ impl Tutorial {
         } else {
             1.0
         };
-        draw_texture(
+        draw_quad(
             captions,
             ((CANVAS_W - CAPTION_W) * 0.5).floor(),
             ((320.0 - CAPTION_H) * 0.5).floor(),
+            1.0,
+            0.0,
             Color::new(1.0, 1.0, 1.0, alpha.clamp(0.0, 1.0)),
         );
     }

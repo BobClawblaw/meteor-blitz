@@ -7,11 +7,15 @@
 
 use macroquad::prelude::*;
 
+use crate::gfx::draw_quad;
+
 /// A bitmap font: `ngage.png` with glyph rectangles from `ngage.dat`
 /// (u16 count, then x, y, w, h per glyph).
 pub struct Font {
     texture: Texture2D,
     glyphs: Vec<[f32; 4]>,
+    /// The atlas is `atlas_scale` times the original glyph metrics.
+    atlas_scale: f32,
 }
 
 /// MultiLabel::CHARACTER_INDICES: digits, then letters (either case).
@@ -39,7 +43,7 @@ const DIGIT_PITCH: f32 = 22.0;
 const ONE_NUDGE: f32 = 5.0;
 
 impl Font {
-    pub fn new(texture: Texture2D, dat: &[u8]) -> Font {
+    pub fn new(texture: Texture2D, dat: &[u8], atlas_scale: f32) -> Font {
         // The glyph atlas is pixel art; nearest keeps it crisp when the
         // canvas is rendered above 480x320. MB_FONT_FILTER=linear opts out.
         let filter = match std::env::var("MB_FONT_FILTER").as_deref() {
@@ -54,12 +58,17 @@ impl Font {
                 [at(0), at(1), at(2), at(3)]
             })
             .collect();
-        Font { texture, glyphs }
+        Font {
+            texture,
+            glyphs,
+            atlas_scale,
+        }
     }
 
     /// TextureAtlas::add: a glyph's quad, top-left at (x, y), scaled.
     fn glyph(&self, index: usize, x: f32, y: f32, scale: f32, color: Color) {
         let [gx, gy, gw, gh] = self.glyphs[index];
+        let logical = 1.0 / self.atlas_scale;
         // TextureAtlas::TextureAtlas: texture coordinates stop one texel short.
         let source = Rect::new(gx, gy, gw - 1.0, gh - 1.0);
         draw_texture_ex(
@@ -67,13 +76,18 @@ impl Font {
             x,
             y,
             color,
-            DrawTextureParams { dest_size: Some(vec2(gw * scale, gh * scale)), source: Some(source), ..Default::default() },
+            DrawTextureParams {
+                dest_size: Some(vec2(gw * logical * scale, gh * logical * scale)),
+                source: Some(source),
+                ..Default::default()
+            },
         );
     }
 
     fn advance(&self, c: char, scale: f32) -> f32 {
+        let logical = 1.0 / self.atlas_scale;
         match glyph_index(c) {
-            Some(i) => scale + scale * self.glyphs[i][2],
+            Some(i) => scale + scale * self.glyphs[i][2] * logical,
             None => scale + scale * SPACE_WIDTH,
         }
     }
@@ -166,10 +180,10 @@ const COUNTER_ALPHA: f32 = 0.4;
 fn counter(assets: &HudAssets, icon: &Texture2D, n: u32, x: f32, dir: f32, color: Color) {
     if n < 4 {
         for i in 0..n {
-            draw_texture(icon, x + (i as f32 * dir) * -COUNTER_STEP, COUNTER_Y - 1.0, color);
+            draw_quad(icon, x + (i as f32 * dir) * -COUNTER_STEP, COUNTER_Y - 1.0, 1.0, 0.0, color);
         }
     } else {
-        draw_texture(icon, x, COUNTER_Y - 1.0, color);
+        draw_quad(icon, x, COUNTER_Y - 1.0, 1.0, 0.0, color);
         if dir < 0.0 {
             assets.font.text(&n.to_string(), x + COUNTER_STEP, COUNTER_Y, SMALL, Align::Left, color);
         } else {
@@ -205,7 +219,7 @@ pub fn draw(assets: &HudAssets, v: &HudValues) {
 
     assets.font.number(v.rings as u64, RINGS_X, SMALL_Y, SMALL, Align::Left, dim);
     let w = assets.font.number_width(v.rings as u64, SMALL);
-    draw_texture(&assets.ring, w + RING_ICON_GAP, RING_ICON_Y, dim);
+    draw_quad(&assets.ring, w + RING_ICON_GAP, RING_ICON_Y, 1.0, 0.0, dim);
 
-    draw_texture(&assets.pause, PAUSE_POS.x, PAUSE_POS.y, WHITE);
+    draw_quad(&assets.pause, PAUSE_POS.x, PAUSE_POS.y, 1.0, 0.0, WHITE);
 }

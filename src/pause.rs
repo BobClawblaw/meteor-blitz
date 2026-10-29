@@ -7,7 +7,7 @@
 
 use macroquad::prelude::*;
 
-use crate::gfx::{Canvas, CANVAS_W};
+use crate::gfx::{asset_scale, draw_quad, Canvas, CANVAS_W};
 use crate::hud::{Align, Font};
 use crate::pad;
 use crate::play::{Play, Upgrade, UPGRADES};
@@ -884,7 +884,10 @@ impl Pause {
             x + value * w - 12.0,
             y - 11.0,
             Color::new(1.0, 1.0, 1.0, a),
-            DrawTextureParams::default(),
+            DrawTextureParams {
+                dest_size: Some(vec2(25.0, 25.0)),
+                ..Default::default()
+            },
         );
     }
 
@@ -942,6 +945,7 @@ fn nine_slice(
     alpha: f32,
 ) {
     let color = Color::new(1.0, 1.0, 1.0, alpha);
+    let s = asset_scale();
     let piece = |sx: f32, sy: f32, sw: f32, sh: f32, dx: f32, dy: f32, dw: f32, dh: f32| {
         draw_texture_ex(
             tex,
@@ -950,7 +954,7 @@ fn nine_slice(
             color,
             DrawTextureParams {
                 dest_size: Some(vec2(dw, dh)),
-                source: Some(Rect::new(sx, sy, sw, sh)),
+                source: Some(Rect::new(sx * s, sy * s, sw * s, sh * s)),
                 ..Default::default()
             },
         );
@@ -971,7 +975,7 @@ fn nine_slice(
 
 fn quad(canvas: &Canvas, _assets: &PauseAssets, tex: &Texture2D, x: f32, y: f32, alpha: f32) {
     let _ = canvas;
-    draw_texture(tex, x, y, Color::new(1.0, 1.0, 1.0, alpha));
+    draw_quad(tex, x, y, 1.0, 0.0, Color::new(1.0, 1.0, 1.0, alpha));
 }
 
 fn rect(canvas: &Canvas, assets: &PauseAssets, x: f32, y: f32, w: f32, h: f32, color: Color) {

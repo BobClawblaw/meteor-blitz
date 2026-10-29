@@ -5,7 +5,7 @@ use macroquad::prelude::*;
 
 use crate::pad::{self, Button};
 
-use crate::gfx::{draw_quad, Canvas, CANVAS_W};
+use crate::gfx::{draw_quad, tex_size, Canvas, CANVAS_W};
 
 // BasicScreen: backdrop mesh origin and depth, horizon scale.
 const BACKDROP_X: f32 = 240.0;
@@ -165,7 +165,8 @@ impl MenuScreen {
     pub fn draw(&self, canvas: &Canvas, assets: &MenuAssets, backdrop: &MenuBackdrop) {
         backdrop.draw(canvas, assets, self.fx.backdrop_alpha());
         let color = self.fx.content_color();
-        draw_quad(&self.label, ((CANVAS_W - self.label.width()) * 0.5).floor(), self.label_y, 1.0, self.fx.z, color);
+        let (label_w, _) = tex_size(&self.label);
+        draw_quad(&self.label, ((CANVAS_W - label_w) * 0.5).floor(), self.label_y, 1.0, self.fx.z, color);
         for (i, b) in self.buttons.iter().enumerate() {
             let lit = self.pressed == Some(i) || (self.pressed.is_none() && self.focus == Some(i));
             let tex = if lit { &b.down } else { &b.up };
