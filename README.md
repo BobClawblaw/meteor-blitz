@@ -56,6 +56,14 @@ python3 -m http.server 8765
 # then open http://localhost:8765/web.html
 ```
 
+To check that the wasm bundle actually renders, without a browser window (needs Node 22+ and Chrome):
+
+```bash
+node tools/web_screenshot.mjs http://127.0.0.1:8765/web.html /tmp/web.png 12000 480 320
+# trailing X,Y pairs click through the menus, e.g. to stage 1.1:
+node tools/web_screenshot.mjs http://127.0.0.1:8765/web.html /tmp/play.png 9000 480 320 240,240 134,182 95,112 93,115
+```
+
 Windows: build with the MSVC toolchain; the controller backend uses XInput (see `AGENTS.md` for the Windows build notes).
 
 ## Controls

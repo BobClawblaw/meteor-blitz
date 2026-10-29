@@ -39,6 +39,7 @@ Done (faithful to the binary unless noted):
 - Performance: the loop is paced at 60 Hz (the original's simulation rate); macOS controller polling no longer posts a LaunchServices KVO notification every frame.
 - Rendering: the offscreen canvas renders at the window's fitted resolution (1:1 blit) instead of upscaling the original 320x480 framebuffer; `MB_RENDER_SCALE` pins it (1 keeps emulator comparisons exact). The bitmap font uses nearest filtering so glyphs stay crisp above 480x320; `MB_FONT_FILTER=linear` opts out.
 - HD art (desktop): 4x sprites/UI/font atlas and 2x terrain textures from `tools/upscale4x.py`, loaded by default; `MB_HD=0` loads the originals and is what emulator-frame comparisons use. The web build keeps the originals (the 4x set is ~79 MB). Terrain stays at 2x because macroquad builds no mipmaps: sampling 2048x2048 backdrops dropped the frame rate to ~46-57 fps, while 2x holds 60 Hz (draw 0.2 ms).
+- Web build verified 2026-10-29 with `tools/web_screenshot.mjs` (headless Chrome over CDP): at 480x320 the menu buttons differ from the native `MB_HD=0` build by 0.14-0.35 mean abs (the backdrop differs only in scroll phase), and clicking through Play > Arcade > World 1 > Stage 1 renders gameplay with the sprite/terrain assets loaded. Use real time, not `--virtual-time-budget`: virtual time leaves the first frames black.
 - Stage advance keeps the run: `Play::advance_stage` starts the next stage in the same screen, carrying score, rings, upgrade points, upgrades, lives, bombs and multiplier, like the original's `GameScreen::handleEvent` next-stage case; only the stage's world state restarts.
 
 Approximations / not yet faithful:
@@ -59,8 +60,7 @@ Controls:
 Blocked: none.
 
 Next:
-- Check the web build after the HD/asset-path change (it stays on the originals; the wasm bundle has not been re-tested).
-- Pixel-diff the pause/results popups against emulator frames; replace the generic button art with the original pre-rendered/dynamic buttons.
+- touchHLE: capture the clear/game-over/upgrade popup pages and pixel-diff them; only the pause main page has a reference frame (`frame_00030.png`).
 - Windows: press View and Start with `MB_PAD_LOG=1` and confirm they log (macOS now confirms the same GameController mapping); then play a full stage on the pad (move, aim, RT fire, LT gravity, A/LB boost, B/RB bomb, X/Y weapon, pause navigation).
 
 Test hooks (env):
