@@ -15,7 +15,11 @@
 // taps A every 2.5 s from 12 s in (after the page has loaded; that walks
 // Play > Arcade > World 1 > Stage 1.1 from the main menu) and holds the left
 // stick right from 25 s, to check the web build's controller path without a
-// real pad.
+// real pad. MOCK_PAD=survival instead picks Survival (A, Right, Right, A)
+// and then fires continuously, sweeping the right stick around.
+//
+// Console errors and uncaught exceptions (a wasm panic) are printed as
+// "console:" lines.
 import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -91,6 +95,14 @@ try {
   }
   await send("Page.enable");
   await send("Runtime.enable");
+  ws.addEventListener("message", (ev) => {
+    const msg = JSON.parse(ev.data);
+    if (msg.method === "Runtime.exceptionThrown") {
+      console.log("console: exception", msg.params.exceptionDetails?.exception?.description ?? msg.params.exceptionDetails?.text);
+    } else if (msg.method === "Runtime.consoleAPICalled" && msg.params.type === "error") {
+      console.log("console: error", msg.params.args.map((a) => a.value ?? a.description).join(" "));
+    }
+  });
   if (process.env.MOCK_PAD) {
     await send("Page.addScriptToEvaluateOnNewDocument", { source: `
       (() => {
@@ -99,9 +111,20 @@ try {
         navigator.getGamepads = () => {
           const t = performance.now() - start;
           const buttons = Array.from({ length: 17 }, () => button(0));
-          // A for 150 ms every 2.5 s, from 12 s in, four times.
-          if (t > 12000 && t < 22000 && (t - 12000) % 2500 < 150) buttons[0] = button(1);
-          const axes = t > 25000 ? [1, 0, 0, 0] : [0, 0, 0, 0];
+          let axes = [0, 0, 0, 0];
+          const tap = (at, i) => { if (t > at && t < at + 150) buttons[i] = button(1); };
+          if (${JSON.stringify(process.env.MOCK_PAD)} === "survival") {
+            // Play, then Right twice to Survival, then A; then fire around.
+            tap(12000, 0); tap(14500, 15); tap(15500, 15); tap(16500, 0);
+            if (t > 19000) {
+              const a = t / 700;
+              axes = [0, 0, Math.cos(a), Math.sin(a)];
+            }
+          } else {
+            // A every 2.5 s from 12 s in, four times; then the left stick right.
+            for (const at of [12000, 14500, 17000, 19500]) tap(at, 0);
+            if (t > 25000) axes = [1, 0, 0, 0];
+          }
           return [{ id: "mock", index: 0, connected: true, mapping: "standard", axes, buttons, timestamp: t }];
         };
       })();

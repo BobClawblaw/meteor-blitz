@@ -269,11 +269,13 @@ pub fn scorch_texture() -> Texture2D {
 
 
 /// TimeManager: enemies run at `factor`, easing toward the target while
-/// a slow-motion power-up lasts and back to 1 after.
+/// a slow-motion power-up lasts and back to the base after (1, or what
+/// survival has sped up to).
 struct TimeScale {
     factor: f32,
     target: f32,
     remaining: f32,
+    base: f32,
 }
 
 impl Default for TimeScale {
@@ -282,6 +284,7 @@ impl Default for TimeScale {
             factor: 1.0,
             target: 1.0,
             remaining: 0.0,
+            base: 1.0,
         }
     }
 }
@@ -298,7 +301,7 @@ impl TimeScale {
         let goal = if self.remaining > 0.0 {
             self.target
         } else {
-            1.0
+            self.base
         };
         let next = self.factor + 2.0 * dt * (goal - self.factor);
         self.factor = if self.factor < goal {
@@ -967,7 +970,11 @@ impl Play {
             scroll: Vec2::ZERO,
             accumulator: 0.0,
             field: Field::new(assets.rocks[0].frame_counts()),
-            script: Script::arcade(world, stage),
+            script: if world == SURVIVAL {
+                Script::survival()
+            } else {
+                Script::arcade(world, stage)
+            },
             score: 0,
             multiplier: 1,
             lives: if world == SURVIVAL {
@@ -1430,6 +1437,7 @@ impl Play {
         if self.tutorial.is_none() {
             self.script.update(dt, self.ship.pos, &mut self.field);
         }
+        self.time.base = self.script.speed();
         self.time.update(dt);
         self.field.time_factor = self.time.factor;
         self.field.aim = self.ship.aim_dir;
@@ -1654,6 +1662,7 @@ impl Play {
     fn kill_ship(&mut self) {
         self.field.gun_release();
         self.ship.life = Life::Dead(0.0);
+        self.script.slow_down_survival();
         self.ship.bullets.clear();
         self.ship.aiming = false;
         self.camera.shake(0.75, 7.5);
@@ -1785,6 +1794,7 @@ impl Play {
             return;
         }
         self.bombs -= 1;
+        self.script.slow_down_survival();
         self.sounds.push(SOUND_BOMB);
         // The original's flash already whitens the screen; the light only
         // warms the ground around it.
@@ -1802,6 +1812,7 @@ impl Play {
     /// Ship::deactivateShield.
     fn break_shield(&mut self) {
         self.ship.shield = false;
+        self.script.slow_down_survival();
         self.ship.grace = SHIELD_GRACE;
         self.camera.shake(0.75, 7.5);
         let p = self.ship.pos;

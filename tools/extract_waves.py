@@ -92,7 +92,10 @@ def main():
     tutorial = waves("_wavesTutorial", TUTORIAL_WAVES)
     survival = waves("_wavesSurvival", SURVIVAL_WAVES)
     # _waveSurvivalWait and _waveSurvivalDepot are filled in at run time by a
-    # static initializer, so they cannot be read from the file.
+    # static initializer (__static_initialization_and_destruction_0 at
+    # 0x3394) that copies these two constant waves into them.
+    survival_depot = waves("__ZZ41__static_initialization_and_destruction_0iiE5C.223", 1)[0]
+    survival_wait = waves("__ZZ41__static_initialization_and_destruction_0iiE5C.224", 1)[0]
 
     def f(v):
         s = repr(float(v))
@@ -164,6 +167,17 @@ def main():
             wave_list(f"ARCADE_{w + 1}_{s + 1}", items)
     wave_list("TUTORIAL", tutorial)
     wave_list("SURVIVAL", survival)
+
+    def wave_one(name, doc, item):
+        kind, pat, flags, oa, od, scale, step, threshold = item
+        lines.append(doc)
+        lines.append(
+            f"pub static {name}: Wave = Wave {{ kind: {kind}, pattern: &{pat.upper()}, flags: {flags}, offset_angle: {f(oa)}, "
+            f"offset_distance: {f(od)}, scale: {f(scale)}, ticks_per_step: {step}, threshold: {f(threshold)} }};"
+        )
+
+    wave_one("SURVIVAL_DEPOT", "/// _waveSurvivalDepot: survival's supply depot every 15 waves.", survival_depot)
+    wave_one("SURVIVAL_WAIT", "/// _waveSurvivalWait: the pause after it.", survival_wait)
     lines.append("")
     lines.append("/// Arcade stage scripts by world and stage (0-based).")
     lines.append("pub static ARCADE: [[&[Wave]; 5]; 6] = [")

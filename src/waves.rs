@@ -1369,6 +1369,10 @@ pub static SURVIVAL: &[Wave] = &[
     Wave { kind: 14, pattern: &PATTERNSQUARE32, flags: 0, offset_angle: 0.0, offset_distance: 0.0, scale: 175.0, ticks_per_step: 1, threshold: 0.0 },
     Wave { kind: 14, pattern: &PATTERNSQUARE32, flags: 0, offset_angle: 0.0, offset_distance: 0.0, scale: 175.0, ticks_per_step: 1, threshold: 0.0 },
 ];
+/// _waveSurvivalDepot: survival's supply depot every 15 waves.
+pub static SURVIVAL_DEPOT: Wave = Wave { kind: 21, pattern: &PATTERN1, flags: 0, offset_angle: 0.0, offset_distance: 0.0, scale: 50.0, ticks_per_step: 0, threshold: 0.0 };
+/// _waveSurvivalWait: the pause after it.
+pub static SURVIVAL_WAIT: Wave = Wave { kind: 0, pattern: &PATTERNWAIT, flags: 0, offset_angle: 0.0, offset_distance: 0.0, scale: 0.0, ticks_per_step: 100, threshold: 0.0 };
 
 /// Arcade stage scripts by world and stage (0-based).
 pub static ARCADE: [[&[Wave]; 5]; 6] = [

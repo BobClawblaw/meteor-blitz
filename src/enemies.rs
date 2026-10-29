@@ -13,7 +13,7 @@ use crate::seeker::{self, Seeker};
 use crate::shyguy::{self, ShyGuy};
 use crate::snake::{self, Hit, Snake};
 use crate::tower::{self, Tower};
-use crate::waves::{Wave, ARCADE};
+use crate::waves::{Wave, ARCADE, SURVIVAL, SURVIVAL_DEPOT, SURVIVAL_WAIT};
 
 /// World::WIDTH / HEIGHT.
 const WORLD: f32 = 1024.0;
@@ -596,6 +596,24 @@ impl Field {
     /// Rocks of `element` left, fragments included.
     pub fn rocks_of(&self, element: Element) -> usize {
         self.rocks.iter().filter(|r| r.element == element).count()
+    }
+
+    /// WaveManager::getSurvivalPower(): the field's weight in survival:
+    /// rocks small to extra large 1, 4, 13, 40 (each element), shy guys 1,
+    /// arrows 2, snakes 8, mines 1.5, seekers 4, towers 10, lobbers 10,
+    /// depots 1.
+    pub fn survival_power(&self) -> f32 {
+        const ROCK: [f32; 4] = [1.0, 4.0, 13.0, 40.0];
+        let rocks: f32 = self.rocks.iter().map(|r| ROCK[r.size.min(3)]).sum();
+        rocks
+            + self.shy_guys.len() as f32
+            + self.arrows.len() as f32 * 2.0
+            + self.snakes.len() as f32 * 8.0
+            + self.mines.len() as f32 * 1.5
+            + self.seekers.len() as f32 * 4.0
+            + self.towers.len() as f32 * 10.0
+            + self.lobbers.len() as f32 * 10.0
+            + self.depots.len() as f32
     }
 
     /// WaveManager::getWaveRemaining: everything left, in small-rock units.
@@ -2041,7 +2059,53 @@ fn wave_units(wave: &Wave) -> i32 {
     }
 }
 
-/// `WaveManager` for arcade stages.
+/// WaveManager::getSurvivalPower(Wave*): what a survival wave adds to the
+/// field's power (the active-enemy weights of `Field::survival_power`).
+fn wave_power(wave: &Wave) -> f32 {
+    let n = wave.pattern.spawns.len() as f32;
+    n * match wave.kind {
+        1 | 5 | 9 | 13 | 21 => 1.0,
+        2 | 6 | 10 | 18 => 4.0,
+        3 | 7 | 11 => 13.0,
+        4 | 8 | 12 => 40.0,
+        14 => 2.0,
+        16 => 8.0,
+        17 => 1.5,
+        19 | 20 => 10.0,
+        _ => 0.0,
+    }
+}
+
+/// WaveManager's survival state (Global::level 6, `WaveManager::startStage`).
+struct Survival {
+    /// 0x48: waves started.
+    count: i32,
+    /// 0x4c: the power budget the field is filled to.
+    power: f32,
+    /// 0x54: the next supply-depot wave (then every 15).
+    depot_at: i32,
+    /// 0x50: seconds since the last wave started.
+    timer: f32,
+}
+
+/// WaveManager survival tuning: the budget starts at 8 and grows 1.25 per
+/// wave; a death, a bomb or a broken shield takes 5 off (not below 8); a
+/// wave starts at least 3 s after the last; while the budget exceeds the
+/// field plus the new wave by 4, the next one follows at once; each wave
+/// speeds the game up by 1.0003 (TimeManager::baseMultiplier).
+const SURVIVAL_POWER: f32 = 8.0;
+const SURVIVAL_POWER_STEP: f32 = 1.25;
+const SURVIVAL_SLOW_DOWN: f32 = 5.0;
+const SURVIVAL_GAP: f32 = 3.0;
+const SURVIVAL_HEADROOM: f32 = 4.0;
+const SURVIVAL_PICK: f32 = 0.75;
+const SURVIVAL_SPEED_UP: f32 = 1.0003;
+const SURVIVAL_FIRST_DEPOT: i32 = 8;
+/// startNextWave sets the wave timer this high to start the next at once.
+const SURVIVAL_AT_ONCE: f32 = 10000.0;
+const SURVIVAL_DEPOT_EVERY: i32 = 15;
+
+/// `WaveManager` for arcade stages and survival.
 pub struct Script {
     waves: &'static [Wave],
     index: i32,
@@ -2059,9 +2123,43 @@ pub struct Script {
     /// Global::level and Global::stage (0-based) for the boss.
     world: usize,
     stage: usize,
+    /// Survival: the endless mode's state, and the wave being spawned
+    /// (picked from `SURVIVAL` or one of the two special waves).
+    survival: Option<Survival>,
+    current: Option<&'static Wave>,
+    /// TimeManager::baseMultiplier: survival speeds the game up per wave.
+    speed: f32,
 }
 
 impl Script {
+    /// `WaveManager::startStage(6)`: survival never completes; it ends
+    /// when the ship is out of lives.
+    pub fn survival() -> Script {
+        Script {
+            waves: SURVIVAL,
+            survival: Some(Survival {
+                count: 0,
+                power: SURVIVAL_POWER,
+                depot_at: SURVIVAL_FIRST_DEPOT,
+                timer: 0.0,
+            }),
+            ..Script::arcade(0, 1)
+        }
+    }
+
+    /// The game speed survival has built up (1 in arcade).
+    pub fn speed(&self) -> f32 {
+        self.speed
+    }
+
+    /// WaveManager::slowDownSurvival: a death, a bomb or a broken shield
+    /// eases survival off.
+    pub fn slow_down_survival(&mut self) {
+        if let Some(s) = &mut self.survival {
+            s.power = (s.power - SURVIVAL_SLOW_DOWN).max(SURVIVAL_POWER);
+        }
+    }
+
     pub fn arcade(world: usize, stage: usize) -> Script {
         Script {
             waves: ARCADE[world.min(5)][stage.clamp(1, 5) - 1],
@@ -2078,6 +2176,9 @@ impl Script {
             delay_timer: 0.0,
             world: world.min(5),
             stage: stage.clamp(1, 5) - 1,
+            survival: None,
+            current: None,
+            speed: 1.0,
         }
         .skip_to_env_wave()
     }
@@ -2096,16 +2197,28 @@ impl Script {
 
     /// WaveManager::isStageComplete.
     pub fn complete(&self, field: &Field) -> bool {
-        self.index == self.waves.len() as i32 - 1
+        self.survival.is_none()
+            && self.index == self.waves.len() as i32 - 1
             && (field.remaining_of_kind(self.tracked_kind) == 0 || field.weighted_remaining() == 0)
     }
 
     /// WaveManager::update.
     pub fn update(&mut self, dt: f32, ship: Vec2, field: &mut Field) {
+        if let Some(s) = &mut self.survival {
+            s.timer += dt;
+        }
         if self.spawning {
             if self.spawn_due(dt, ship, field) {
                 self.spawning = false;
             }
+            return;
+        }
+        if let Some(s) = &mut self.survival {
+            if s.timer < SURVIVAL_GAP {
+                return;
+            }
+            s.timer = 0.0;
+            self.start_next_survival(dt, ship, field);
             return;
         }
         if self.index != -1 {
@@ -2130,6 +2243,41 @@ impl Script {
     fn start_next(&mut self, dt: f32, ship: Vec2, field: &mut Field) {
         self.index += 1;
         let wave = &self.waves[self.index as usize];
+        self.begin(wave, dt, ship, field);
+    }
+
+    /// WaveManager::startNextWave in survival: wave 8 and every 15th after
+    /// it is a supply depot, then a pause; otherwise a random wave from
+    /// `SURVIVAL`, out of reach until the budget grows. While the budget
+    /// still has room after it, the next wave follows at once without
+    /// counting as a new one.
+    fn start_next_survival(&mut self, dt: f32, ship: Vec2, field: &mut Field) {
+        let Some(s) = &mut self.survival else { return };
+        s.count += 1;
+        let wave: &'static Wave = if s.count == s.depot_at {
+            &SURVIVAL_DEPOT
+        } else if s.count == s.depot_at + 1 {
+            s.depot_at += SURVIVAL_DEPOT_EVERY;
+            &SURVIVAL_WAIT
+        } else {
+            s.power += SURVIVAL_POWER_STEP;
+            let pick = (s.power * unit() * SURVIVAL_PICK) as usize % SURVIVAL.len();
+            let wave = &SURVIVAL[pick];
+            if s.power - field.survival_power() - wave_power(wave) >= SURVIVAL_HEADROOM {
+                s.count -= 1;
+                s.timer = SURVIVAL_AT_ONCE;
+                s.power -= SURVIVAL_POWER_STEP;
+            }
+            wave
+        };
+        self.speed *= SURVIVAL_SPEED_UP;
+        self.begin(wave, dt, ship, field);
+    }
+
+    /// The common part of WaveManager::startNextWave: set up `wave` and
+    /// spawn what is due at once.
+    fn begin(&mut self, wave: &'static Wave, dt: f32, ship: Vec2, field: &mut Field) {
+        self.current = Some(wave);
         if wave.flags & 0x10 == 0 {
             self.origin = ship;
         }
@@ -2150,7 +2298,7 @@ impl Script {
     /// WaveManager::updateWave: spawn every formation entry whose tick has
     /// come. Returns true when the formation is exhausted.
     fn spawn_due(&mut self, dt: f32, ship: Vec2, field: &mut Field) -> bool {
-        let wave = &self.waves[self.index as usize];
+        let Some(wave) = self.current else { return true };
         let spawns = wave.pattern.spawns;
         self.tick_timer += dt;
         while self.tick_timer >= TICK {
@@ -2231,6 +2379,10 @@ impl Script {
                 break;
             }
         }
+        // Survival: a wave also ends once the field is empty.
+        if self.survival.is_some() && field.survival_power() == 0.0 {
+            return true;
+        }
         self.entry >= spawns.len()
     }
 }
@@ -2238,6 +2390,72 @@ impl Script {
 #[cfg(test)]
 mod gravity_tests {
     use super::*;
+
+    /// Survival never clears, starts waves on its own clock, and brings
+    /// the supply depot on wave 8.
+    #[test]
+    fn survival_keeps_sending_waves_and_a_depot_on_wave_8() {
+        let mut script = Script::survival();
+        let mut field = Field::new([16, 1, 1, 1]);
+        let dt = 1.0 / 60.0;
+        let mut depot_seen = false;
+        for frame in 0..(60 * 120) {
+            script.update(dt, Vec2::ZERO, &mut field);
+            assert!(!script.complete(&field), "survival never completes");
+            depot_seen |= !field.depots.is_empty();
+            // Enemies pile up (filling the budget, which is what advances
+            // the wave count); clear the field every 10 s as a player would.
+            if frame % 600 != 599 {
+                continue;
+            }
+            field.rocks.clear();
+            field.mines.clear();
+            field.shy_guys.clear();
+            field.arrows.clear();
+            field.seekers.clear();
+            field.snakes.clear();
+            field.towers.clear();
+            field.lobbers.clear();
+            field.depots.clear();
+        }
+        let s = script.survival.as_ref().unwrap();
+        assert!(s.count > SURVIVAL_FIRST_DEPOT + 1, "waves started: {}", s.count);
+        assert!(s.depot_at > SURVIVAL_FIRST_DEPOT, "the depot wave came and the next is scheduled");
+        assert!(depot_seen, "wave 8 brought a supply depot");
+        assert!(script.speed() > 1.0, "each wave speeds the game up");
+    }
+
+    #[test]
+    fn survival_eases_off_but_not_below_the_start() {
+        let mut script = Script::survival();
+        script.survival.as_mut().unwrap().power = 20.0;
+        script.slow_down_survival();
+        assert_eq!(script.survival.as_ref().unwrap().power, 15.0);
+        for _ in 0..5 {
+            script.slow_down_survival();
+        }
+        assert_eq!(script.survival.as_ref().unwrap().power, SURVIVAL_POWER);
+        let mut arcade = Script::arcade(0, 1);
+        arcade.slow_down_survival();
+        assert!(arcade.survival.is_none());
+    }
+
+    #[test]
+    fn survival_wave_power_weights() {
+        // Per spawn: small rock 1, extra-large 40, snake 8, mine 1.5, depot 1.
+        assert_eq!(wave_power(&SURVIVAL_DEPOT), SURVIVAL_DEPOT.pattern.spawns.len() as f32);
+        assert_eq!(wave_power(&SURVIVAL_WAIT), 0.0);
+        for w in SURVIVAL {
+            let n = w.pattern.spawns.len() as f32;
+            let each = match w.kind {
+                4 | 8 | 12 => 40.0,
+                16 => 8.0,
+                17 => 1.5,
+                _ => continue,
+            };
+            assert_eq!(wave_power(w), n * each);
+        }
+    }
     use crate::gravity::Phase;
 
     fn landed_mine(field: &mut Field, pos: Vec2) {
