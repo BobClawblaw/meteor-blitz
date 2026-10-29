@@ -43,6 +43,7 @@ fi
 # original app only what is loaded at run time.
 res="$app/Contents/Resources"
 cp -R assets "$res/assets"
+rm -rf "$res/assets/web-audio"   # the web build's MP3s; desktop loads the WAVs
 cp original/app/ngage.dat original/app/systems.dat "$res/original/app/"
 cp -R original/audio original/sprites original/textures "$res/original/"
 cp assets/icon/icon.icns "$res/icon.icns"

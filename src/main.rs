@@ -157,6 +157,16 @@ mod frame_timer {
     }
 }
 
+/// A sound's file: the original WAV on desktop; on the web the MP3 from
+/// tools/web_audio.py (11.6 MB of WAV is 1.6 MB of MP3 to download).
+fn sound_path(name: &str) -> String {
+    if cfg!(target_arch = "wasm32") {
+        format!("assets/web-audio/{name}.mp3")
+    } else {
+        format!("original/audio/{name}.wav")
+    }
+}
+
 /// The window and taskbar icon (tools/make-icon.py), built in.
 fn window_icon() -> macroquad::miniquad::conf::Icon {
     fn rgba<const N: usize>(png: &[u8]) -> [u8; N] {
@@ -854,11 +864,11 @@ async fn main() {
     let pause_assets = load_pause_assets().await;
     let link_font = load_ttf_font_from_bytes(include_bytes!("../assets/fonts/Rajdhani-Bold.ttf"))
         .expect("Rajdhani-Bold.ttf");
-    let music = load_sound("original/audio/music.wav").await.unwrap();
+    let music = load_sound(&sound_path("music")).await.unwrap();
     let mut sounds: Vec<Option<Sound>> = vec![None];
     for id in 1..=SOUND_COUNT {
         sounds.push(Some(
-            load_sound(&format!("original/audio/sound_{:02}.wav", id))
+            load_sound(&sound_path(&format!("sound_{:02}", id)))
                 .await
                 .unwrap(),
         ));

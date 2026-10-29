@@ -15,7 +15,10 @@ timestamp, so an unchanged data set rebuilds byte for byte.
 """
 
 import gzip
+import hashlib
+import shutil
 import struct
+import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -23,8 +26,27 @@ OUT = ROOT / "web/data.pack.gz"
 
 # What the web build reads (it loads the original-resolution art, not
 # assets/4x; the font and icons are built into the binary).
-DIRS = ["assets/ui", "assets/normals", "original/sprites", "original/textures", "original/audio"]
+DIRS = ["assets/ui", "assets/normals", "assets/web-audio", "original/sprites", "original/textures"]
 FILES = ["original/app/ngage.dat", "original/app/systems.dat"]
+# original/ is read-only: its PNGs are packed as losslessly recompressed
+# copies (oxipng, same pixels), cached by content hash between builds.
+CACHE = ROOT / "target/web-pack-png"
+
+
+def png_bytes(path: Path) -> bytes:
+    data = path.read_bytes()
+    if not path.as_posix().startswith(str(ROOT / "original")) or path.suffix != ".png":
+        return data
+    if shutil.which("oxipng") is None:
+        return data
+    CACHE.mkdir(parents=True, exist_ok=True)
+    cached = CACHE / (hashlib.sha256(data).hexdigest() + ".png")
+    if not cached.exists():
+        tmp = cached.with_suffix(".tmp.png")
+        tmp.write_bytes(data)
+        subprocess.run(["oxipng", "-o", "4", "--strip", "safe", "-q", str(tmp)], check=True)
+        tmp.rename(cached)
+    return cached.read_bytes()
 
 
 def main() -> None:
@@ -35,7 +57,7 @@ def main() -> None:
     body = bytearray(b"MBPK1" + struct.pack("<I", len(paths)))
     for p in paths:
         rel = p.relative_to(ROOT).as_posix().encode()
-        data = p.read_bytes()
+        data = png_bytes(p)
         body += struct.pack("<H", len(rel)) + rel + struct.pack("<I", len(data)) + data
     with open(OUT, "wb") as raw, gzip.GzipFile(fileobj=raw, mode="wb", compresslevel=9, mtime=0, filename="") as gz:
         gz.write(body)

@@ -51,6 +51,7 @@ The HD art set is committed under `assets/4x/`; `cargo run` picks it up on deskt
 ```bash
 python3 tools/upscale4x.py --only all
 python3 tools/normalmaps.py
+bash tools/optimize-png.sh   # lossless recompression, last (needs oxipng)
 ```
 
 Release packages (self-contained: the game data travels with the executable; saves go to `~/Library/Application Support/Meteor Blitz` or `%APPDATA%\Meteor Blitz`):

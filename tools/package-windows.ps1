@@ -22,6 +22,8 @@ New-Item -ItemType Directory -Force (Join-Path $stage 'original\app') | Out-Null
 # original app only what is loaded at run time.
 Copy-Item (Join-Path $env:CARGO_TARGET_DIR 'release\meteor-blitz.exe') (Join-Path $stage 'MeteorBlitz.exe')
 Copy-Item -Recurse assets (Join-Path $stage 'assets')
+# The web build's MP3s; desktop loads the WAVs.
+Remove-Item -Recurse -Force (Join-Path $stage 'assets\web-audio')
 Copy-Item original\app\ngage.dat, original\app\systems.dat (Join-Path $stage 'original\app')
 foreach ($dir in 'audio', 'sprites', 'textures') {
     Copy-Item -Recurse (Join-Path original $dir) (Join-Path $stage "original\$dir")
