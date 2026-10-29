@@ -339,10 +339,13 @@ impl Effects {
 
     /// GameScreen::drawParticleSystems: diamonds, points, sprites, lines,
     /// rings. `to_screen` maps world positions to the canvas.
+    /// `soft` (port addition, with Lighting and effects): a round glow
+    /// that points and lines are drawn with instead of hard squares.
     pub fn draw(
         &self,
         canvas: &crate::gfx::Canvas,
         sprite: &Texture2D,
+        soft: Option<&Texture2D>,
         z: f32,
         to_screen: impl Fn(Vec2) -> Vec2,
     ) {
@@ -354,11 +357,12 @@ impl Effects {
             Kind::Ring,
         ] {
             let m = Effects::manager(kind);
-            let texture = if kind == Kind::Sprite {
-                Some(sprite)
-            } else {
-                None
+            let texture = match kind {
+                Kind::Sprite => Some(sprite),
+                Kind::Point | Kind::Line => soft,
+                _ => None,
             };
+            let smooth = soft.is_some() && matches!(kind, Kind::Point | Kind::Line);
             let additive = kind != Kind::Diamond;
             let mut verts: Vec<Vertex> = Vec::new();
             let mut indices: Vec<u16> = Vec::new();
@@ -377,7 +381,7 @@ impl Effects {
                     };
                     one_verts.clear();
                     one_indices.clear();
-                    emit(anim, frame, &place, z, &mut one_verts, &mut one_indices);
+                    emit(anim, frame, &place, z, smooth, &mut one_verts, &mut one_indices);
                     if verts.len() + one_verts.len() > MAX_BATCH_VERTICES
                         || indices.len() + one_indices.len() > MAX_BATCH_INDICES
                     {
@@ -418,11 +422,19 @@ fn color(c: [u8; 4]) -> Color {
 }
 
 /// Append one frame of an animation as triangles.
+/// Soft points: the round core's size relative to the original square, and
+/// the faint halo around it (size, alpha).
+const SOFT_CORE: f32 = 1.8;
+const SOFT_HALO: (f32, f32) = (3.5, 0.12);
+/// Soft lines: width in units (the original was one unit).
+const SOFT_LINE: f32 = 2.5;
+
 fn emit(
     anim: &Anim,
     frame: usize,
     place: &dyn Fn(Vec2) -> Vec2,
     z: f32,
+    smooth: bool,
     verts: &mut Vec<Vertex>,
     indices: &mut Vec<u16>,
 ) {
@@ -454,14 +466,24 @@ fn emit(
             for i in start..start + counts[frame] as usize {
                 let (p, size) = points[i];
                 let centre = place(p);
-                let h = size * 0.5;
-                let corners = [
-                    centre + vec2(-h, -h),
-                    centre + vec2(h, -h),
-                    centre + vec2(h, h),
-                    centre + vec2(-h, h),
-                ];
-                push_quad(verts, indices, corners, unit_uv, color(colors[i]));
+                let square = |h: f32| {
+                    [
+                        centre + vec2(-h, -h),
+                        centre + vec2(h, -h),
+                        centre + vec2(h, h),
+                        centre + vec2(-h, h),
+                    ]
+                };
+                let col = color(colors[i]);
+                if smooth {
+                    // A round ember: a faint halo, then the core.
+                    let (halo, halo_alpha) = SOFT_HALO;
+                    let faint = Color::new(col.r, col.g, col.b, col.a * halo_alpha);
+                    push_quad(verts, indices, square(size * 0.5 * halo), unit_uv, faint);
+                    push_quad(verts, indices, square(size * 0.5 * SOFT_CORE), unit_uv, col);
+                } else {
+                    push_quad(verts, indices, square(size * 0.5), unit_uv, col);
+                }
             }
         }
         Anim::Lines {
@@ -474,11 +496,14 @@ fn emit(
             for l in 0..counts[frame] as usize {
                 let (i, j) = (start + l * 2, start + l * 2 + 1);
                 let (a, b) = (place(line_verts[i]), place(line_verts[j]));
-                // One-unit-wide quad standing in for GL_LINES.
-                let n = (b - a).perp().normalize_or_zero() * 0.5;
+                // A quad standing in for GL_LINES: one unit wide, or a soft
+                // streak whose texture u runs across it (the glow's
+                // centre row gives a smooth falloff).
+                let width = if smooth { SOFT_LINE } else { 1.0 };
+                let n = (b - a).perp().normalize_or_zero() * width * 0.5;
                 let base = verts.len() as u16;
-                for (p, ci) in [(a - n, i), (b - n, j), (b + n, j), (a + n, i)] {
-                    verts.push(Vertex::new(p.x, p.y, z, 0.0, 0.0, color(colors[ci])));
+                for (p, ci, u) in [(a - n, i, 0.0), (b - n, j, 0.0), (b + n, j, 1.0), (a + n, i, 1.0)] {
+                    verts.push(Vertex::new(p.x, p.y, z, u, 0.5, color(colors[ci])));
                 }
                 indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
             }

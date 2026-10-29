@@ -590,6 +590,7 @@ async fn load_play_assets() -> PlayAssets {
         backdrops,
         normals,
         scorch: play::scorch_texture(),
+        soft_dot: play::soft_dot_texture(),
     }
 }
 

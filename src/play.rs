@@ -218,6 +218,25 @@ pub struct PlayAssets {
     pub normals: Vec<Texture2D>,
     /// A soft burn mark for scorch decals (`scorch_texture`).
     pub scorch: Texture2D,
+    /// A round Gaussian glow for soft particles (`soft_dot_texture`).
+    pub soft_dot: Texture2D,
+}
+
+/// A round white glow with a Gaussian falloff (port addition), for points
+/// and line sparks.
+pub fn soft_dot_texture() -> Texture2D {
+    const N: u16 = 32;
+    let mut img = Image::gen_image_color(N, N, Color::new(1.0, 1.0, 1.0, 0.0));
+    for y in 0..N {
+        for x in 0..N {
+            let d = vec2(x as f32 + 0.5, y as f32 + 0.5) / N as f32 * 2.0 - Vec2::ONE;
+            let a = (-d.length_squared() * 4.0).exp() * (1.0 - d.length()).clamp(0.0, 1.0).sqrt();
+            img.set_pixel(x as u32, y as u32, Color::new(1.0, 1.0, 1.0, a));
+        }
+    }
+    let tex = Texture2D::from_image(&img);
+    tex.set_filter(FilterMode::Linear);
+    tex
 }
 
 /// A soft, ragged burn mark: dark in the middle, fading out, with noise so
@@ -1247,7 +1266,7 @@ impl Play {
         // Shots: every few, so a stream reads as a moving light.
         for (i, b) in self.ship.bullets.iter().enumerate() {
             let (every, radius, color) = match b.weapon {
-                Weapon::Fire => (3, 90.0, FIRE_LIGHT * 0.9),
+                Weapon::Fire => (6, 80.0, FIRE_LIGHT * 0.6),
                 Weapon::Laser => (2, 70.0, ICE_LIGHT * 0.8),
                 Weapon::Cannon => (3, 50.0, SHIP_LIGHT * 0.5),
             };
@@ -2811,8 +2830,9 @@ impl Play {
         if self.fx {
             self.draw_shield_rim(canvas, assets);
         }
+        let soft = self.fx.then_some(&assets.soft_dot);
         self.effects
-            .draw(canvas, &assets.spark, self.z, |p| self.to_screen(p));
+            .draw(canvas, &assets.spark, soft, self.z, |p| self.to_screen(p));
         self.draw_hud(canvas, assets);
     }
 

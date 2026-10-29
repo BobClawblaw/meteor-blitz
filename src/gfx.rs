@@ -299,7 +299,9 @@ void main() {
             vec3 l = normalize(vec3(d, 24.0));
             light += LightColor[i] * fall * fall * (0.35 + 0.65 * max(dot(n, l), 0.0));
         }
-        surface = surface * relief + surface * light * 3.0 + light * 0.25;
+        // Overlapping lights saturate softly instead of washing out.
+        light = light / (1.0 + light);
+        surface = surface * relief + surface * light * 3.0 + light * 0.2;
     }
     gl_FragColor = vec4(surface * color.rgb, base.a * color.a);
 }"#;
