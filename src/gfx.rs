@@ -19,7 +19,7 @@ use macroquad::miniquad::{
 };
 use macroquad::prelude::*;
 use std::cell::{Cell, RefCell};
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 pub const CANVAS_W: f32 = 480.0;
 pub const CANVAS_H: f32 = 320.0;
@@ -41,10 +41,18 @@ pub fn edge() -> f32 {
     (view_w() - CANVAS_W) * 0.5
 }
 
-/// The window's aspect, from 3:2 (the original) to 2.4:1. MB_WIDE=0 keeps
-/// the original 3:2 view (letterboxed), for emulator comparisons.
+/// Settings::widescreen, set each frame before `Canvas::begin`.
+static WIDESCREEN: AtomicBool = AtomicBool::new(true);
+
+pub fn set_widescreen(on: bool) {
+    WIDESCREEN.store(on, Ordering::Relaxed);
+}
+
+/// The window's aspect, from 3:2 (the original) to 2.4:1. With widescreen
+/// off, or MB_WIDE=0 (emulator comparisons), the original 3:2 view,
+/// letterboxed.
 fn window_view_w() -> f32 {
-    if std::env::var("MB_WIDE").is_ok_and(|v| v == "0") {
+    if !WIDESCREEN.load(Ordering::Relaxed) || std::env::var("MB_WIDE").is_ok_and(|v| v == "0") {
         return CANVAS_W;
     }
     (CANVAS_H * screen_width() / screen_height()).clamp(CANVAS_W, CANVAS_H * MAX_ASPECT).round()

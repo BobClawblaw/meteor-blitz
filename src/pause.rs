@@ -80,6 +80,8 @@ pub struct Settings {
     pub fullscreen: bool,
     /// Port addition: the bloom post-process.
     pub bloom: bool,
+    /// Port addition: the view follows the window's aspect (off: 3:2).
+    pub widescreen: bool,
 }
 
 impl Default for Settings {
@@ -98,6 +100,7 @@ impl Default for Settings {
             tutorial: false,
             fullscreen: false,
             bloom: true,
+            widescreen: true,
         }
     }
 }
@@ -150,6 +153,7 @@ impl Settings {
                 "tutorial" => s.tutorial = parse_bool(value, s.tutorial),
                 "fullscreen" => s.fullscreen = parse_bool(value, s.fullscreen),
                 "bloom" => s.bloom = parse_bool(value, s.bloom),
+                "widescreen" => s.widescreen = parse_bool(value, s.widescreen),
                 _ => {}
             }
         }
@@ -158,7 +162,7 @@ impl Settings {
 
     pub fn to_text(&self) -> String {
         format!(
-            "music={}\neffects={}\nshake={}\nshake_control={}\nboost_control={}\nbomb_button={}\nauto_pause={}\nauto_gravity={}\nauto_upgrade={}\nflip={}\ntutorial={}\nfullscreen={}\nbloom={}\n",
+            "music={}\neffects={}\nshake={}\nshake_control={}\nboost_control={}\nbomb_button={}\nauto_pause={}\nauto_gravity={}\nauto_upgrade={}\nflip={}\ntutorial={}\nfullscreen={}\nbloom={}\nwidescreen={}\n",
             self.music,
             self.effects,
             self.shake,
@@ -172,6 +176,7 @@ impl Settings {
             self.tutorial as u8,
             self.fullscreen as u8,
             self.bloom as u8,
+            self.widescreen as u8,
         )
     }
 }
@@ -1142,6 +1147,7 @@ mod tests {
             tutorial: true,
             fullscreen: true,
             bloom: false,
+            widescreen: false,
         };
         assert_eq!(Settings::parse(&s.to_text()), s);
     }

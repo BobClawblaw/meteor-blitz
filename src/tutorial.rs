@@ -16,6 +16,7 @@
 
 use macroquad::prelude::*;
 
+use crate::bindings::{self, Action};
 use crate::gfx::Canvas;
 use crate::hud::{Align, Font};
 
@@ -264,11 +265,11 @@ impl Tutorial {
     }
 
     /// `Tutorial::draw`, at canvas depth 0, over the HUD.
-    pub fn draw(&self, canvas: &Canvas, font: &Font, hints: &Hints) {
+    pub fn draw(&self, canvas: &Canvas, font: &Font) {
         let a = self.alpha();
         if let Some(p) = panel(self.step) {
-            let hint = hints.for_step(self.step);
-            draw_panel(canvas, font, &p, hint, a);
+            let hint = hint(self.step);
+            draw_panel(canvas, font, &p, hint.as_deref(), a);
         }
         if self.step <= 25 {
             // The Quit button: a half-black box with "Quit" at 0.7.
@@ -422,32 +423,30 @@ fn draw_panel(canvas: &Canvas, font: &Font, p: &Panel, hint: Option<&str>, alpha
     }
 }
 
-/// Desktop hints: the keys and pad buttons for each step's control.
-pub struct Hints {
-    pub tap: &'static str,
-    pub moving: &'static str,
-    pub boost: &'static str,
-    pub fire: &'static str,
-    pub switch_weapon: &'static str,
-    pub bomb: &'static str,
-    pub gravity: &'static str,
-    pub pause: &'static str,
-}
-
-impl Hints {
-    fn for_step(&self, step: u32) -> Option<&str> {
-        Some(match step {
-            1 => self.tap,
-            2 => self.moving,
-            3 => self.boost,
-            6 | 7 => self.fire,
-            9 | 11 => self.switch_weapon,
-            13 => self.bomb,
-            14 => self.gravity,
-            20 => self.pause,
-            _ => return None,
-        })
-    }
+/// Desktop hint for a step that teaches a control: its current bindings
+/// (the captions describe the original's touch controls).
+fn hint(step: u32) -> Option<String> {
+    let b = bindings::current();
+    Some(match step {
+        1 => "Click or press any key or button".to_owned(),
+        2 => {
+            let keys: Vec<String> = [Action::Up, Action::Left, Action::Down, Action::Right]
+                .iter()
+                .filter_map(|&a| b.keys(a).first().map(|k| k.name()))
+                .collect();
+            format!("{} or left stick", keys.join(" "))
+        }
+        3 => b.describe(Action::Boost),
+        6 | 7 => format!("{} or right stick", b.describe(Action::Fire)),
+        9 | 11 => b.describe(Action::SwitchWeapon),
+        13 => b.describe(Action::Bomb),
+        14 if bindings::uses_mouse_left(Action::Fire) => {
+            format!("Double click or {}", b.describe(Action::Gravity))
+        }
+        14 => b.describe(Action::Gravity),
+        20 => format!("Esc or {}", b.describe(Action::Pause)),
+        _ => return None,
+    })
 }
 
 #[cfg(test)]

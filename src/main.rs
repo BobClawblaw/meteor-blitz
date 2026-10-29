@@ -1,6 +1,7 @@
 //! Meteor Blitz — a port of the 2009 iPhone game. Window, screens, and loop.
 
 mod arrow;
+mod bindings;
 mod bonus;
 mod boss;
 mod depot;
@@ -11,6 +12,7 @@ mod hud;
 mod lobber;
 mod menu;
 mod name_entry;
+mod options;
 mod mine;
 mod pad;
 mod particles;
@@ -35,10 +37,11 @@ use macroquad::audio::{
 };
 use macroquad::prelude::*;
 
-use gfx::{draw_quad, Canvas, CANVAS_W};
-use hud::{Align, Font, HudAssets};
+use gfx::Canvas;
+use hud::{Font, HudAssets};
 use menu::{MenuAssets, MenuBackdrop, MenuButton, MenuScreen};
 use name_entry::NameEntry;
+use options::{Options, Outcome as OptionsOutcome, Page as OptionsPage};
 use pause::{Action, Page, Pause, PauseAssets, Settings};
 use play::{Play, PlayAssets, RockArt, UPGRADES};
 use progress::Progress;
@@ -77,8 +80,6 @@ enum MenuKind {
     World,
     /// StageSelectScreen (14): stage of `world`
     Stage(usize),
-    /// The HELP button's tutorial page: the original's control diagram.
-    Help,
     /// HighScoresSelectScreen: arcade or survival scores.
     ScoresSelect,
     /// HighScoresScreen: the table for `mode` (0 arcade, 1 survival), local
@@ -99,6 +100,7 @@ enum Screen {
     Game,
     /// `labelEnterName`: asked once a run qualifies for the local table.
     NameEntry(NameEntry),
+    Options(Options),
 }
 
 /// A finished run waiting on the name step before its results popup.
@@ -119,6 +121,7 @@ enum Next {
     Menu(MenuKind),
     /// World (or SURVIVAL) and stage.
     Game(usize, usize),
+    Options(OptionsPage),
 }
 
 /// Menu art by file stem (`assets/ui/<name>.png`).
@@ -163,13 +166,11 @@ async fn load_ui_set() -> Ui {
         "labelSelectMode",
         "labelSelectWorld",
         "labelSelectStage",
-        "keyboard",
         "labelLocalArcadeScores",
         "labelGlobalArcadeScores",
         "labelLocalSurvivalScores",
         "labelGlobalSurvivalScores",
         "labelEnterName",
-        "captions",
     ] {
         names.push(label.to_owned());
     }
@@ -190,8 +191,6 @@ async fn load_ui_set() -> Ui {
         let tex = load_ui(&name).await;
         ui.insert(name, tex);
     }
-    // Art for the port's invisible buttons (the HELP page's checkbox).
-    ui.insert("blank".to_owned(), Texture2D::from_rgba8(1, 1, &[0, 0, 0, 0]));
     ui
 }
 
@@ -379,25 +378,6 @@ fn build_menu(kind: MenuKind, ui: &Ui, progress: &Progress, fade_backdrop: bool)
             buttons.push(back(6));
             MenuScreen::new(ui["labelSelectStage"].clone(), -9.0, buttons, fade_backdrop)
         }
-        // Tutorial page: the original's control diagram (`keyboard.png`, the
-        // full 480-wide sheet) with the caption block (`captions.png`) below
-        // it, plus the back button.
-        // The port adds the Tutorial checkbox (event 8), drawn by
-        // `draw_tutorial_checkbox`; its button art is a blank pixel.
-        MenuKind::Help => MenuScreen::new(
-            ui["keyboard"].clone(),
-            20.0,
-            vec![
-                back(6),
-                MenuButton {
-                    up: ui["blank"].clone(),
-                    down: ui["blank"].clone(),
-                    rect: TUTORIAL_CHECKBOX,
-                    event: HELP_TUTORIAL_TOGGLE,
-                },
-            ],
-            fade_backdrop,
-        ),
         // HighScoresSelectScreen: the same two-choice layout as PlayScreen.
         MenuKind::ScoresSelect => MenuScreen::new(
             ui["labelSelectMode"].clone(),
@@ -432,33 +412,9 @@ fn build_menu(kind: MenuKind, ui: &Ui, progress: &Progress, fade_backdrop: bool)
     }
 }
 
-/// The HELP page's Tutorial checkbox: its hit area, top right, clear of
-/// the control diagram (y 20-202).
-const TUTORIAL_CHECKBOX: Rect = Rect { x: 344.0, y: 2.0, w: 134.0, h: 18.0 };
-const HELP_TUTORIAL_TOGGLE: u8 = 8;
-
-/// A box with a tick when on, and its label, in the HUD font.
-fn draw_tutorial_checkbox(canvas: &Canvas, font: &Font, on: bool, alpha: f32) {
-    let r = TUTORIAL_CHECKBOX;
-    let c = Color::new(1.0, 1.0, 1.0, alpha);
-    let (bx, by, size) = (r.x + 4.0, r.y + 3.0, 12.0);
-    for (x, y, w, h) in [
-        (bx, by, size, 1.0),
-        (bx, by + size - 1.0, size, 1.0),
-        (bx, by, 1.0, size),
-        (bx + size - 1.0, by, 1.0, size),
-    ] {
-        canvas.fill_rect(x, y, w, h, c);
-    }
-    if on {
-        canvas.fill_rect(bx + 3.0, by + 3.0, size - 6.0, size - 6.0, c);
-    }
-    font.text("Tutorial", bx + size + 6.0, by + 1.0, 0.5, Align::Left, c);
-}
-
 /// Whether a game starts with the tutorial: the original ran it before
 /// World 1 Stage 1 and survival until help had been seen; the port runs it
-/// there while the HELP page's checkbox is ticked.
+/// there while the Options screen's Tutorial option is on.
 fn starts_with_tutorial(settings: &Settings, world: usize, stage: usize) -> bool {
     settings.tutorial && ((world == 0 && stage == 1) || world == SURVIVAL)
 }
@@ -467,8 +423,9 @@ fn starts_with_tutorial(settings: &Settings, world: usize, stage: usize) -> bool
 fn menu_event(kind: MenuKind, event: u8) -> Option<Next> {
     match (kind, event) {
         (MenuKind::Main, 0) => Some(Next::Menu(MenuKind::Mode)),
-        (MenuKind::Main, 3) => Some(Next::Menu(MenuKind::Help)),
-        (MenuKind::Help, 6) => Some(Next::Menu(MenuKind::Main)),
+        // SETTINGS opens the port's Options screen; HELP its Controls page.
+        (MenuKind::Main, 2) => Some(Next::Options(OptionsPage::Main)),
+        (MenuKind::Main, 3) => Some(Next::Options(OptionsPage::Controls)),
         (MenuKind::Main, 1) => Some(Next::Menu(MenuKind::ScoresSelect)),
         (MenuKind::ScoresSelect, 0) => Some(Next::Menu(MenuKind::ScoresTable(0, false))),
         (MenuKind::ScoresSelect, 1) => Some(Next::Menu(MenuKind::ScoresTable(1, false))),
@@ -733,6 +690,7 @@ async fn main() {
     if settings.fullscreen {
         set_fullscreen(true);
     }
+    bindings::install(bindings::Bindings::load());
 
     let mut screen = Screen::Menu(MenuKind::Main);
     let mut menu_screen = build_menu(MenuKind::Main, &ui, &progress, true);
@@ -758,14 +716,17 @@ async fn main() {
         ));
         screen = Screen::Game;
     }
-    // MB_MENU=<main|mode|help|scores|scores-*|name> opens a screen directly.
+    // MB_MENU=<main|mode|options|controls|scores|scores-*|name> opens a
+    // screen directly.
     if let Ok(name) = std::env::var("MB_MENU") {
         game = None;
         if name == "name" {
             screen = Screen::NameEntry(NameEntry::new(22410));
+        } else if name == "options" || name == "controls" || name == "help" {
+            let page = if name == "options" { OptionsPage::Main } else { OptionsPage::Controls };
+            screen = Screen::Options(Options::new(page));
         } else {
             let kind = match name.as_str() {
-                "help" => MenuKind::Help,
                 "mode" => MenuKind::Mode,
                 "scores" => MenuKind::ScoresSelect,
                 "scores-arcade" => MenuKind::ScoresTable(0, false),
@@ -900,7 +861,6 @@ async fn main() {
                     MenuKind::Mode => Some(2),
                     MenuKind::World => Some(7),
                     MenuKind::Stage(_) => Some(6),
-                    MenuKind::Help => Some(6),
                     MenuKind::ScoresSelect => Some(2),
                     MenuKind::ScoresTable(..) => Some(6),
                     MenuKind::Main => None,
@@ -910,10 +870,7 @@ async fn main() {
                 });
                 if let Some(event) = menu_screen.update(dt).or(pad_back) {
                     play_effect(SOUND_BUTTON, settings.effects);
-                    if kind == MenuKind::Help && event == HELP_TUTORIAL_TOGGLE {
-                        settings.tutorial = !settings.tutorial;
-                        settings.save();
-                    } else if let Some(next) = menu_event(kind, event) {
+                    if let Some(next) = menu_event(kind, event) {
                         menu_next = Some(next);
                         menu_screen.fx.leave();
                     }
@@ -950,8 +907,26 @@ async fn main() {
                                 music_on = true;
                             }
                         }
+                        Some(Next::Options(page)) => screen = Screen::Options(Options::new(page)),
                         None => menu_screen = build_menu(kind, &ui, &progress, false),
                     }
+                }
+            }
+            Screen::Options(ref mut options) => {
+                backdrop.update(dt);
+                let before = settings;
+                let outcome = options.update(dt, &mut settings);
+                if settings != before {
+                    settings.save();
+                }
+                match outcome {
+                    Some(OptionsOutcome::Click) => play_effect(SOUND_BUTTON, settings.effects),
+                    Some(OptionsOutcome::Close) => {
+                        play_effect(SOUND_BUTTON, settings.effects);
+                        menu_screen = build_menu(MenuKind::Main, &ui, &progress, false);
+                        screen = Screen::Menu(MenuKind::Main);
+                    }
+                    None => {}
                 }
             }
             Screen::Game => {
@@ -1109,8 +1084,7 @@ async fn main() {
                             ));
                         }
                     } else {
-                        let pad_pause =
-                            pad::pressed(pad::Button::Start) || pad::pressed(pad::Button::View);
+                        let pad_pause = bindings::pressed(bindings::Action::Pause);
                         let icon = Rect::new(449.0 + gfx::edge(), -1.0, 32.0, 22.0);
                         let clicked = is_mouse_button_pressed(MouseButton::Left)
                             && icon.contains(Canvas::mouse());
@@ -1125,28 +1099,11 @@ async fn main() {
 
         let t1 = get_time();
 
+        gfx::set_widescreen(settings.widescreen);
         canvas.begin();
         match screen {
             Screen::Menu(kind) => {
                 menu_screen.draw(&canvas, &menu_assets, &backdrop);
-                if kind == MenuKind::Help {
-                    let caption = &ui["captions"];
-                    let (caption_w, _) = gfx::tex_size(caption);
-                    draw_quad(
-                        caption,
-                        ((CANVAS_W - caption_w) * 0.5).floor(),
-                        206.0,
-                        1.0,
-                        0.0,
-                        Color::new(1.0, 1.0, 1.0, menu_screen.fx.alpha),
-                    );
-                    draw_tutorial_checkbox(
-                        &canvas,
-                        &play_assets.hud.font,
-                        settings.tutorial,
-                        menu_screen.fx.alpha,
-                    );
-                }
                 if let MenuKind::ScoresTable(mode, global) = kind {
                     scores::draw_rows(
                         &play_assets.hud.font,
@@ -1172,6 +1129,10 @@ async fn main() {
                 &ui["labelEnterName"],
                 &play_assets.hud.font,
             ),
+            Screen::Options(ref options) => {
+                backdrop.draw(&canvas, &menu_assets, 1.0);
+                options.draw(&canvas, &play_assets.hud.font, &settings);
+            }
         }
         canvas.set_bloom(settings.bloom);
         canvas.end();

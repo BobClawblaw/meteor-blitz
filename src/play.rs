@@ -14,13 +14,14 @@ use std::collections::VecDeque;
 use macroquad::prelude::*;
 
 use crate::bonus::{Power, Rings};
+use crate::bindings::{self, Action};
 use crate::boss::{self, BossState, Piece};
 use crate::depot::{self, Depot};
 use crate::enemies::{wrap_near, Element, Event, Field, Rock, Script, Weapon};
 use crate::gfx::{draw_atlas_sprite, draw_quad, draw_sprite, tex_size, Canvas};
 use crate::gravity;
 use crate::hud::{self, HudAssets, HudValues, Show};
-use crate::pad::{self, Button};
+use crate::pad;
 use crate::particles::{Effects, Kind};
 use crate::tower;
 use crate::tutorial::{self, Spawn, Tutorial};
@@ -215,19 +216,6 @@ pub struct PlayAssets {
     pub backdrops: Vec<(Texture2D, Texture2D)>,
 }
 
-/// The tutorial's captions describe touch controls; each panel that
-/// teaches one also names the keys and pad buttons. The ngage font has no
-/// comma.
-const TUTORIAL_HINTS: tutorial::Hints = tutorial::Hints {
-    tap: "Click or press any key or button",
-    moving: "WASD or left stick",
-    boost: "Space or A or LB",
-    fire: "Left mouse or right stick or RT",
-    switch_weapon: "Q or mouse wheel or X or Y",
-    bomb: "Right mouse or B or RB",
-    gravity: "Double click or E or LT",
-    pause: "Esc or Start",
-};
 
 /// TimeManager: enemies run at `factor`, easing toward the target while
 /// a slow-motion power-up lasts and back to 1 after.
@@ -1063,9 +1051,7 @@ impl Play {
             || pad::any_down();
         // The Quit button; Esc or the pad's Start stand in for it until
         // the pause button unlocks.
-        let quit_key = is_key_pressed(KeyCode::Escape)
-            || pad::pressed(Button::Start)
-            || pad::pressed(Button::View);
+        let quit_key = is_key_pressed(KeyCode::Escape) || bindings::pressed(Action::Pause);
         let quit = (is_mouse_button_pressed(MouseButton::Left)
             && tutorial::QUIT_RECT.contains(Canvas::mouse()))
             || (quit_key && !self.can_pause());
@@ -1719,9 +1705,11 @@ impl Play {
     }
 
     fn control(&mut self, dt: f32) {
+        // Bindings (controls.txt, the Options screen's Controls page).
+        let held = |a: Action| bindings::down(a) as i32;
         let stick = vec2(
-            (is_key_down(KeyCode::D) as i32 - is_key_down(KeyCode::A) as i32) as f32,
-            (is_key_down(KeyCode::S) as i32 - is_key_down(KeyCode::W) as i32) as f32,
+            (held(Action::Right) - held(Action::Left)) as f32,
+            (held(Action::Down) - held(Action::Up)) as f32,
         );
         // A controller's left stick is the original's left wheel: speed
         // follows how far it is pushed.
@@ -1746,11 +1734,8 @@ impl Play {
         } else {
             self.ship.vel *= DRAG / (dt + DRAG);
         }
-        // The original's switch-weapon button: Q or the mouse wheel here.
-        let switch = is_key_pressed(KeyCode::Q)
-            || mouse_wheel().1 != 0.0
-            || pad::pressed(Button::X)
-            || pad::pressed(Button::Y);
+        // The original's switch-weapon button (Q, the wheel, X or Y).
+        let switch = bindings::pressed(Action::SwitchWeapon);
         if switch && self.allowed(Tutorial::can_switch_weapon) {
             self.ship.switch_weapon();
             if let Some(t) = &mut self.tutorial {
@@ -1762,20 +1747,14 @@ impl Play {
         let auto_bomb = self
             .auto_bomb
             .is_some_and(|t| self.elapsed >= t && self.elapsed - dt < t);
-        let bomb = auto_bomb
-            || is_mouse_button_pressed(MouseButton::Right)
-            || is_key_pressed(KeyCode::B)
-            || pad::pressed(Button::B)
-            || pad::pressed(Button::RightBumper);
+        let bomb = auto_bomb || bindings::pressed(Action::Bomb);
         if bomb && self.allowed(Tutorial::can_bomb) {
             self.bomb();
             if let Some(t) = &mut self.tutorial {
                 t.using_bomb();
             }
         }
-        let boost = is_key_pressed(KeyCode::Space)
-            || pad::pressed(Button::A)
-            || pad::pressed(Button::LeftBumper);
+        let boost = bindings::pressed(Action::Boost);
         if boost && self.ship.can_boost() && self.allowed(Tutorial::can_boost) {
             self.ship.boost(dt);
             self.camera.shake(0.75, 7.5);
@@ -1813,37 +1792,38 @@ impl Play {
                     self.release_gun();
                 }
             }
-        } else if can_fire && is_mouse_button_down(MouseButton::Left) {
+        } else if can_fire && bindings::key_down(Action::Fire) {
+            // Keyboard and mouse fire toward the cursor.
             let dir = (Canvas::mouse() - self.to_screen(self.ship.pos)).normalize_or_zero();
             if dir != Vec2::ZERO {
                 self.ship.shoot(dt, dir);
             }
             // GameScreen::updateStateReady: a second press within 0.3 s of
-            // the last (or E here) reaches out with the gravity gun.
-            if is_mouse_button_pressed(MouseButton::Left) {
+            // the last (or the gravity binding) reaches out with the gun.
+            if bindings::key_pressed(Action::Fire) {
                 if self.since_press < DOUBLE_PRESS {
                     self.activate_gun();
                 }
                 self.since_press = 0.0;
             }
-            if is_key_pressed(KeyCode::E) {
+            if bindings::pressed(Action::Gravity) {
                 self.activate_gun();
             }
         } else if let Some(dir) = self.pad_aim().filter(|_| can_fire) {
             // The right stick is the original's fire wheel: aim and shoot.
-            // The right trigger fires along the last aim.
+            // The fire binding (RT) fires along the last aim.
             self.ship.shoot(dt, dir);
-            if pad::pressed(Button::LeftTrigger) {
+            if bindings::pressed(Action::Gravity) {
                 self.activate_gun();
             }
         } else {
             self.ship.hold_fire();
-            if pad::pressed(Button::LeftTrigger) {
+            if bindings::pressed(Action::Gravity) {
                 self.activate_gun();
             }
-            // Letting go of the trigger throws what the gun holds; with a
-            // controller, holding the left trigger keeps the grip.
-            if !pad::down(Button::LeftTrigger) {
+            // Letting go of fire throws what the gun holds; holding the
+            // gravity binding keeps the grip.
+            if !bindings::down(Action::Gravity) {
                 self.release_gun();
             }
         }
@@ -1878,7 +1858,7 @@ impl Play {
         let r = pad::right();
         if r.length() > PAD_FIRE {
             Some(r.normalize())
-        } else if pad::down(Button::RightTrigger) {
+        } else if bindings::pad_down(Action::Fire) {
             Some(self.ship.aim_dir)
         } else {
             None
@@ -2440,7 +2420,7 @@ impl Play {
     fn draw_hud(&self, canvas: &Canvas, assets: &PlayAssets) {
         hud::draw(&assets.hud, &self.hud_values());
         if let Some(t) = &self.tutorial {
-            t.draw(canvas, &assets.hud.font, &TUTORIAL_HINTS);
+            t.draw(canvas, &assets.hud.font);
         }
     }
 
