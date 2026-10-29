@@ -705,6 +705,12 @@ async fn main() {
             _ => Pause::menu(),
         });
     }
+    // The popup only draws on the game screen; start a stage when MB_START
+    // (or MB_MENU) did not, so MB_PAUSE captures the popup itself.
+    if pause.is_some() && game.is_none() {
+        game = Some(Play::new(0, 1, progress.best, &play_assets));
+        screen = Screen::Game;
+    }
 
     // MB_PROF prints update and draw CPU time per window; MB_PROF_FRAMES=N
     // exits after N frames, for unattended benchmarks.
