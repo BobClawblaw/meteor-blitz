@@ -201,6 +201,7 @@ async fn load_menu_assets() -> MenuAssets {
         space: load_texture_file(&base).await,
         fog: load_texture_file(&decal).await,
         horizon: load_ui("horizon").await,
+        white: Texture2D::from_rgba8(1, 1, &[255, 255, 255, 255]),
     };
     for tex in [&menu.space, &menu.fog] {
         tex.set_filter(FilterMode::Linear);
@@ -287,7 +288,6 @@ fn build_menu(kind: MenuKind, ui: &Ui, progress: &Progress, fade_backdrop: bool)
             ui["labelSelectMode"].clone(),
             0.0,
             vec![
-                back(2),
                 button(
                     ui,
                     "buttonArcade",
@@ -308,6 +308,7 @@ fn build_menu(kind: MenuKind, ui: &Ui, progress: &Progress, fade_backdrop: bool)
                     128.0,
                     1,
                 ),
+                back(2),
             ],
             fade_backdrop,
         ),
@@ -321,7 +322,7 @@ fn build_menu(kind: MenuKind, ui: &Ui, progress: &Progress, fade_backdrop: bool)
                 (176.5, 185.0, 127.0),
                 (320.0, 185.0, 130.0),
             ];
-            let mut buttons = vec![back(7)];
+            let mut buttons = Vec::new();
             for (i, (x, y, w)) in slots.into_iter().enumerate() {
                 let world = i + 1;
                 let unlocked = i == 0 || progress.unlocked >= i * 5;
@@ -341,6 +342,7 @@ fn build_menu(kind: MenuKind, ui: &Ui, progress: &Progress, fade_backdrop: bool)
                     if unlocked { world as u8 } else { 0 },
                 ));
             }
+            buttons.push(back(7));
             MenuScreen::new(ui["labelSelectWorld"].clone(), -9.0, buttons, fade_backdrop)
         }
         MenuKind::Stage(world) => {
@@ -351,7 +353,7 @@ fn build_menu(kind: MenuKind, ui: &Ui, progress: &Progress, fade_backdrop: bool)
                 (100.0, 185.0),
                 (250.0, 185.0),
             ];
-            let mut buttons = vec![back(6)];
+            let mut buttons = Vec::new();
             for (i, (x, y)) in slots.into_iter().enumerate() {
                 let stage = i + 1;
                 let unlocked = i == 0 || progress.unlocked >= world * 5 + i;
@@ -371,6 +373,7 @@ fn build_menu(kind: MenuKind, ui: &Ui, progress: &Progress, fade_backdrop: bool)
                     if unlocked { stage as u8 } else { 0 },
                 ));
             }
+            buttons.push(back(6));
             MenuScreen::new(ui["labelSelectStage"].clone(), -9.0, buttons, fade_backdrop)
         }
         // Tutorial page: the original's control diagram (`keyboard.png`, the
@@ -382,9 +385,9 @@ fn build_menu(kind: MenuKind, ui: &Ui, progress: &Progress, fade_backdrop: bool)
             ui["labelSelectMode"].clone(),
             0.0,
             vec![
-                back(2),
                 button(ui, "buttonArcade", "buttonArcadeDown", 47.0, 118.0, 175.0, 128.0, 0),
                 button(ui, "buttonSurvival", "buttonSurvivalDown", 258.0, 118.0, 175.0, 128.0, 1),
+                back(2),
             ],
             fade_backdrop,
         ),
@@ -401,9 +404,9 @@ fn build_menu(kind: MenuKind, ui: &Ui, progress: &Progress, fade_backdrop: bool)
                 ui[label].clone(),
                 0.0,
                 vec![
-                    back(6),
                     button(ui, "buttonLocal", "buttonLocalDown", 16.0, 258.0, 126.0, 54.0, 1),
                     button(ui, "buttonGlobal", "buttonGlobalDown", 338.0, 258.0, 126.0, 54.0, 2),
+                    back(6),
                 ],
                 fade_backdrop,
             )
@@ -718,10 +721,18 @@ async fn main() {
                 "scores-survival" => MenuKind::ScoresTable(1, false),
                 "scores-global" => MenuKind::ScoresTable(0, true),
                 "main" => MenuKind::Main,
+                "world" => MenuKind::World,
+                "stage" => MenuKind::Stage(0),
                 _ => MenuKind::Main,
             };
             screen = Screen::Menu(kind);
             menu_screen = build_menu(kind, &ui, &progress, true);
+            // MB_FOCUS=<n> shows the controller focus frame in captures.
+            if let Ok(v) = std::env::var("MB_FOCUS") {
+                if let Ok(i) = v.parse::<usize>() {
+                    menu_screen.set_focus(Some(i));
+                }
+            }
         }
     }
     // MB_PAUSE opens a popup for screenshot runs.
@@ -999,7 +1010,14 @@ async fn main() {
                                     ));
                                 }
                             }
-                        } else if scores.qualifies(run.survival, run.score) {
+                        } else if {
+                            // The name step belongs to the end of a run, not
+                            // to a stage clear that continues. Asking after
+                            // every stage interrupted the run mid-play.
+                            let run_ends = !run.cleared
+                                || game.as_ref().is_some_and(|g| g.next_stage().is_none());
+                            run_ends && scores.qualifies(run.survival, run.score)
+                        } {
                             screen = Screen::NameEntry(NameEntry::new(run.score));
                             pending = Some(run);
                         } else {

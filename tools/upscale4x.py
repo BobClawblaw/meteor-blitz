@@ -2,7 +2,11 @@
 """Upscale the original graphics for the HD render path.
 
 - Terrain/fog/space/horizon textures: Real-ESRGAN x4plus when the ncnn
-  binary is available, otherwise Lanczos, at 2x. The backdrop mesh samples
+  binary is available, otherwise Lanczos, at 2x. The ncnn tool is run with
+  one tile (`-t 1024`): its automatic 400 px tiling left visible seams.
+  The backdrop mesh wraps these textures, so the ESRGAN detail is faded into
+  a periodic Lanczos base near the edges; otherwise the upscaled edges do not
+  match and the repeats show as a checkerboard. The backdrop mesh samples
   these minified across the screen and macroquad builds no mipmaps, so a 4x
   copy (2048x2048) stalls the GPU and drops the frame rate; 2x holds 60 Hz.
 - UI art, sprites and the bitmap font: xBR 4x (pixel-art aware), with the
@@ -73,7 +77,7 @@ def esrgan_upscale(src: Path, dst: Path, esrgan: Path, scale: int) -> bool:
     subprocess.run(
         [str(esrgan), "-i", str(src), "-o", str(dst), "-s", str(scale),
          "-m", str(esrgan.parent / "models"), "-n", "realesrgan-x4plus",
-         "-f", "png"],
+         "-f", "png", "-t", "1024"],
         check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
     return True
@@ -93,14 +97,58 @@ def verify(src: Path, dst: Path) -> float:
     return float(np.abs(a - b).mean())
 
 
+def tiled3(im: Image.Image) -> Image.Image:
+    """A 3x3 copy: resampling its centre makes the result periodic."""
+    w, h = im.size
+    tiled = Image.new(im.mode, (w * 3, h * 3))
+    for dy in range(3):
+        for dx in range(3):
+            tiled.paste(im, (dx * w, dy * h))
+    return tiled
+
+
+def seamless_base(src: Path, scale: int) -> Image.Image:
+    im = Image.open(src)
+    w, h = im.size
+    big = tiled3(im).resize((w * 3 * scale, h * 3 * scale), Image.LANCZOS)
+    return big.crop((w * scale, h * scale, w * 2 * scale, h * 2 * scale))
+
+
+def blend_seamless(detail: Image.Image, base: Image.Image, band: int) -> Image.Image:
+    """Keeps the ESRGAN detail inside, and the periodic base at the edges."""
+    a = np.asarray(detail.convert("RGBA"), dtype=np.float32)
+    b = np.asarray(base.convert("RGBA"), dtype=np.float32)
+    h, w = a.shape[:2]
+    y = np.arange(h, dtype=np.float32)
+    x = np.arange(w, dtype=np.float32)
+    dx = np.minimum(x, w - 1 - x) / band
+    dy = np.minimum(y, h - 1 - y) / band
+    m = np.clip(np.minimum(dx[None, :], dy[:, None]), 0.0, 1.0)
+    m = (m * m * (3.0 - 2.0 * m))[..., None]
+    out = np.clip(a * m + b * (1.0 - m), 0.0, 255.0).astype(np.uint8)
+    return Image.fromarray(out, "RGBA")
+
+
+def edge_diff(dst: Path) -> float:
+    a = np.asarray(Image.open(dst).convert("RGB"), dtype=np.float32)
+    return float((np.abs(a[:, 0] - a[:, -1]).mean() + np.abs(a[0, :] - a[-1, :]).mean()) / 2.0)
+
+
 def upscale_textures(esrgan: Path) -> None:
     # 2x: the backdrop mesh minifies these and macroquad has no mipmaps.
     src = ROOT / "original" / "textures"
     for p in sorted(src.glob("*.png")):
         dst = OUT / "textures" / p.name
-        if not esrgan_upscale(p, dst, esrgan, 2):
-            lanczos(p, dst, 2)
-        print("texture", p.name, "->", dst.relative_to(ROOT), "diff", round(verify(p, dst), 2))
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory() as tmp:
+            detail = Path(tmp) / "detail.png"
+            if esrgan_upscale(p, detail, esrgan, 2):
+                out = blend_seamless(Image.open(detail), seamless_base(p, 2), 24)
+            else:
+                out = seamless_base(p, 2)
+            out.save(dst, optimize=True)
+        print("texture", p.name, "->", dst.relative_to(ROOT),
+              "diff", round(verify(p, dst), 2), "edge", round(edge_diff(dst), 2))
 
 
 def upscale_dir(src: Path, dst_dir: Path, label: str) -> None:

@@ -25,6 +25,8 @@ pub struct MenuAssets {
     pub space: Texture2D,
     pub fog: Texture2D,
     pub horizon: Texture2D,
+    /// A 1x1 white texture for the controller focus frame.
+    pub white: Texture2D,
 }
 
 /// The shared menu backdrop's scroll (`BasicScreen::update` drifts it 50/s).
@@ -93,6 +95,11 @@ impl MenuScreen {
             pressed: None,
             focus: None,
         }
+    }
+
+    /// Sets the controller focus, e.g. for screenshot runs.
+    pub fn set_focus(&mut self, f: Option<usize>) {
+        self.focus = f;
     }
 
     /// Advances the transition and returns the event of a button pressed
@@ -172,7 +179,46 @@ impl MenuScreen {
             let tex = if lit { &b.down } else { &b.up };
             draw_quad(tex, b.rect.x, b.rect.y, 1.0, self.fx.z, color);
         }
+        // The original was touch-only; the port adds controller focus, so it
+        // has to be visible. Some screens (world/stage) reuse one texture for
+        // up and down, where the pressed frame alone shows nothing.
+        if let Some(f) = self.focus {
+            if let Some(b) = self.buttons.get(f) {
+                let c = Color::new(1.0, 1.0, 1.0, 0.7 * self.fx.alpha);
+                frame(canvas, assets, b.rect.x, b.rect.y, b.rect.w, b.rect.h, self.fx.z, c);
+            }
+        }
     }
+}
+
+/// A 1 px selection frame, matching the pause popup's controller selection.
+fn frame(
+    canvas: &Canvas,
+    assets: &MenuAssets,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    z: f32,
+    color: Color,
+) {
+    let quad = |qx: f32, qy: f32, qw: f32, qh: f32| {
+        canvas.draw_triangles(
+            vec![
+                Vertex::new(qx, qy, z, 0.0, 0.0, color),
+                Vertex::new(qx + qw, qy, z, 1.0, 0.0, color),
+                Vertex::new(qx + qw, qy + qh, z, 1.0, 1.0, color),
+                Vertex::new(qx, qy + qh, z, 0.0, 1.0, color),
+            ],
+            vec![0, 1, 2, 0, 2, 3],
+            Some(&assets.white),
+            false,
+        );
+    };
+    quad(x, y, w, 1.0);
+    quad(x, y + h - 1.0, w, 1.0);
+    quad(x, y, 1.0, h);
+    quad(x + w - 1.0, y, 1.0, h);
 }
 
 /// `BasicScreen` state: the fade/fly-in on entry and fade-out on exit.
