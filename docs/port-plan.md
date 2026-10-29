@@ -14,6 +14,7 @@
 - High-score tables (`LocalScores`) live in `scores.txt`. `HighScoresSelectScreen` picks arcade or survival; `HighScoresScreen` draws the rows under the original labels with Local/Global tabs, and the Global tab reports offline (Game Center is gone).
 - `labelEnterName` opens before the results popup when a run makes the table; the desktop port reads the keyboard directly instead of the original on-screen keyboard.
 - The HELP button opens the tutorial page with the original control diagram (`keyboard.png`) and the caption block (`captions.png`).
+- `Tutorial::canShow*` hints show the caption block once per session on the first score, multiplier 2, bomb use and lost life.
 - The earlier reimagined gameplay (wrapping 5760x3240 world, drones/turrets/slingers, heat, dash) is not the original's and will be replaced screen by screen.
 
 ## Phases

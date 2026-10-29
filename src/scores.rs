@@ -63,6 +63,7 @@ impl Scores {
     }
 
     /// `LocalScores::getHighestScore`.
+    #[allow(dead_code)]
     pub fn highest(&self, survival: bool) -> u64 {
         self.table(survival).first().map_or(0, |e| e.score)
     }

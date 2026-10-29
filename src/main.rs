@@ -22,6 +22,7 @@ mod seeker;
 mod shyguy;
 mod snake;
 mod tower;
+mod tutorial;
 mod waves;
 mod weapons;
 
@@ -41,6 +42,7 @@ use name_entry::NameEntry;
 use pause::{Action, Page, Pause, PauseAssets, Settings};
 use play::{Play, PlayAssets, RockArt};
 use progress::Progress;
+use tutorial::Tutorial;
 use scores::Scores;
 
 fn window_conf() -> Conf {
@@ -653,6 +655,10 @@ async fn main() {
     let mut game: Option<Play> = None;
     let mut pause: Option<Pause> = None;
     let mut pending: Option<PendingRun> = None;
+    let mut tutorial = Tutorial::new();
+    if std::env::var_os("MB_TUTORIAL").is_some() {
+        tutorial.force();
+    }
     let mut music_on = false;
     let mut frame_count: u32 = 0;
     // MB_START=<world>.<stage> (1-based, world 7 = survival) boots straight
@@ -886,6 +892,15 @@ async fn main() {
                 } else if let Some(g) = game.as_mut() {
                     g.set_shake_scale(settings.shake);
                     g.update(dt);
+                    tutorial.update(
+                        dt,
+                        g.score,
+                        g.multiplier,
+                        g.bombs,
+                        g.lives,
+                        g.initial_lives(),
+                        g.initial_bombs(),
+                    );
                     for id in g.sounds.drain(..) {
                         play_effect(id, settings.effects);
                     }
@@ -966,6 +981,7 @@ async fn main() {
             Screen::Game => {
                 if let Some(g) = game.as_ref() {
                     g.draw(&canvas, &play_assets);
+                    tutorial.draw(&canvas, &ui["captions"]);
                     if let Some(p) = pause.as_ref() {
                         p.draw(&canvas, &pause_assets, &play_assets.hud.font, g, &settings);
                     }
@@ -1017,7 +1033,7 @@ async fn main() {
         let auto_shot = shot_path.as_deref().filter(|_| frame_count == shot_frame);
         if auto_shot.is_some() {
             if let Some(g) = game.as_ref() {
-                eprintln!("shot: ship at {:?}", g.ship_pos());
+                eprintln!("shot: ship at {:?} score {} mult {} bombs {} lives {}", g.ship_pos(), g.score, g.multiplier, g.bombs, g.lives);
             }
             eprintln!(
                 "shot: pause {} name entry {}",
