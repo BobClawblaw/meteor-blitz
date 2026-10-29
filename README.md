@@ -1,42 +1,83 @@
-# Meteor Blitz — modern port
+# Meteor Blitz — faithful port
 
-A modern port of Alley Labs' *Meteor Blitz* (2009), built from the original iOS 1.4 assets: planet-surface terrain, UI art, and the original soundtrack and SFX.
+A source-faithful port of Alley Labs' *Meteor Blitz* (iOS, 2009), rebuilt from the original 1.4 IPA. The game logic is translated from the decompiled ARMv6 binary; terrain, UI art, music and SFX are decoded from the original app. Rust + macroquad, one codebase for macOS, Windows and the web (WASM).
 
-Targets: **web (canvas/WASM)**, **macOS**, **Windows**. Controls: WASD + mouse.
+| | |
+|---|---|
+| ![Main menu](screenshots/menu.png) | ![Gameplay](screenshots/gameplay.png) |
+| ![Pause menu](screenshots/pause.png) | ![Controls](screenshots/controls.png) |
+| ![High scores](screenshots/scores.png) | ![Help](screenshots/help.png) |
 
-## Provenance
+## Status
 
-- Source: `original/Meteor_Blitz_1.4_ios_2.1.ipa` (iOS 1.4, iOS 2.1), archived at the Internet Archive.
-- `original/app/` — the extracted `.app` bundle, untouched.
-- `original/textures/` — the 11 PVRTC planet/fog/cloud textures decoded to PNG.
-- `original/audio/` — `sounds.raw` and `music.raw` decoded to WAV (mono 44.1 kHz PCM).
+Playable end to end:
 
-`original/` is read-only source material. Never edit it; regenerate derived assets instead.
+- 30 arcade stages (6 worlds × 5) and survival mode, with the original wave tables, stage clear, unlock progression and boss.
+- Every enemy kind from the binary: rocks, depots, mines, shy guys, snakes, arrows, towers, seekers, lobbers and the boss.
+- Cannon, fire and laser weapons, gravity gun, bombs, boost, rings, multiplier, power-ups and the upgrade shop.
+- Menus and the pause/controls/upgrade/clear/game-over popups, ported from `PausePopup`; settings persist across launches; local high-score tables with name entry; HELP/tutorial captions and in-game hints.
+- Keyboard/mouse and game controller input (Xbox pads on macOS through GameController and on Windows through XInput). The web build has no controller backend yet.
 
-## What is in the original
+Verified against emulator frames: the main-menu buttons are pixel-exact, and the pause panel's bands, rules, button nine-slice and slider knob match the decompiled drawing and the emulator pause frame. `cargo test` covers the boss patterns, gravity gun, ground scroll, settings, scores, tutorial gates and stick menu navigation.
 
-- Planet surface tiles: `crust`, `craters`, `sprawl`, `blue`, `green`, `fire`, `clouds`, `fogRed`, `fogGreen`, `fogBlackRed`, `space4deep`.
-- UI: 187 PNGs (buttons, labels, achievements, stage select).
-- Audio: 10.7 s of SFX and a 120 s music track.
-- Gameplay sprites are PVRTC-compressed inside the binary/`systems.dat`; the decoded terrain and UI art are the usable set.
+Known approximations:
 
-## Port plan
-
-See `docs/port-plan.md`. Short version: Rust + macroquad, one codebase for web/macOS/Windows, large wrapping world with camera, original terrain and audio, faithful weapon set (plasma / flame / ice / gravity grab-sling / bombs / boost), meteor kinds with the weakness matrix, persistent chunks, enemies and bosses, 30 levels.
+- The 3D planet backdrop is a flat approximation; the emulator's background differs in scroll phase and brightness.
+- Pause button labels are drawn with the original `ngage` font at the measured atlas scale rather than from the engine's per-label atlas, so glyph pixels differ slightly.
+- The Global high-score tab reports that the leaderboard is offline, because the original Game Center server is gone.
 
 ## Build
 
 ```bash
-cargo run            # native window
-bash tools/build-web.sh   # web build into web/
-python3 -m http.server 8765   # then open http://localhost:8765/web.html
+cargo run --release
 ```
 
-Controls: WASD move, mouse aim, LMB fire, RMB gravity grab/sling, E polarity, Shift dash, 1/2/3/4 weapon (plasma / flame / ice / gravity), U upgrade, B bomb, Esc pause.
+macOS app bundle (GameController routes controller input to app bundles):
 
-## Status
+```bash
+bash tools/make-app.sh
+open target/MeteorBlitz.app
+```
 
-Playable: title, 30-stage arcade with stage clear and unlock progression, survival mode, enemies (drone / turret / slinger), boss on stage 5, meteor kinds with the weakness matrix, persistent chunks, bombs, gravity grab/sling, original terrain and audio, HUD with radar.
+Web build:
 
-Verified: stage 1 clears at 30 s with a real run (STAGE CLEAR, score 22410); game over and retry work; web build runs in Chromium with no console errors.
+```bash
+bash tools/build-web.sh
+python3 -m http.server 8765
+# then open http://localhost:8765/web.html
+```
 
+Windows: build with the MSVC toolchain; the controller backend uses XInput (see `AGENTS.md` for the Windows build notes).
+
+## Controls
+
+| Action | Keyboard / mouse | Controller |
+| --- | --- | --- |
+| Move | WASD | left stick |
+| Aim / fire | mouse + left button | right stick, or RT |
+| Boost | Space (or double-tap movement) | A or LB |
+| Bomb | right mouse button, or B | B or RB |
+| Switch weapon | Q or mouse wheel | X or Y |
+| Gravity gun | E, or double-click while firing | LT |
+| Pause / leave stage | Esc | Start or View |
+| Menus | arrows/WASD, Enter, Esc | D-pad or left stick, A, B |
+
+Settings and local scores live in `settings.txt` and `scores.txt` next to the executable.
+
+## Provenance
+
+- `original/Meteor_Blitz_1.4_ios_2.1.ipa` — the archived iOS 1.4 release (iOS 2.1 minimum), from the Internet Archive.
+- `original/app/` — the extracted `.app` bundle, untouched.
+- `original/textures/`, `original/audio/` — decoded PVRTC textures and WAV audio.
+- `original/screenshots/emu/` — touchHLE emulator frames used as ground truth for rendering comparisons.
+
+`original/` is read-only source material; derived assets live in `assets/` and are regenerated by scripts in `tools/`.
+
+## Layout
+
+- `src/` — the port: game screen, enemies, weapons, HUD, menus, pause popups, scores, controller input.
+- `assets/` — decoded UI, terrain, sprites and audio used at runtime.
+- `tools/` — asset decoders, the web build, the macOS app wrapper and the emulator-frame comparison tool.
+- `docs/port-plan.md`, `AGENTS.md`, `worklog/` — plan, ground rules/resume status, and the development log.
+
+The original game and assets are © Alley Labs. This is a fan port of the 2009 release.
