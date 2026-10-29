@@ -914,10 +914,18 @@ impl Pause {
     }
 }
 
-fn fit_scale(font: &Font, text: &str, w: f32, h: f32) -> f32 {
-    let by_w = (w - 10.0) / font.width(text, 1.0).max(1.0);
-    let by_h = (h - 8.0) / 15.0;
-    by_w.min(by_h).clamp(0.35, 0.9)
+/// The original's `DynamicButton` labels come from a pre-rendered atlas at
+/// a fixed size, so the port draws them at one scale; 0.4 matches the
+/// emulator pause frame. `MB_LABEL_SCALE` pins it for captures.
+fn fit_scale(_font: &Font, _text: &str, _w: f32, _h: f32) -> f32 {
+    const LABEL_SCALE: f32 = 0.4;
+    static FORCED: std::sync::OnceLock<Option<f32>> = std::sync::OnceLock::new();
+    let forced = *FORCED.get_or_init(|| {
+        std::env::var("MB_LABEL_SCALE")
+            .ok()
+            .and_then(|v| v.parse::<f32>().ok())
+    });
+    forced.map_or(LABEL_SCALE, |s| s.clamp(0.35, 0.9))
 }
 
 /// A 26x26 button background drawn as the original `DynamicButton`'s

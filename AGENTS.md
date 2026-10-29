@@ -40,7 +40,7 @@ Done (faithful to the binary unless noted):
 - Stage advance keeps the run: `Play::advance_stage` starts the next stage in the same screen, carrying score, rings, upgrade points, upgrades, lives, bombs and multiplier, like the original's `GameScreen::handleEvent` next-stage case; only the stage's world state restarts.
 
 Approximations / not yet faithful:
-- Pause buttons use the original `DynamicButton` nine-slice metrics (5 px corners, 16 px edges, 16x16 centre stretched between them) and the `ngage` font at runtime; the engine's per-label atlas is not reproduced, so label pixels differ slightly. Sliders use the original three-line track and the 25x25 `peg.png` knob at the decompiled offset. Panel bands and rules match the decompiled colours and alpha (rules are horizontal gradients at popup alpha).
+- Pause buttons use the original `DynamicButton` nine-slice metrics (5 px corners, 16 px edges, 16x16 centre stretched between them) and the `ngage` font at a fixed 0.4 scale, matching the emulator pause frame; the engine's per-label atlas is not reproduced, so glyph pixels differ slightly. Sliders use the original three-line track and the 25x25 `peg.png` knob at the decompiled offset. Panel bands and rules match the decompiled colours and alpha (rules are horizontal gradients at popup alpha).
 - `Settings` (music, effects, flip, shake, boost, bomb, auto pause/gravity/upgrade) now persist to `settings.txt`, matching `PausePopup::save/load`; a first launch writes the defaults, and changes are written through as they are made.
 - High-score tables keep local arcade and survival rows in `scores.txt`. A run that makes the table opens `labelEnterName` first (typed letters/digits, up to eight; Escape keeps `PLAYER`), and the Global tab reports that the leaderboard is offline, since the original's Game Center server is gone.
 - The HELP page shows the original control diagram (`keyboard.png`) with the caption block (`captions.png`) below it. In game, the tutorial hints (`Tutorial::canShow*`) show `captions.png` once per session when the player first scores, reaches multiplier 2, uses a bomb, or loses a life.
@@ -63,7 +63,8 @@ Next:
 Test hooks (env):
 - `MB_START=w.s` starts a stage; `MB_WAVE=n` starts at wave n.
 - `MB_SHOT` and `MB_SHOT_FRAME` capture a frame and exit.
-- `MB_PAUSE=<menu|controls|upgrade|clear|gameover>` opens a pause page for screenshot runs; it starts stage 1.1 when no stage is running, so the popup draws over a game.
+- `MB_PAUSE=<menu|controls|upgrade|clear|gameover>` opens a pause page for screenshot runs; it starts stage 1.1 when no stage is running, so the popup draws over a game. `original/screenshots/emu/frame_00030.png` is the pause main-page reference.
+- `MB_LABEL_SCALE=<n>` pins the pause button label scale (default 0.4), for comparing label sizes against the emulator.
 - `MB_AUTOFIRE`, `MB_GUN`, `MB_BOMB_AT`, `MB_WEAPON` and `MB_DRIFT` drive play unattended.
 - `MB_FPS=<n>` overrides the 60 Hz frame cap (`0` = uncapped). `MB_PROF=1` prints update/draw CPU per 120 frames; `MB_PROF_FRAMES=n` exits after n frames for benchmarks. Screenshot runs are uncapped unless `MB_FPS` is given, so `MB_SHOT_FRAME` still selects the same state.
 - `MB_PAD_LOG` prints controller input. To tell a game bug from a driver one on Windows, run an XInput reader (`XInputGetState` on xinput1_4.dll) alongside and compare.
