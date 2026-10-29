@@ -89,6 +89,8 @@ enum MenuKind {
 
 /// sounds.raw holds effects 1-17 (music.raw is id 0).
 const SOUND_COUNT: usize = 17;
+/// Shortest time between two starts of the same effect, in seconds.
+const EFFECT_GAP: f64 = 0.08;
 /// Audio::play id for button presses.
 const SOUND_BUTTON: usize = 9;
 
@@ -664,7 +666,19 @@ async fn main() {
                 .unwrap(),
         ));
     }
+    // An effect does not restart within EFFECT_GAP of its last start, so a
+    // burst (30 rings collected at once) plays once instead of stacking
+    // into one very loud sound.
+    let last_played: Vec<std::cell::Cell<f64>> =
+        (0..=SOUND_COUNT).map(|_| std::cell::Cell::new(f64::NEG_INFINITY)).collect();
     let play_effect = |id: usize, volume: f32| {
+        let now = get_time();
+        if let Some(last) = last_played.get(id) {
+            if now - last.get() < EFFECT_GAP {
+                return;
+            }
+            last.set(now);
+        }
         if let Some(Some(sound)) = sounds.get(id) {
             play_sound(
                 sound,

@@ -1286,10 +1286,15 @@ impl Play {
     /// Bonus::update for every ring; Bonus::setState(0) for each collected.
     fn update_rings(&mut self, dt: f32) {
         let ship = (!matches!(self.ship.life, Life::Dead(_))).then_some(self.ship.pos);
+        let mut ring_sound = false;
         for (pos, power) in self.pickups.update(dt, ship, self.ship.pos) {
             match power {
                 None => {
-                    self.sounds.push(SOUND_RING);
+                    // One ring sound however many land this update.
+                    if !ring_sound {
+                        self.sounds.push(SOUND_RING);
+                        ring_sound = true;
+                    }
                     self.effects
                         .start(Kind::Point, 15, pos, rand::gen_range(0.0, 360.0), false);
                     self.rings += 1;
