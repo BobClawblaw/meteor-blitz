@@ -712,6 +712,46 @@ pub struct Play {
     bg_z: Option<f32>,
     /// Global::level 7: the tutorial runs in this game.
     tutorial: Option<Tutorial>,
+    /// Positions at the start of the last 60 Hz step, and how far the
+    /// display is past it (0-1): frames between steps are drawn blended,
+    /// so 120/144 Hz output moves smoothly (port addition).
+    prev: Snapshot,
+    blend: f32,
+}
+
+/// Where everything stood at the start of a step. A list whose length
+/// changed in the step (a spawn or a kill) is drawn unblended that frame.
+#[derive(Default)]
+struct Snapshot {
+    ship: Vec2,
+    cam: Vec2,
+    scroll: Vec2,
+    rocks: Vec<Vec2>,
+    depots: Vec<Vec2>,
+    mines: Vec<Vec2>,
+    lobbers: Vec<Vec2>,
+    seekers: Vec<Vec2>,
+    arrows: Vec<Vec2>,
+    snakes: Vec<Vec2>,
+    segments: Vec<Vec2>,
+    shy_guys: Vec<Vec2>,
+    pieces: Vec<Vec2>,
+    boss: Vec<Vec2>,
+    rings: Vec<Vec2>,
+}
+
+/// Farther than this in one step is a jump (a respawn or a wrap), not
+/// motion to blend.
+const BLEND_JUMP: f32 = 80.0;
+
+/// `t` of the way from `prev` to `cur` in the wrapping world; a jump is
+/// drawn where it landed.
+fn blend_pos(prev: Vec2, cur: Vec2, t: f32) -> Vec2 {
+    let p = vec2(wrap_near(prev.x, cur.x), wrap_near(prev.y, cur.y));
+    if p.distance_squared(cur) > BLEND_JUMP * BLEND_JUMP {
+        return cur;
+    }
+    p.lerp(cur, t)
 }
 
 impl Play {
@@ -770,6 +810,8 @@ impl Play {
             auto_bomb,
             bg_z,
             tutorial: None,
+            prev: Snapshot::default(),
+            blend: 1.0,
         }
     }
 
@@ -947,12 +989,62 @@ impl Play {
     }
 
     /// Where a world position appears on the canvas.
+    /// Where a world position appears on the canvas, seen from the blended
+    /// view.
     fn to_screen(&self, p: Vec2) -> Vec2 {
-        let d = vec2(
-            wrap_near(p.x, self.ship.pos.x) - self.ship.pos.x,
-            wrap_near(p.y, self.ship.pos.y) - self.ship.pos.y,
-        );
-        SCREEN_CENTRE + self.camera.offset() + d
+        let view = self.view_ship();
+        let d = vec2(wrap_near(p.x, view.x) - view.x, wrap_near(p.y, view.y) - view.y);
+        SCREEN_CENTRE + self.view_cam() + d
+    }
+
+    /// The ship's position as drawn this frame: the camera follows it.
+    fn view_ship(&self) -> Vec2 {
+        self.blended(&[self.prev.ship], 1, 0, self.ship.pos)
+    }
+
+    fn view_cam(&self) -> Vec2 {
+        self.prev.cam.lerp(self.camera.offset(), self.blend)
+    }
+
+    /// Entry `i` of a list now `len` long, at `cur`, blended from where it
+    /// stood at the step's start.
+    fn blended(&self, prev: &[Vec2], len: usize, i: usize, cur: Vec2) -> Vec2 {
+        if prev.len() != len {
+            return cur;
+        }
+        blend_pos(prev[i], cur, self.blend)
+    }
+
+    /// A bullet as drawn: shots die too often for list blending, so they
+    /// step back along their (constant) velocity instead.
+    fn bullet_pos(&self, b: &Bullet) -> Vec2 {
+        b.pos - b.vel * (1.0 - self.blend) * STEP
+    }
+
+    /// Screen position of entry `i` of a list (see `blended`).
+    fn at(&self, prev: &[Vec2], len: usize, i: usize, cur: Vec2) -> Vec2 {
+        self.to_screen(self.blended(prev, len, i, cur))
+    }
+
+    fn snapshot(&self) -> Snapshot {
+        let f = &self.field;
+        Snapshot {
+            ship: self.ship.pos,
+            cam: self.camera.offset(),
+            scroll: self.scroll,
+            rocks: f.rocks.iter().map(|e| e.pos).collect(),
+            depots: f.depots.iter().map(|e| e.pos).collect(),
+            mines: f.mines.iter().map(|e| e.pos).collect(),
+            lobbers: f.lobbers.iter().map(|e| e.pos).collect(),
+            seekers: f.seekers.iter().map(|e| e.pos).collect(),
+            arrows: f.arrows.iter().map(|e| e.pos).collect(),
+            snakes: f.snakes.iter().map(|e| e.pos).collect(),
+            segments: f.snakes.iter().flat_map(|s| s.segments.iter().map(|g| g.pos)).collect(),
+            shy_guys: f.shy_guys.iter().map(|e| e.pos).collect(),
+            pieces: f.pieces.iter().map(|e| e.pos).collect(),
+            boss: f.boss.iter().map(|e| e.pos).collect(),
+            rings: self.pickups.rings.iter().map(|e| e.pos).collect(),
+        }
     }
 
     /// The ship's world position, for screenshot diagnostics.
@@ -964,8 +1056,10 @@ impl Play {
         self.accumulator += dt;
         while self.accumulator >= STEP {
             self.accumulator -= STEP;
+            self.prev = self.snapshot();
             self.step(STEP);
         }
+        self.blend = (self.accumulator / STEP).clamp(0.0, 1.0);
     }
 
     fn step(&mut self, dt: f32) {
@@ -1799,7 +1893,7 @@ impl Play {
             }
         } else if can_fire && bindings::key_down(Action::Fire) {
             // Keyboard and mouse fire toward the cursor.
-            let dir = (Canvas::mouse() - self.to_screen(self.ship.pos)).normalize_or_zero();
+            let dir = (Canvas::mouse() - self.to_screen(self.view_ship())).normalize_or_zero();
             if dir != Vec2::ZERO {
                 self.ship.shoot(dt, dir);
             }
@@ -1956,13 +2050,14 @@ impl Play {
         {
             let art = &assets.rocks[e];
             for size in 0..4 {
-                for rock in self
+                for (i, rock) in self
                     .field
                     .rocks
                     .iter()
-                    .filter(|r| r.element == element && r.size == size)
+                    .enumerate()
+                    .filter(|(_, r)| r.element == element && r.size == size)
                 {
-                    self.draw_rock(art, rock);
+                    self.draw_rock(art, rock, i);
                 }
             }
         }
@@ -1980,7 +2075,7 @@ impl Play {
         for (p, c) in &sparks {
             canvas.draw_points(&assets.spark, &[(*p, gravity::SPARK_SIZE)], self.z, *c);
         }
-        let ship = self.to_screen(self.ship.pos);
+        let ship = self.to_screen(self.view_ship());
         let gripped = self.field.gripped();
         if !self.field.gun.active && gripped.is_none() {
             return;
@@ -2039,7 +2134,7 @@ impl Play {
             let a = heading(b.vel).to_radians();
             let fwd = vec2(a.sin(), -a.cos());
             let side = vec2(a.cos(), a.sin());
-            let c = self.to_screen(b.pos) - fwd * h * back;
+            let c = self.to_screen(self.bullet_pos(b)) - fwd * h * back;
             let n = verts.len() as u16;
             for (sx, sy, u, v) in [
                 (-0.5, -0.5, 0.0, 0.0),
@@ -2058,14 +2153,15 @@ impl Play {
     }
 
     fn draw_depots(&self, canvas: &Canvas, assets: &PlayAssets) {
-        for d in &self.field.depots {
-            self.draw_depot(canvas, assets, d);
+        for (i, d) in self.field.depots.iter().enumerate() {
+            self.draw_depot(canvas, assets, d, i);
         }
         // Depot::draw: the label, only once the depot has landed.
         let color = Color::new(1.0, 1.0, 1.0, depot::LABEL_ALPHA);
         let label = &assets.depot_label;
-        for d in self.field.depots.iter().filter(|d| d.active()) {
-            let p = self.to_screen(d.pos);
+        let n = self.field.depots.len();
+        for (i, d) in self.field.depots.iter().enumerate().filter(|(_, d)| d.active()) {
+            let p = self.at(&self.prev.depots, n, i, d.pos);
             let (label_w, _) = tex_size(label);
             draw_quad(
                 label,
@@ -2079,8 +2175,9 @@ impl Play {
     }
 
     fn draw_boss(&self, canvas: &Canvas, assets: &PlayAssets) {
-        for p in &self.field.pieces {
-            let s = self.to_screen(p.pos);
+        let n = self.field.pieces.len();
+        for (i, p) in self.field.pieces.iter().enumerate() {
+            let s = self.at(&self.prev.pieces, n, i, p.pos);
             let color = Color::new(1.0, 1.0, 1.0, p.alpha);
             let draw = || draw_sprite(&assets.boss_piece, s.x, s.y, p.angle, self.z + p.z, color);
             if p.flash {
@@ -2090,7 +2187,7 @@ impl Play {
             }
         }
         let Some(b) = &self.field.boss else { return };
-        let s = self.to_screen(b.pos);
+        let s = self.at(&self.prev.boss, 1, 0, b.pos);
         let color = Color::new(1.0, 1.0, 1.0, b.alpha);
         let tex = &assets.boss[b.frame % assets.boss.len()];
         let draw = || draw_sprite(tex, s.x, s.y, b.angle, self.z + b.z, color);
@@ -2113,8 +2210,8 @@ impl Play {
         }
     }
 
-    fn draw_depot(&self, canvas: &Canvas, assets: &PlayAssets, d: &Depot) {
-        let p = self.to_screen(d.pos);
+    fn draw_depot(&self, canvas: &Canvas, assets: &PlayAssets, d: &Depot, i: usize) {
+        let p = self.at(&self.prev.depots, self.field.depots.len(), i, d.pos);
         let color = Color::new(1.0, 1.0, 1.0, d.alpha);
         let draw = || draw_sprite(&assets.depot, p.x, p.y, d.angle, self.z + d.z, color);
         if d.flash {
@@ -2124,8 +2221,8 @@ impl Play {
         }
     }
 
-    fn draw_rock(&self, art: &RockArt, rock: &Rock) {
-        let p = self.to_screen(rock.pos);
+    fn draw_rock(&self, art: &RockArt, rock: &Rock, i: usize) {
+        let p = self.at(&self.prev.rocks, self.field.rocks.len(), i, rock.pos);
         let z = self.z + rock.z;
         let color = Color::new(1.0, 1.0, 1.0, rock.alpha);
         match rock.size {
@@ -2158,7 +2255,7 @@ impl Play {
     }
 
     pub fn draw(&self, canvas: &Canvas, assets: &PlayAssets) {
-        let cam = self.camera.offset();
+        let cam = self.view_cam();
         let (base, decal) = &assets.backdrops[self.world.min(assets.backdrops.len() - 1)];
         // MB_BG_Z overrides the backdrop depth while it is being verified.
         let bg_z = self.bg_z.unwrap_or(BACKGROUND_Z);
@@ -2167,10 +2264,16 @@ impl Play {
             SCREEN_CENTRE.y + cam.y,
             self.z + bg_z,
         );
-        canvas.draw_backdrop(false, base, decal, origin, self.scroll, 1.0);
+        let scroll = if self.prev.scroll.distance(self.scroll) < BLEND_JUMP {
+            self.prev.scroll.lerp(self.scroll, self.blend)
+        } else {
+            self.scroll
+        };
+        canvas.draw_backdrop(false, base, decal, origin, scroll, 1.0);
         // EnemyManager::sharedDraw: rings first, under everything else.
-        for r in self.pickups.rings.iter().filter(|r| r.power.is_none()) {
-            let p = self.to_screen(r.pos);
+        let rings = &self.pickups.rings;
+        for (i, r) in rings.iter().enumerate().filter(|(_, r)| r.power.is_none()) {
+            let p = self.at(&self.prev.rings, rings.len(), i, r.pos);
             // AnimationData(bonus, 4, 4): the 7x7 sprite anchored 4 units in.
             let c = p + vec2(-0.5, -0.5);
             draw_sprite(
@@ -2183,9 +2286,9 @@ impl Play {
             );
         }
         // Power-ups, then their labels (BigBonus::draw).
-        for r in &self.pickups.rings {
+        for (i, r) in rings.iter().enumerate() {
             let Some(power) = r.power else { continue };
-            let p = self.to_screen(r.pos);
+            let p = self.at(&self.prev.rings, rings.len(), i, r.pos);
             let color = Color::new(1.0, 1.0, 1.0, r.alpha);
             draw_atlas_sprite(
                 &assets.power,
@@ -2199,9 +2302,9 @@ impl Play {
                 color,
             );
         }
-        for r in &self.pickups.rings {
+        for (i, r) in rings.iter().enumerate() {
             let Some(power) = r.power else { continue };
-            let p = self.to_screen(r.pos);
+            let p = self.at(&self.prev.rings, rings.len(), i, r.pos);
             let label = &assets.power_labels[power.frame()];
             let color = Color::new(1.0, 1.0, 1.0, r.alpha * depot::LABEL_ALPHA);
             let (label_w, _) = tex_size(label);
@@ -2216,8 +2319,9 @@ impl Play {
         }
         self.draw_rocks(assets);
         self.draw_depots(canvas, assets);
-        for m in &self.field.mines {
-            let s = self.to_screen(m.pos);
+        let n = self.field.mines.len();
+        for (i, m) in self.field.mines.iter().enumerate() {
+            let s = self.at(&self.prev.mines, n, i, m.pos);
             let color = Color::new(1.0, 1.0, 1.0, m.alpha);
             let draw = || draw_sprite(&assets.mine, s.x, s.y, m.angle, self.z + m.z, color);
             if m.flash {
@@ -2254,8 +2358,9 @@ impl Play {
                 draw();
             }
         }
-        for l in &self.field.lobbers {
-            let s = self.to_screen(l.pos);
+        let n = self.field.lobbers.len();
+        for (i, l) in self.field.lobbers.iter().enumerate() {
+            let s = self.at(&self.prev.lobbers, n, i, l.pos);
             let color = Color::new(1.0, 1.0, 1.0, l.alpha);
             let draw = || draw_sprite(&assets.lobber, s.x, s.y, l.angle, self.z + l.z, color);
             if l.flash {
@@ -2274,8 +2379,9 @@ impl Play {
                 }
             }
         }
-        for k in &self.field.seekers {
-            let s = self.to_screen(k.pos);
+        let n = self.field.seekers.len();
+        for (i, k) in self.field.seekers.iter().enumerate() {
+            let s = self.at(&self.prev.seekers, n, i, k.pos);
             let color = Color::new(1.0, 1.0, 1.0, k.alpha);
             let draw = || draw_sprite(&assets.seeker, s.x, s.y, k.angle, self.z + k.z, color);
             if k.flash {
@@ -2284,8 +2390,9 @@ impl Play {
                 draw();
             }
         }
-        for a in &self.field.arrows {
-            let s = self.to_screen(a.pos);
+        let n = self.field.arrows.len();
+        for (i, a) in self.field.arrows.iter().enumerate() {
+            let s = self.at(&self.prev.arrows, n, i, a.pos);
             let color = Color::new(1.0, 1.0, 1.0, a.alpha);
             let draw = || draw_sprite(&assets.arrow, s.x, s.y, a.angle, self.z + a.z, color);
             if a.flash {
@@ -2294,9 +2401,12 @@ impl Play {
                 draw();
             }
         }
-        for sn in &self.field.snakes {
-            for seg in sn.segments.iter().rev() {
-                let s = self.to_screen(seg.pos);
+        let n = self.field.snakes.len();
+        let segs: usize = self.field.snakes.iter().map(|s| s.segments.len()).sum();
+        let mut first = 0;
+        for (i, sn) in self.field.snakes.iter().enumerate() {
+            for (j, seg) in sn.segments.iter().enumerate().rev() {
+                let s = self.at(&self.prev.segments, segs, first + j, seg.pos);
                 let color = Color::new(1.0, 1.0, 1.0, seg.alpha);
                 let draw = || {
                     draw_sprite(
@@ -2314,7 +2424,8 @@ impl Play {
                     draw();
                 }
             }
-            let s = self.to_screen(sn.pos);
+            first += sn.segments.len();
+            let s = self.at(&self.prev.snakes, n, i, sn.pos);
             let color = Color::new(1.0, 1.0, 1.0, sn.alpha);
             let draw = || draw_sprite(&assets.snake_head, s.x, s.y, sn.angle, self.z + sn.z, color);
             if sn.flash {
@@ -2323,8 +2434,9 @@ impl Play {
                 draw();
             }
         }
-        for g in &self.field.shy_guys {
-            let s = self.to_screen(g.pos);
+        let n = self.field.shy_guys.len();
+        for (i, g) in self.field.shy_guys.iter().enumerate() {
+            let s = self.at(&self.prev.shy_guys, n, i, g.pos);
             let color = Color::new(1.0, 1.0, 1.0, g.alpha);
             let draw = || {
                 draw_atlas_sprite(
@@ -2355,7 +2467,7 @@ impl Play {
             .iter()
             .filter(|b| b.weapon == Weapon::Cannon)
         {
-            let p = self.to_screen(b.pos);
+            let p = self.to_screen(self.bullet_pos(b));
             for (behind, size) in CANNON_TRAIL {
                 points.push((p + b.back * behind, size));
             }
@@ -2390,7 +2502,7 @@ impl Play {
         if matches!(ship.life, Life::Dead(_)) {
             return;
         }
-        let p = self.to_screen(ship.pos);
+        let p = self.to_screen(self.view_ship());
         let frames = if ship.can_boost() {
             &assets.ship_ready
         } else {
@@ -2449,5 +2561,22 @@ impl Play {
                 },
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn frames_between_steps_blend_across_the_wrap() {
+        let mid = blend_pos(vec2(WORLD - 1.0, 0.0), vec2(1.0, 0.0), 0.5);
+        assert!(wrap_near(mid.x, 0.0).abs() < 1e-3, "{:?}", mid);
+        assert_eq!(blend_pos(Vec2::ZERO, vec2(10.0, 0.0), 0.25), vec2(2.5, 0.0));
+        assert_eq!(
+            blend_pos(Vec2::ZERO, vec2(300.0, 0.0), 0.5),
+            vec2(300.0, 0.0),
+            "a jump is drawn where it landed"
+        );
     }
 }

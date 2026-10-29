@@ -805,20 +805,19 @@ async fn main() {
         .unwrap_or(20);
     let shot_path = std::env::var("MB_SHOT").ok();
     let auto_name = std::env::var("MB_NAME").ok();
-    // The original runs its simulation at 60 Hz. miniquad's display-link
-    // pacing is not reliable (an occluded or unfocused window can run the
-    // loop uncapped and peg a core), so pace it here. MB_FPS=0 disables the
-    // cap, for benchmarks. Screenshot runs stay uncapped unless MB_FPS is
-    // given, so MB_SHOT_FRAME keeps selecting the same simulation state as
-    // before pacing existed.
+    // The simulation runs at the original's 60 Hz; frames are drawn at the
+    // Options frame-rate cap (60, 120 or 144), blending between steps.
+    // miniquad's display-link pacing is not reliable (an occluded or
+    // unfocused window can run the loop uncapped and peg a core), so pace it
+    // here; vsync still holds it to the display's refresh. MB_FPS overrides
+    // the cap (0 = uncapped, for benchmarks). Screenshot runs stay uncapped
+    // unless MB_FPS is given, so MB_SHOT_FRAME keeps selecting the same
+    // simulation state as before pacing existed.
     #[cfg(not(target_arch = "wasm32"))]
-    let frame_period = {
-        let target_fps: f64 = std::env::var("MB_FPS")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(if shot_path.is_some() { 0.0 } else { 60.0 });
-        (target_fps > 0.0).then(|| Duration::from_secs_f64(1.0 / target_fps))
-    };
+    let fps_override: Option<f64> = std::env::var("MB_FPS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .or(if shot_path.is_some() { Some(0.0) } else { None });
     #[cfg(not(target_arch = "wasm32"))]
     let mut next_deadline = Instant::now();
 
@@ -1232,15 +1231,19 @@ async fn main() {
         }
         next_frame().await;
         #[cfg(not(target_arch = "wasm32"))]
-        if let Some(period) = frame_period {
-            next_deadline += period;
-            let now = Instant::now();
-            if next_deadline > now {
-                std::thread::sleep(next_deadline - now);
-            } else if now.duration_since(next_deadline) > period {
-                // A long stall (window drag, shader compile): resynchronise
-                // instead of trying to catch up frame by frame.
-                next_deadline = now;
+        {
+            let target_fps = fps_override.unwrap_or(settings.fps as f64);
+            if target_fps > 0.0 {
+                let period = Duration::from_secs_f64(1.0 / target_fps);
+                next_deadline += period;
+                let now = Instant::now();
+                if next_deadline > now {
+                    std::thread::sleep(next_deadline - now);
+                } else if now.duration_since(next_deadline) > period {
+                    // A long stall (window drag, shader compile): resynchronise
+                    // instead of trying to catch up frame by frame.
+                    next_deadline = now;
+                }
             }
         }
     }

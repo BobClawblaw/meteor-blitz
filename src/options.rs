@@ -13,7 +13,7 @@ use crate::bindings::{self, Action, Bindings, ACTIONS};
 use crate::gfx::{edge, Canvas, CANVAS_H, CANVAS_W};
 use crate::hud::{Align, Font};
 use crate::pad::{self, Button};
-use crate::pause::Settings;
+use crate::pause::{Settings, FPS_CAPS};
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Page {
@@ -26,6 +26,7 @@ enum Row {
     Fullscreen,
     Widescreen,
     Bloom,
+    FrameRate,
     Music,
     Effects,
     Shake,
@@ -38,10 +39,11 @@ enum Row {
     Reset,
 }
 
-const MAIN_ROWS: [Row; 9] = [
+const MAIN_ROWS: [Row; 10] = [
     Row::Fullscreen,
     Row::Widescreen,
     Row::Bloom,
+    Row::FrameRate,
     Row::Music,
     Row::Effects,
     Row::Shake,
@@ -52,8 +54,8 @@ const MAIN_ROWS: [Row; 9] = [
 
 /// Layout, in canvas units.
 const TITLE_Y: f32 = 10.0;
-const MAIN_TOP: f32 = 48.0;
-const MAIN_PITCH: f32 = 27.0;
+const MAIN_TOP: f32 = 44.0;
+const MAIN_PITCH: f32 = 25.0;
 const BIND_TOP: f32 = 52.0;
 const BIND_PITCH: f32 = 20.0;
 const ROW_SCALE: f32 = 0.6;
@@ -151,6 +153,7 @@ impl Options {
                     set_slider(row, settings, (v + step).clamp(0.0, 1.0));
                 }
                 Row::Bind(_) => self.pad_column = right,
+                Row::FrameRate => settings.fps = cycle(settings.fps, right),
                 _ => {}
             }
         }
@@ -213,6 +216,7 @@ impl Options {
             }
             Row::Widescreen => settings.widescreen = !settings.widescreen,
             Row::Bloom => settings.bloom = !settings.bloom,
+            Row::FrameRate => settings.fps = cycle(settings.fps, true),
             Row::Tutorial => settings.tutorial = !settings.tutorial,
             Row::Music | Row::Effects | Row::Shake => return None,
             Row::Controls => {
@@ -276,6 +280,7 @@ impl Options {
                 Row::Fullscreen => "Fullscreen",
                 Row::Widescreen => "Widescreen",
                 Row::Bloom => "Bloom",
+                Row::FrameRate => "Frame rate cap",
                 Row::Music => "Music",
                 Row::Effects => "Sound effects",
                 Row::Shake => "Screen shake",
@@ -290,6 +295,7 @@ impl Options {
                 Row::Fullscreen => on_off(font, settings.fullscreen, y, white),
                 Row::Widescreen => on_off(font, settings.widescreen, y, white),
                 Row::Bloom => on_off(font, settings.bloom, y, white),
+                Row::FrameRate => font.text(&settings.fps.to_string(), VALUE_X, y, ROW_SCALE, Align::Right, white),
                 Row::Tutorial => on_off(font, settings.tutorial, y, white),
                 Row::Music | Row::Effects | Row::Shake => {
                     let v = slider(row, settings);
@@ -336,6 +342,13 @@ impl Options {
         };
         font.text(help, 240.0, CANVAS_H - 12.0, 0.4, Align::Centre, dim);
     }
+}
+
+/// The next (or previous) frame-rate cap, wrapping.
+fn cycle(fps: u32, up: bool) -> u32 {
+    let i = FPS_CAPS.iter().position(|&f| f == fps).unwrap_or(0);
+    let n = FPS_CAPS.len();
+    FPS_CAPS[if up { (i + 1) % n } else { (i + n - 1) % n }]
 }
 
 fn on_off(font: &Font, on: bool, y: f32, color: Color) {

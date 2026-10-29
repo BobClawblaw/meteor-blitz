@@ -82,6 +82,9 @@ pub struct Settings {
     pub bloom: bool,
     /// Port addition: the view follows the window's aspect (off: 3:2).
     pub widescreen: bool,
+    /// Port addition: the frame-rate cap (60, 120 or 144); the simulation
+    /// stays at 60 Hz and frames between steps are blended.
+    pub fps: u32,
 }
 
 impl Default for Settings {
@@ -101,6 +104,7 @@ impl Default for Settings {
             fullscreen: false,
             bloom: true,
             widescreen: true,
+            fps: 60,
         }
     }
 }
@@ -154,6 +158,7 @@ impl Settings {
                 "fullscreen" => s.fullscreen = parse_bool(value, s.fullscreen),
                 "bloom" => s.bloom = parse_bool(value, s.bloom),
                 "widescreen" => s.widescreen = parse_bool(value, s.widescreen),
+                "fps" => s.fps = value.parse().ok().filter(|f| FPS_CAPS.contains(f)).unwrap_or(s.fps),
                 _ => {}
             }
         }
@@ -162,7 +167,7 @@ impl Settings {
 
     pub fn to_text(&self) -> String {
         format!(
-            "music={}\neffects={}\nshake={}\nshake_control={}\nboost_control={}\nbomb_button={}\nauto_pause={}\nauto_gravity={}\nauto_upgrade={}\nflip={}\ntutorial={}\nfullscreen={}\nbloom={}\nwidescreen={}\n",
+            "music={}\neffects={}\nshake={}\nshake_control={}\nboost_control={}\nbomb_button={}\nauto_pause={}\nauto_gravity={}\nauto_upgrade={}\nflip={}\ntutorial={}\nfullscreen={}\nbloom={}\nwidescreen={}\nfps={}\n",
             self.music,
             self.effects,
             self.shake,
@@ -177,9 +182,13 @@ impl Settings {
             self.fullscreen as u8,
             self.bloom as u8,
             self.widescreen as u8,
+            self.fps,
         )
     }
 }
+
+/// The frame-rate caps the Options screen offers.
+pub const FPS_CAPS: [u32; 3] = [60, 120, 144];
 
 fn parse_bool(value: &str, fallback: bool) -> bool {
     match value {
@@ -1148,6 +1157,7 @@ mod tests {
             fullscreen: true,
             bloom: false,
             widescreen: false,
+            fps: 144,
         };
         assert_eq!(Settings::parse(&s.to_text()), s);
     }
