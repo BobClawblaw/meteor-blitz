@@ -28,7 +28,7 @@ Run on `xamd4090` (local checkout, or SSH alias with key auth). Node 24.14, git 
 - This checkout has only the `origin` remote (GitHub); the NAS remote is not configured here.
 - Controller: Xbox Wireless Controller over Bluetooth LE (045e:0b13). It sleeps when idle and XInput then reports it as not connected; press the Xbox button to wake it.
 
-## Resume status (2026-10-20, Windows controller session)
+## Resume status (2026-10-28, macOS controller verified)
 
 Done (faithful to the binary unless noted):
 - Menus, game screen, HUD, sounds, particle effects (`systems.dat`), rings, multiplier, power-ups.
@@ -47,18 +47,15 @@ Controls:
 - Gravity gun: double-click, or E, while firing.
 - Pause: Esc opens; arrows/WASD move the selection, Enter/A activates, Esc/B goes back; mouse clicks activate items.
 - Game controller: mapped in `src/pad.rs`. Windows reads it through gilrs's XInput backend (verified 2026-10-20: A, B, X, Y, LB, RB, LT, RT, D-pad, both sticks full range; View and Start not yet pressed in a logged run). The default WGI backend dropped most input from the Bluetooth LE pad, and its Drop failed fast on window close; `Gilrs` is kept in `ManuallyDrop`.
+- macOS reads pads through Apple's GameController framework. Verified 2026-10-28 with the Xbox Series controller over USB (045e:0b12): left and right sticks full range, A, B, X, Y, LB, RB, LT, RT, D-pad, Start and View all reach `src/pad.rs` (`MB_PAD_LOG=1`). The earlier "all values zero" result was a sleeping pad or a run loop that never turned, not a driver problem: the HID reports stream and the framework reports live values once the main queue is pumped.
 
-Blocked (macOS only; Windows works): the Xbox Series controller (USB, 045e:0b12) on macOS gives no input.
-- GameController sees it, but every value reads zero, even as an .app (`tools/make-app.sh`).
-- gilrs sees no sticks, and raw IOHID sees no reports.
-- First check: System Settings > Game Controllers. If that page reacts, rerun the probes while buttons are pressed.
+Blocked: none.
 
 Next:
 - Tutorial and high-score screens.
 - Wire `PausePopup` settings save/load.
 - Pixel-diff the pause/results popups against emulator frames; replace the generic button art with the original pre-rendered/dynamic buttons.
-- Resolve controller input on macOS.
-- Windows: press View and Start with `MB_PAD_LOG=1` and confirm they log; then play a full stage on the pad (move, aim, RT fire, LT gravity, A/LB boost, B/RB bomb, X/Y weapon, pause navigation).
+- Windows: press View and Start with `MB_PAD_LOG=1` and confirm they log (macOS now confirms the same GameController mapping); then play a full stage on the pad (move, aim, RT fire, LT gravity, A/LB boost, B/RB bomb, X/Y weapon, pause navigation).
 
 Test hooks (env):
 - `MB_START=w.s` starts a stage; `MB_WAVE=n` starts at wave n.
