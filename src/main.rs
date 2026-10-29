@@ -466,17 +466,21 @@ const PROJECT_LINK_EVENT: u8 = 4;
 fn draw_project_link(alpha: f32) {
     let text = PROJECT_URL.trim_start_matches("https://");
     let r = PROJECT_LINK;
-    draw_text_ex(
-        text,
-        r.x + 19.0,
-        r.y + 11.5,
-        TextParams {
-            font_size: 40,
-            font_scale: 0.25,
-            color: Color::new(0.85, 0.85, 0.95, alpha),
-            ..Default::default()
-        },
-    );
+    // The built-in font has one thin weight: overdrawing it a fraction of
+    // a unit apart thickens the strokes.
+    for (dx, dy) in [(0.0, 0.0), (0.35, 0.0), (0.0, 0.3), (0.35, 0.3)] {
+        draw_text_ex(
+            text,
+            r.x + 19.0 + dx,
+            r.y + 11.5 + dy,
+            TextParams {
+                font_size: 40,
+                font_scale: 0.25,
+                color: Color::new(0.9, 0.9, 1.0, alpha),
+                ..Default::default()
+            },
+        );
+    }
 }
 
 /// Opens the project page in the default browser (not on the web build).
