@@ -826,6 +826,8 @@ struct Scorch {
 /// Engine trail: samples kept (one per step), and the speed at which it
 /// shows fully.
 const TRAIL_POINTS: usize = 16;
+/// Shot streaks: how many seconds of flight they trail.
+const BULLET_STREAK: f32 = 0.03;
 const TRAIL_FULL_SPEED: f32 = 300.0;
 
 const SCORCH_LIFE: f32 = 15.0;
@@ -2900,6 +2902,17 @@ impl Play {
         for (pos, vel) in flung {
             let p = self.to_screen(pos);
             line(p, p - vel * 0.08, 8.0, Color::new(0.6, 0.85, 1.0, 0.45));
+        }
+        // Fast shots leave a short streak along their flight (cannon green,
+        // laser blue); flames already read as a stream.
+        for b in &self.ship.bullets {
+            let (color, width) = match b.weapon {
+                Weapon::Cannon => (Color::new(0.45, 1.0, 0.5, 0.45), 2.0),
+                Weapon::Laser => (Color::new(0.5, 0.8, 1.0, 0.5), 2.5),
+                Weapon::Fire => continue,
+            };
+            let p = self.to_screen(self.bullet_pos(b));
+            line(p, p - b.vel * BULLET_STREAK, width, color);
         }
         canvas.draw_triangles(verts, indices, None, true);
     }
