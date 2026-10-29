@@ -72,6 +72,10 @@ pub struct Settings {
     pub auto_gravity: bool,
     pub auto_upgrade: bool,
     pub flip: bool,
+    /// Not in the original, which forced the tutorial on a first game:
+    /// the HELP page's checkbox. When set, World 1 Stage 1 and survival
+    /// start with the tutorial.
+    pub tutorial: bool,
 }
 
 impl Default for Settings {
@@ -87,6 +91,7 @@ impl Default for Settings {
             auto_gravity: false,
             auto_upgrade: false,
             flip: false,
+            tutorial: false,
         }
     }
 }
@@ -136,6 +141,7 @@ impl Settings {
                 "auto_gravity" => s.auto_gravity = parse_bool(value, s.auto_gravity),
                 "auto_upgrade" => s.auto_upgrade = parse_bool(value, s.auto_upgrade),
                 "flip" => s.flip = parse_bool(value, s.flip),
+                "tutorial" => s.tutorial = parse_bool(value, s.tutorial),
                 _ => {}
             }
         }
@@ -144,7 +150,7 @@ impl Settings {
 
     pub fn to_text(&self) -> String {
         format!(
-            "music={}\neffects={}\nshake={}\nshake_control={}\nboost_control={}\nbomb_button={}\nauto_pause={}\nauto_gravity={}\nauto_upgrade={}\nflip={}\n",
+            "music={}\neffects={}\nshake={}\nshake_control={}\nboost_control={}\nbomb_button={}\nauto_pause={}\nauto_gravity={}\nauto_upgrade={}\nflip={}\ntutorial={}\n",
             self.music,
             self.effects,
             self.shake,
@@ -155,6 +161,7 @@ impl Settings {
             self.auto_gravity as u8,
             self.auto_upgrade as u8,
             self.flip as u8,
+            self.tutorial as u8,
         )
     }
 }
@@ -1119,6 +1126,7 @@ mod tests {
             auto_gravity: true,
             auto_upgrade: true,
             flip: true,
+            tutorial: true,
         };
         assert_eq!(Settings::parse(&s.to_text()), s);
     }

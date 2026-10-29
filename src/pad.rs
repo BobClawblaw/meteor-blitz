@@ -335,6 +335,11 @@ pub fn down(b: Button) -> bool {
     backend::with(|s| s.down.contains(&b))
 }
 
+/// Any button held or stick pushed (the tutorial's "touching").
+pub fn any_down() -> bool {
+    backend::with(|s| !s.down.is_empty() || s.left != Vec2::ZERO || s.right != Vec2::ZERO)
+}
+
 /// Pressed since the last frame.
 pub fn pressed(b: Button) -> bool {
     backend::with(|s| s.pressed.contains(&b))

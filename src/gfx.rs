@@ -438,6 +438,21 @@ impl Canvas {
         }
     }
 
+    /// A plain rectangle at depth 0 (Texture::fillRect).
+    pub fn fill_rect(&self, x: f32, y: f32, w: f32, h: f32, color: Color) {
+        self.draw_triangles(
+            vec![
+                Vertex::new(x, y, 0.0, 0.0, 0.0, color),
+                Vertex::new(x + w, y, 0.0, 1.0, 0.0, color),
+                Vertex::new(x + w, y + h, 0.0, 1.0, 1.0, color),
+                Vertex::new(x, y + h, 0.0, 0.0, 1.0, color),
+            ],
+            vec![0, 1, 2, 0, 2, 3],
+            None,
+            false,
+        );
+    }
+
     /// Additively blended square sprites centred on each point
     /// (`glPointSizePointerOES` point sprites with `GL_SRC_ALPHA, GL_ONE`).
     pub fn draw_points(&self, tex: &Texture2D, points: &[(Vec2, f32)], z: f32, color: Color) {

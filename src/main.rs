@@ -36,7 +36,7 @@ use macroquad::audio::{
 use macroquad::prelude::*;
 
 use gfx::{draw_quad, Canvas, CANVAS_W};
-use hud::{Font, HudAssets};
+use hud::{Align, Font, HudAssets};
 use menu::{MenuAssets, MenuBackdrop, MenuButton, MenuScreen};
 use name_entry::NameEntry;
 use pause::{Action, Page, Pause, PauseAssets, Settings};
@@ -189,6 +189,8 @@ async fn load_ui_set() -> Ui {
         let tex = load_ui(&name).await;
         ui.insert(name, tex);
     }
+    // Art for the port's invisible buttons (the HELP page's checkbox).
+    ui.insert("blank".to_owned(), Texture2D::from_rgba8(1, 1, &[0, 0, 0, 0]));
     ui
 }
 
@@ -379,7 +381,22 @@ fn build_menu(kind: MenuKind, ui: &Ui, progress: &Progress, fade_backdrop: bool)
         // Tutorial page: the original's control diagram (`keyboard.png`, the
         // full 480-wide sheet) with the caption block (`captions.png`) below
         // it, plus the back button.
-        MenuKind::Help => MenuScreen::new(ui["keyboard"].clone(), 20.0, vec![back(6)], fade_backdrop),
+        // The port adds the Tutorial checkbox (event 8), drawn by
+        // `draw_tutorial_checkbox`; its button art is a blank pixel.
+        MenuKind::Help => MenuScreen::new(
+            ui["keyboard"].clone(),
+            20.0,
+            vec![
+                back(6),
+                MenuButton {
+                    up: ui["blank"].clone(),
+                    down: ui["blank"].clone(),
+                    rect: TUTORIAL_CHECKBOX,
+                    event: HELP_TUTORIAL_TOGGLE,
+                },
+            ],
+            fade_backdrop,
+        ),
         // HighScoresSelectScreen: the same two-choice layout as PlayScreen.
         MenuKind::ScoresSelect => MenuScreen::new(
             ui["labelSelectMode"].clone(),
@@ -412,6 +429,37 @@ fn build_menu(kind: MenuKind, ui: &Ui, progress: &Progress, fade_backdrop: bool)
             )
         }
     }
+}
+
+/// The HELP page's Tutorial checkbox: its hit area, top right, clear of
+/// the control diagram (y 20-202).
+const TUTORIAL_CHECKBOX: Rect = Rect { x: 344.0, y: 2.0, w: 134.0, h: 18.0 };
+const HELP_TUTORIAL_TOGGLE: u8 = 8;
+
+/// A box with a tick when on, and its label, in the HUD font.
+fn draw_tutorial_checkbox(canvas: &Canvas, font: &Font, on: bool, alpha: f32) {
+    let r = TUTORIAL_CHECKBOX;
+    let c = Color::new(1.0, 1.0, 1.0, alpha);
+    let (bx, by, size) = (r.x + 4.0, r.y + 3.0, 12.0);
+    for (x, y, w, h) in [
+        (bx, by, size, 1.0),
+        (bx, by + size - 1.0, size, 1.0),
+        (bx, by, 1.0, size),
+        (bx + size - 1.0, by, 1.0, size),
+    ] {
+        canvas.fill_rect(x, y, w, h, c);
+    }
+    if on {
+        canvas.fill_rect(bx + 3.0, by + 3.0, size - 6.0, size - 6.0, c);
+    }
+    font.text("Tutorial", bx + size + 6.0, by + 1.0, 0.5, Align::Left, c);
+}
+
+/// Whether a game starts with the tutorial: the original ran it before
+/// World 1 Stage 1 and survival until help had been seen; the port runs it
+/// there while the HELP page's checkbox is ticked.
+fn starts_with_tutorial(settings: &Settings, world: usize, stage: usize) -> bool {
+    settings.tutorial && ((world == 0 && stage == 1) || world == SURVIVAL)
 }
 
 /// The screen a menu event leads to (`handleEvent` of each screen class).
@@ -687,10 +735,8 @@ async fn main() {
     let mut game: Option<Play> = None;
     let mut pause: Option<Pause> = None;
     let mut pending: Option<PendingRun> = None;
-    let mut tutorial = Tutorial::new();
-    if std::env::var_os("MB_TUTORIAL").is_some() {
-        tutorial.force();
-    }
+    // Where a game that opened with the tutorial goes once it ends.
+    let mut after_tutorial: Option<Next> = None;
     let mut music_on = false;
     let mut frame_count: u32 = 0;
     // MB_START=<world>.<stage> (1-based, world 7 = survival) boots straight
@@ -734,6 +780,13 @@ async fn main() {
                 }
             }
         }
+    }
+    // MB_TUTORIAL=<step> runs the tutorial from that step (0 = the start),
+    // then World 1 Stage 1.
+    if let Some(step) = std::env::var("MB_TUTORIAL").ok().and_then(|v| v.parse().ok()) {
+        game = Some(Play::tutorial(progress.best, &play_assets, Tutorial::start_at(step)));
+        after_tutorial = Some(Next::Game(0, 1));
+        screen = Screen::Game;
     }
     // MB_PAUSE opens a popup for screenshot runs.
     if let Ok(kind) = std::env::var("MB_PAUSE") {
@@ -845,7 +898,10 @@ async fn main() {
                 });
                 if let Some(event) = menu_screen.update(dt).or(pad_back) {
                     play_effect(SOUND_BUTTON, settings.effects);
-                    if let Some(next) = menu_event(kind, event) {
+                    if kind == MenuKind::Help && event == HELP_TUTORIAL_TOGGLE {
+                        settings.tutorial = !settings.tutorial;
+                        settings.save();
+                    } else if let Some(next) = menu_event(kind, event) {
                         menu_next = Some(next);
                         menu_screen.fx.leave();
                     }
@@ -864,7 +920,12 @@ async fn main() {
                             screen = Screen::Menu(next);
                         }
                         Some(Next::Game(world, stage)) => {
-                            game = Some(Play::new(world, stage, progress.best, &play_assets));
+                            game = Some(if starts_with_tutorial(&settings, world, stage) {
+                                after_tutorial = Some(Next::Game(world, stage));
+                                Play::tutorial(progress.best, &play_assets, Tutorial::start())
+                            } else {
+                                Play::new(world, stage, progress.best, &play_assets)
+                            });
                             screen = Screen::Game;
                             if !music_on {
                                 play_sound(
@@ -902,6 +963,7 @@ async fn main() {
                             };
                             game = None;
                             pause = None;
+                            after_tutorial = None;
                             stop_sound(&music);
                             music_on = false;
                             menu_screen = build_menu(kind, &ui, &progress, true);
@@ -937,11 +999,22 @@ async fn main() {
                 } else if let Some(g) = game.as_mut() {
                     g.set_shake_scale(settings.shake);
                     g.update(dt);
-                    tutorial.update(dt);
                     for id in g.sounds.drain(..) {
                         play_effect(id, settings.effects);
                     }
-                    if let Some(cleared) = g.result() {
+                    if g.tutorial_complete() {
+                        // WaveManager::isStageComplete for level 7: go on
+                        // to the game the tutorial was opened for.
+                        if let Some(Next::Game(world, stage)) = after_tutorial.take() {
+                            *g = Play::new(world, stage, progress.best, &play_assets);
+                        } else {
+                            game = None;
+                            stop_sound(&music);
+                            music_on = false;
+                            menu_screen = build_menu(MenuKind::Main, &ui, &progress, true);
+                            screen = Screen::Menu(MenuKind::Main);
+                        }
+                    } else if let Some(cleared) = g.result() {
                         let run = PendingRun {
                             cleared,
                             world: g.world,
@@ -1029,7 +1102,7 @@ async fn main() {
                         let icon = Rect::new(449.0, -1.0, 32.0, 22.0);
                         let clicked = is_mouse_button_pressed(MouseButton::Left)
                             && icon.contains(Canvas::mouse());
-                        if is_key_pressed(KeyCode::Escape) || pad_pause || clicked {
+                        if (is_key_pressed(KeyCode::Escape) || pad_pause || clicked) && g.can_pause() {
                             pause = Some(Pause::menu());
                         }
                     }
@@ -1055,6 +1128,12 @@ async fn main() {
                         0.0,
                         Color::new(1.0, 1.0, 1.0, menu_screen.fx.alpha),
                     );
+                    draw_tutorial_checkbox(
+                        &canvas,
+                        &play_assets.hud.font,
+                        settings.tutorial,
+                        menu_screen.fx.alpha,
+                    );
                 }
                 if let MenuKind::ScoresTable(mode, global) = kind {
                     scores::draw_rows(
@@ -1069,7 +1148,6 @@ async fn main() {
             Screen::Game => {
                 if let Some(g) = game.as_ref() {
                     g.draw(&canvas, &play_assets);
-                    tutorial.draw(&canvas, &ui["captions"]);
                     if let Some(p) = pause.as_ref() {
                         p.draw(&canvas, &pause_assets, g, &settings);
                     }

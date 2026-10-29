@@ -82,6 +82,10 @@ const CONFIG: [[Config; 5]; 6] = [
     [c(0, 5, 20, 5, 350.0), c(3, 6, 20, 9, 350.0), c(2, 6, 20, 1, 350.0), c(1, 6, 20, 5, 350.0), c(4, 6, 20, 9, 350.0)],
 ];
 
+/// BossInside::reset for level 7 leaves the pattern fields at zero: a
+/// still core with no pieces and no rocks.
+const TUTORIAL_CONFIG: Config = c(0, 0, 0, 1, 0.0);
+
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum BossState {
     DropIn,
@@ -201,6 +205,14 @@ impl Piece {
             life: 0.0,
             grav: None,
         }
+    }
+
+    /// Tutorial::update step 13: a free piece at rest that never expires.
+    pub fn tutorial(pos: Vec2) -> Piece {
+        let mut p = Piece::new(pos);
+        p.detach(Vec2::ZERO, None);
+        p.life = f32::INFINITY;
+        p
     }
 
     pub fn active(&self) -> bool {
@@ -338,6 +350,15 @@ impl Boss {
             bombed: false,
             thrown_at: false,
         }
+    }
+
+    /// BossInside::reset in the tutorial: health 20, standing still.
+    pub fn tutorial(pos: Vec2) -> Boss {
+        let mut b = Boss::new(pos, 0, 0);
+        b.config = &TUTORIAL_CONFIG;
+        b.health = BASE_HEALTH;
+        b.max_health = BASE_HEALTH;
+        b
     }
 
     pub fn active(&self) -> bool {

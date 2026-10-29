@@ -96,9 +96,10 @@ impl Ring {
     }
 
     /// Bonus::update. Returns true when the ring is collected.
-    fn update(&mut self, dt: f32, ship: Option<Vec2>) -> Option<bool> {
+    /// `age` is how much of its life passes (0 in the tutorial).
+    fn update(&mut self, age: f32, dt: f32, ship: Option<Vec2>) -> Option<bool> {
         if !self.homing {
-            self.life -= dt;
+            self.life -= age;
             if self.life <= 0.0 {
                 return None;
             }
@@ -134,6 +135,8 @@ impl Ring {
 #[derive(Default)]
 pub struct Rings {
     pub rings: Vec<Ring>,
+    /// Bonus::update: in the tutorial rings and power-ups never expire.
+    pub timeless: bool,
 }
 
 impl Rings {
@@ -174,7 +177,8 @@ impl Rings {
     /// stay within half a world of `centre` (World::updateSpritePosition).
     pub fn update(&mut self, dt: f32, ship: Option<Vec2>, centre: Vec2) -> Vec<(Vec2, Option<Power>)> {
         let mut collected = Vec::new();
-        self.rings.retain_mut(|r| match r.update(dt, ship) {
+        let timeless = self.timeless;
+        self.rings.retain_mut(|r| match r.update(dt * !timeless as u8 as f32, dt, ship) {
             None => false,
             Some(true) => {
                 collected.push((r.pos, r.power));

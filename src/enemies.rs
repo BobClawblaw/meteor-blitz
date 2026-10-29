@@ -577,6 +577,25 @@ impl Field {
         Some(self.rocks.len() - 1)
     }
 
+    /// Tutorial::update: a large rock at rest.
+    pub fn spawn_still(&mut self, element: Element, pos: Vec2) {
+        if let Some(i) = self.spawn(element, 2, pos) {
+            self.rocks[i].vel = Vec2::ZERO;
+        }
+    }
+
+    /// Tutorial::update: a still boss core with no pieces.
+    pub fn spawn_tutorial_boss(&mut self, pos: Vec2) {
+        if self.boss.is_none() {
+            self.boss = Some(Boss::tutorial(pos));
+        }
+    }
+
+    /// Rocks of `element` left, fragments included.
+    pub fn rocks_of(&self, element: Element) -> usize {
+        self.rocks.iter().filter(|r| r.element == element).count()
+    }
+
     /// WaveManager::getWaveRemaining: everything left, in small-rock units.
     pub fn weighted_remaining(&self) -> u32 {
         self.rocks.iter().map(|r| WEIGHT[r.size]).sum::<u32>()

@@ -14,15 +14,16 @@ use std::collections::VecDeque;
 use macroquad::prelude::*;
 
 use crate::bonus::{Power, Rings};
-use crate::boss::{self, BossState};
+use crate::boss::{self, BossState, Piece};
 use crate::depot::{self, Depot};
 use crate::enemies::{wrap_near, Element, Event, Field, Rock, Script, Weapon};
 use crate::gfx::{draw_atlas_sprite, draw_quad, draw_sprite, tex_size, Canvas};
 use crate::gravity;
-use crate::hud::{self, HudAssets, HudValues};
+use crate::hud::{self, HudAssets, HudValues, Show};
 use crate::pad::{self, Button};
 use crate::particles::{Effects, Kind};
 use crate::tower;
+use crate::tutorial::{self, Spawn, Tutorial};
 use crate::weapons::{self, FireGun, LaserGun};
 
 const STEP: f32 = 1.0 / 60.0;
@@ -213,6 +214,20 @@ pub struct PlayAssets {
     /// Base and decal planet textures per world (0-5), then survival.
     pub backdrops: Vec<(Texture2D, Texture2D)>,
 }
+
+/// The tutorial's captions describe touch controls; each panel that
+/// teaches one also names the keys and pad buttons. The ngage font has no
+/// comma.
+const TUTORIAL_HINTS: tutorial::Hints = tutorial::Hints {
+    tap: "Click or press any key or button",
+    moving: "WASD or left stick",
+    boost: "Space or A or LB",
+    fire: "Left mouse or right stick or RT",
+    switch_weapon: "Q or mouse wheel or X or Y",
+    bomb: "Right mouse or B or RB",
+    gravity: "Double click or E or LT",
+    pause: "Esc or Start",
+};
 
 /// TimeManager: enemies run at `factor`, easing toward the target while
 /// a slow-motion power-up lasts and back to 1 after.
@@ -707,6 +722,8 @@ pub struct Play {
     gun: bool,
     auto_bomb: Option<f32>,
     bg_z: Option<f32>,
+    /// Global::level 7: the tutorial runs in this game.
+    tutorial: Option<Tutorial>,
 }
 
 impl Play {
@@ -764,7 +781,32 @@ impl Play {
             gun: std::env::var_os("MB_GUN").is_some(),
             auto_bomb,
             bg_z,
+            tutorial: None,
         }
+    }
+
+    /// GameScreen with gameScreenType 0: level 7 is world 1's backdrop with
+    /// the weapons at level 0 and no waves; `Tutorial` drives it.
+    pub fn tutorial(high_score: u64, assets: &PlayAssets, tutorial: Tutorial) -> Play {
+        let mut play = Play::new(0, 1, high_score, assets);
+        play.pickups.timeless = true;
+        play.tutorial = Some(tutorial);
+        play
+    }
+
+    /// The tutorial ran to its end, or its Quit button was pressed.
+    pub fn tutorial_complete(&self) -> bool {
+        self.tutorial.as_ref().is_some_and(Tutorial::is_complete)
+    }
+
+    /// Tutorial::canUsePause: the pause button unlocks at step 20.
+    pub fn can_pause(&self) -> bool {
+        self.tutorial.as_ref().is_none_or(Tutorial::can_pause)
+    }
+
+    /// Whether the tutorial allows a control (always outside it).
+    fn allowed(&self, gate: fn(&Tutorial) -> bool) -> bool {
+        self.tutorial.as_ref().is_none_or(gate)
     }
 
     /// The stage is over: `Some(true)` cleared, `Some(false)` out of lives.
@@ -994,7 +1036,9 @@ impl Play {
         self.scroll += total * dt;
         self.camera.update(dt, total * CAMERA_LEAD);
 
-        self.script.update(dt, self.ship.pos, &mut self.field);
+        if self.tutorial.is_none() {
+            self.script.update(dt, self.ship.pos, &mut self.field);
+        }
         self.time.update(dt);
         self.field.time_factor = self.time.factor;
         self.field.aim = self.ship.aim_dir;
@@ -1005,8 +1049,50 @@ impl Play {
         self.collide();
         self.handle_events();
         self.update_multiplier();
-        if self.script.complete(&self.field) {
+        if self.tutorial.is_some() {
+            self.update_tutorial(dt);
+        } else if self.script.complete(&self.field) {
             self.state = State::Over { cleared: true };
+        }
+    }
+
+    /// Tutorial::update, then the enemies a finished step sets up.
+    fn update_tutorial(&mut self, dt: f32) {
+        let touching = is_mouse_button_down(MouseButton::Left)
+            || !get_keys_down().is_empty()
+            || pad::any_down();
+        // The Quit button; Esc or the pad's Start stand in for it until
+        // the pause button unlocks.
+        let quit_key = is_key_pressed(KeyCode::Escape)
+            || pad::pressed(Button::Start)
+            || pad::pressed(Button::View);
+        let quit = (is_mouse_button_pressed(MouseButton::Left)
+            && tutorial::QUIT_RECT.contains(Canvas::mouse()))
+            || (quit_key && !self.can_pause());
+        let field = tutorial::Field {
+            normal_rocks: self.field.rocks_of(Element::Normal),
+            ice_rocks: self.field.rocks_of(Element::Ice),
+            fire_rocks: self.field.rocks_of(Element::Fire),
+            balls: self.field.pieces.len(),
+            rings: self.pickups.rings.len(),
+        };
+        let Some(t) = self.tutorial.as_mut() else { return };
+        if quit && !t.is_complete() {
+            self.sounds.push(SOUND_RING);
+        }
+        let ship = self.ship.pos;
+        let rock = ship + vec2(100.0, 0.0);
+        match t.update(dt, touching, quit, field) {
+            Some(Spawn::LargeNormalRock) => self.field.spawn_still(Element::Normal, rock),
+            Some(Spawn::LargeIceRock) => self.field.spawn_still(Element::Ice, rock),
+            Some(Spawn::LargeFireRock) => self.field.spawn_still(Element::Fire, rock),
+            Some(Spawn::Balls) => {
+                for d in [vec2(40.0, 0.0), vec2(0.0, -40.0), vec2(-35.0, 35.0)] {
+                    self.field.pieces.push(Piece::tutorial(ship + d));
+                }
+            }
+            Some(Spawn::Boss) => self.field.spawn_tutorial_boss(ship + vec2(10.0, 0.0)),
+            None => {}
         }
     }
 
@@ -1038,7 +1124,8 @@ impl Play {
             }
             !hit
         });
-        if matches!(self.ship.life, Life::Dead(_)) {
+        // Tutorial::active: the ship cannot be hit.
+        if matches!(self.ship.life, Life::Dead(_)) || self.tutorial.is_some() {
             return;
         }
         // shipCollision with a depot: boosting smashes it, else it is pushed.
@@ -1585,6 +1672,9 @@ impl Play {
                     self.effects.flash(Color::new(0.8, 0.8, 0.8, 1.0));
                 }
                 Event::BossDead { pos, points } => {
+                    if let Some(t) = &mut self.tutorial {
+                        t.using_boss();
+                    }
                     self.sounds.push(SOUND_BOSS_DEAD);
                     self.camera.shake(0.75, 7.5);
                     self.effects.flash(Color::new(0.8, 0.8, 0.8, 1.0));
@@ -1637,6 +1727,18 @@ impl Play {
         // follows how far it is pushed.
         // MB_DRIFT=x,y holds the stick there, for screenshot runs.
         let pad_stick = self.drift.unwrap_or_else(pad::left);
+        // Tutorial::canUse*: each control works once its step is reached,
+        // and Tutorial::using* counts the uses a step waits for.
+        let (stick, pad_stick) = if self.allowed(Tutorial::can_move) {
+            (stick, pad_stick)
+        } else {
+            (Vec2::ZERO, Vec2::ZERO)
+        };
+        if stick != Vec2::ZERO || pad_stick != Vec2::ZERO {
+            if let Some(t) = &mut self.tutorial {
+                t.using_move(dt);
+            }
+        }
         if stick != Vec2::ZERO {
             self.ship.vel = stick.normalize() * WHEEL_MAX * self.speed();
         } else if pad_stick != Vec2::ZERO {
@@ -1645,33 +1747,42 @@ impl Play {
             self.ship.vel *= DRAG / (dt + DRAG);
         }
         // The original's switch-weapon button: Q or the mouse wheel here.
-        if is_key_pressed(KeyCode::Q)
+        let switch = is_key_pressed(KeyCode::Q)
             || mouse_wheel().1 != 0.0
             || pad::pressed(Button::X)
-            || pad::pressed(Button::Y)
-        {
+            || pad::pressed(Button::Y);
+        if switch && self.allowed(Tutorial::can_switch_weapon) {
             self.ship.switch_weapon();
+            if let Some(t) = &mut self.tutorial {
+                t.using_switch_weapon();
+            }
         }
         // Bombs: the original's on-screen bomb button; right mouse or B here.
         // MB_BOMB_AT=<seconds> drops one unattended, for screenshot runs.
         let auto_bomb = self
             .auto_bomb
             .is_some_and(|t| self.elapsed >= t && self.elapsed - dt < t);
-        if auto_bomb
+        let bomb = auto_bomb
             || is_mouse_button_pressed(MouseButton::Right)
             || is_key_pressed(KeyCode::B)
             || pad::pressed(Button::B)
-            || pad::pressed(Button::RightBumper)
-        {
+            || pad::pressed(Button::RightBumper);
+        if bomb && self.allowed(Tutorial::can_bomb) {
             self.bomb();
+            if let Some(t) = &mut self.tutorial {
+                t.using_bomb();
+            }
         }
         let boost = is_key_pressed(KeyCode::Space)
             || pad::pressed(Button::A)
             || pad::pressed(Button::LeftBumper);
-        if boost && self.ship.can_boost() {
+        if boost && self.ship.can_boost() && self.allowed(Tutorial::can_boost) {
             self.ship.boost(dt);
             self.camera.shake(0.75, 7.5);
             self.sounds.push(SOUND_BOOST);
+            if let Some(t) = &mut self.tutorial {
+                t.using_boost();
+            }
         }
         let charge = self.ship.boost_charge;
         if !self.ship.boost_cued
@@ -1682,7 +1793,12 @@ impl Play {
             self.sounds.push(SOUND_BOOST_READY);
         }
         // MB_AUTOFIRE aims at the nearest rock, for unattended screenshot runs.
-        let auto = self.auto_fire.then(|| self.nearest_rock()).flatten();
+        let can_fire = self.allowed(Tutorial::can_fire);
+        let auto = self
+            .auto_fire
+            .then(|| self.nearest_rock())
+            .flatten()
+            .filter(|_| can_fire);
         if let Some(target) = auto {
             let dir = (target - self.ship.pos).normalize_or_zero();
             if dir != Vec2::ZERO {
@@ -1692,12 +1808,12 @@ impl Play {
             if self.gun {
                 let phase = self.elapsed % 2.0;
                 if phase < dt {
-                    self.field.gun.activate();
+                    self.activate_gun();
                 } else if (1.5..1.5 + dt).contains(&phase) {
-                    self.field.gun_release();
+                    self.release_gun();
                 }
             }
-        } else if is_mouse_button_down(MouseButton::Left) {
+        } else if can_fire && is_mouse_button_down(MouseButton::Left) {
             let dir = (Canvas::mouse() - self.to_screen(self.ship.pos)).normalize_or_zero();
             if dir != Vec2::ZERO {
                 self.ship.shoot(dt, dir);
@@ -1706,32 +1822,54 @@ impl Play {
             // the last (or E here) reaches out with the gravity gun.
             if is_mouse_button_pressed(MouseButton::Left) {
                 if self.since_press < DOUBLE_PRESS {
-                    self.field.gun.activate();
+                    self.activate_gun();
                 }
                 self.since_press = 0.0;
             }
             if is_key_pressed(KeyCode::E) {
-                self.field.gun.activate();
+                self.activate_gun();
             }
-        } else if let Some(dir) = self.pad_aim() {
+        } else if let Some(dir) = self.pad_aim().filter(|_| can_fire) {
             // The right stick is the original's fire wheel: aim and shoot.
             // The right trigger fires along the last aim.
             self.ship.shoot(dt, dir);
             if pad::pressed(Button::LeftTrigger) {
-                self.field.gun.activate();
+                self.activate_gun();
             }
         } else {
             self.ship.hold_fire();
             if pad::pressed(Button::LeftTrigger) {
-                self.field.gun.activate();
+                self.activate_gun();
             }
             // Letting go of the trigger throws what the gun holds; with a
             // controller, holding the left trigger keeps the grip.
             if !pad::down(Button::LeftTrigger) {
-                self.field.gun_release();
+                self.release_gun();
+            }
+        }
+        if self.ship.aiming {
+            if let Some(t) = &mut self.tutorial {
+                t.using_fire(dt);
             }
         }
         self.since_press += dt;
+    }
+
+    /// GravityGun::activate, once the tutorial allows it.
+    fn activate_gun(&mut self) {
+        if self.allowed(Tutorial::can_gravity) {
+            self.field.gun.activate();
+        }
+    }
+
+    /// GravityGun::release: throwing something it caught is a use.
+    fn release_gun(&mut self) {
+        if self.field.gripped().is_some() {
+            if let Some(t) = &mut self.tutorial {
+                t.using_gravity();
+            }
+        }
+        self.field.gun_release();
     }
 
     /// Firing direction from a controller: the right stick pushed past
@@ -2259,7 +2397,7 @@ impl Play {
         self.draw_ship(assets);
         self.effects
             .draw(canvas, &assets.spark, self.z, |p| self.to_screen(p));
-        self.draw_hud(assets);
+        self.draw_hud(canvas, assets);
     }
 
     fn draw_ship(&self, assets: &PlayAssets) {
@@ -2299,8 +2437,11 @@ impl Play {
     }
 
     /// GameScreen::draw: the HUD sits at depth 0 whatever the play layer does.
-    fn draw_hud(&self, assets: &PlayAssets) {
+    fn draw_hud(&self, canvas: &Canvas, assets: &PlayAssets) {
         hud::draw(&assets.hud, &self.hud_values());
+        if let Some(t) = &self.tutorial {
+            t.draw(canvas, &assets.hud.font, &TUTORIAL_HINTS);
+        }
     }
 
     fn hud_values(&self) -> HudValues {
@@ -2311,6 +2452,17 @@ impl Play {
             lives: self.lives,
             bombs: self.bombs,
             rings: self.rings,
+            show: match &self.tutorial {
+                None => Show::ALL,
+                Some(t) => Show {
+                    lives_and_bombs: t.can_show_lives_and_bombs(),
+                    score: t.can_show_score(),
+                    rings: t.can_show_rings(),
+                    pause: t.can_pause(),
+                    multiplier: t.can_show_multiplier(),
+                    high_score: t.can_show_high_score(),
+                },
+            },
         }
     }
 }
