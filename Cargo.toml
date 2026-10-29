@@ -6,6 +6,10 @@ edition = "2021"
 [dependencies]
 macroquad = { version = "0.4", features = ["audio"] }
 
+[build-dependencies]
+# Windows: the executable's icon and version info (build.rs).
+winresource = "0.1"
+
 [profile.release]
 opt-level = 3
 

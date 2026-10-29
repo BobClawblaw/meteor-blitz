@@ -51,12 +51,13 @@ python3 tools/upscale4x.py --only all
 python3 tools/normalmaps.py
 ```
 
-macOS app bundle (GameController routes controller input to app bundles):
+Release packages (self-contained: the game data travels with the executable; saves go to `~/Library/Application Support/Meteor Blitz` or `%APPDATA%\Meteor Blitz`):
 
 ```bash
-bash tools/make-app.sh
-open target/MeteorBlitz.app
+bash tools/package-macos.sh
 ```
+
+That builds a universal (Apple Silicon + Intel) `dist/Meteor Blitz.app` and `dist/MeteorBlitz-<version>-macos.dmg`. `tools/make-app.sh` builds the same app for this Mac only (GameController routes controller input to app bundles). On Windows, `tools\package-windows.ps1` builds `dist\MeteorBlitz-<version>-windows.zip`.
 
 Web build:
 

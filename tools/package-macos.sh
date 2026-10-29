@@ -2,7 +2,13 @@
 # Release package for macOS: a universal (Apple Silicon + Intel) app bundle
 # with the game data in Contents/Resources, wrapped in a DMG.
 #
-#   tools/package-macos.sh      -> dist/MeteorBlitz-<version>-macos.dmg
+#   tools/package-macos.sh             -> dist/MeteorBlitz-<version>-macos.dmg
+#   tools/package-macos.sh --app-only  -> dist/Meteor Blitz.app for this
+#                                         Mac's architecture, no DMG
+#
+# The app is fully self-contained: the game data is in Contents/Resources
+# and the binary links only system frameworks. Saves go to
+# ~/Library/Application Support/Meteor Blitz (src/paths.rs).
 #
 # Needs both Rust targets (rustup target add aarch64-apple-darwin
 # x86_64-apple-darwin). The app is signed ad hoc only: without a Developer
@@ -15,16 +21,23 @@ dist=dist
 app="$dist/Meteor Blitz.app"
 dmg="$dist/MeteorBlitz-$version-macos.dmg"
 
-for target in aarch64-apple-darwin x86_64-apple-darwin; do
-  cargo build --release --target "$target"
-done
+app_only=false
+[ "${1:-}" = "--app-only" ] && app_only=true
 
 rm -rf "$app" "$dmg" "$dist/dmg"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources/original/app"
-lipo -create \
-  target/aarch64-apple-darwin/release/meteor-blitz \
-  target/x86_64-apple-darwin/release/meteor-blitz \
-  -output "$app/Contents/MacOS/meteor-blitz"
+if $app_only; then
+  cargo build --release
+  cp target/release/meteor-blitz "$app/Contents/MacOS/meteor-blitz"
+else
+  for target in aarch64-apple-darwin x86_64-apple-darwin; do
+    cargo build --release --target "$target"
+  done
+  lipo -create \
+    target/aarch64-apple-darwin/release/meteor-blitz \
+    target/x86_64-apple-darwin/release/meteor-blitz \
+    -output "$app/Contents/MacOS/meteor-blitz"
+fi
 
 # The data the game reads (see paths.rs): all of assets/, and from the
 # original app only what is loaded at run time.
@@ -57,6 +70,10 @@ cat > "$app/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 codesign --force --deep --sign - "$app"
+if $app_only; then
+  echo "$app"
+  exit 0
+fi
 
 # The disk image: the app and a link to Applications to drag it into.
 mkdir -p "$dist/dmg"
