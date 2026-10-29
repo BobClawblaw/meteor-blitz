@@ -23,8 +23,8 @@ A love letter to Alley Labs' *Meteor Blitz* (iOS, 2009), given away freely and r
 - **Effects.** Round, glowing particles replace the original square points. Explosions leave scorch marks that fade. The ship has an engine trail, boost speed lines and a shield glow, and fast shots and enemies thrown by the gravity gun leave streaks.
 - **HD art.** 4x sprites, UI and font, and 2x terrain, generated from the originals (`tools/upscale4x.py`).
 - **Options screen** (the SETTINGS button): fullscreen, widescreen, bloom, lighting and effects, frame-rate cap, audio, screen shake, and the tutorial.
-- **Rebindable controls** (HELP, or Options > Controls): every action has a keyboard/mouse binding and a controller binding, saved to `controls.txt`.
-- **Tutorial.** The original's 27-step tutorial is ported. It is optional: switch on "Tutorial before first game" in Options.
+- **Rebindable controls** (Options > Controls): every action has a keyboard/mouse binding and a controller binding, saved to `controls.txt`.
+- **Tutorial.** The original's 27-step tutorial is ported: HELP on the main menu plays it, and "Tutorial before first game" in Options runs it before your first game.
 - **Quality of life.** Settings and local high scores persist, and a run that makes the table asks for a name. Ring pickups no longer stack into one very loud sound.
 
 Lighting and effects, bloom and widescreen can each be switched off in Options for a look closer to the original.

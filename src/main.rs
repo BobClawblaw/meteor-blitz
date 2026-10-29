@@ -270,6 +270,8 @@ enum Next {
     /// World (or SURVIVAL) and stage.
     Game(usize, usize),
     Options(OptionsPage),
+    /// HELP: the tutorial, then back to the main menu.
+    Tutorial,
 }
 
 /// Menu art by file stem (`assets/ui/<name>.png`).
@@ -341,6 +343,8 @@ async fn load_ui_set() -> Ui {
         let tex = load_ui(&name).await;
         ui.insert(name, tex);
     }
+    // Art for the port's text-only buttons (the score table's tabs).
+    ui.insert("blank".to_owned(), Texture2D::from_rgba8(1, 1, &[0, 0, 0, 0]));
     ui
 }
 
@@ -564,9 +568,39 @@ fn build_menu(kind: MenuKind, ui: &Ui, progress: &Progress, fade_backdrop: bool)
                     button(ui, "buttonLocal", "buttonLocalDown", 16.0, 258.0, 126.0, 54.0, 1),
                     button(ui, "buttonGlobal", "buttonGlobalDown", 338.0, 258.0, 126.0, 54.0, 2),
                     back(6),
+                    // Port addition: Arcade / Survival tabs between them
+                    // (drawn by `draw_scores_tabs`; the art is a blank pixel).
+                    MenuButton { up: ui["blank"].clone(), down: ui["blank"].clone(), rect: SCORES_TABS[0], event: SCORES_ARCADE_TAB },
+                    MenuButton { up: ui["blank"].clone(), down: ui["blank"].clone(), rect: SCORES_TABS[1], event: SCORES_SURVIVAL_TAB },
                 ],
                 fade_backdrop,
             )
+        }
+    }
+}
+
+/// The score table's Arcade / Survival tabs (port addition: the original
+/// picked the table on a separate screen), between the Local and Global
+/// buttons.
+const SCORES_TABS: [Rect; 2] = [
+    Rect { x: 148.0, y: 262.0, w: 90.0, h: 46.0 },
+    Rect { x: 242.0, y: 262.0, w: 90.0, h: 46.0 },
+];
+const SCORES_ARCADE_TAB: u8 = 3;
+const SCORES_SURVIVAL_TAB: u8 = 4;
+const TAB_SCALE: f32 = 0.5;
+
+/// The tabs' labels, the shown table's lit and underlined.
+fn draw_scores_tabs(canvas: &Canvas, font: &Font, survival: bool, alpha: f32) {
+    for (i, (rect, label)) in SCORES_TABS.iter().zip(["Arcade", "Survival"]).enumerate() {
+        let on = (i == 1) == survival;
+        let c = if on { Color::new(1.0, 1.0, 1.0, alpha) } else { Color::new(0.6, 0.6, 0.7, alpha) };
+        let cx = rect.x + rect.w * 0.5;
+        let cy = rect.y + rect.h * 0.5;
+        font.text(label, cx, cy - 4.0, TAB_SCALE, hud::Align::Centre, c);
+        if on {
+            let w = font.width(label, TAB_SCALE);
+            canvas.fill_rect(cx - w * 0.5, cy + 8.0, w, 1.5, c);
         }
     }
 }
@@ -625,14 +659,19 @@ fn menu_event(kind: MenuKind, event: u8) -> Option<Next> {
         (MenuKind::Main, 0) => Some(Next::Menu(MenuKind::Mode)),
         // SETTINGS opens the port's Options screen; HELP its Controls page.
         (MenuKind::Main, 2) => Some(Next::Options(OptionsPage::Main)),
-        (MenuKind::Main, 3) => Some(Next::Options(OptionsPage::Controls)),
-        (MenuKind::Main, 1) => Some(Next::Menu(MenuKind::ScoresSelect)),
+        // HELP plays the tutorial (as the original's did); the controls
+        // are under SETTINGS > Controls.
+        (MenuKind::Main, 3) => Some(Next::Tutorial),
+        // HIGH SCORES opens the arcade table; its tabs switch to survival.
+        (MenuKind::Main, 1) => Some(Next::Menu(MenuKind::ScoresTable(0, false))),
         (MenuKind::ScoresSelect, 0) => Some(Next::Menu(MenuKind::ScoresTable(0, false))),
         (MenuKind::ScoresSelect, 1) => Some(Next::Menu(MenuKind::ScoresTable(1, false))),
         (MenuKind::ScoresSelect, 2) => Some(Next::Menu(MenuKind::Main)),
         (MenuKind::ScoresTable(mode, _), 1) => Some(Next::Menu(MenuKind::ScoresTable(mode, false))),
         (MenuKind::ScoresTable(mode, _), 2) => Some(Next::Menu(MenuKind::ScoresTable(mode, true))),
-        (MenuKind::ScoresTable(..), 6) => Some(Next::Menu(MenuKind::ScoresSelect)),
+        (MenuKind::ScoresTable(_, global), SCORES_ARCADE_TAB) => Some(Next::Menu(MenuKind::ScoresTable(0, global))),
+        (MenuKind::ScoresTable(_, global), SCORES_SURVIVAL_TAB) => Some(Next::Menu(MenuKind::ScoresTable(1, global))),
+        (MenuKind::ScoresTable(..), 6) => Some(Next::Menu(MenuKind::Main)),
         (MenuKind::Mode, 0) => Some(Next::Menu(MenuKind::World)),
         (MenuKind::Mode, 1) => Some(Next::Game(SURVIVAL, 1)),
         (MenuKind::Mode, 2) => Some(Next::Menu(MenuKind::Main)),
@@ -1114,12 +1153,20 @@ async fn main() {
                             menu_screen = build_menu(next, &ui, &progress, false);
                             screen = Screen::Menu(next);
                         }
-                        Some(Next::Game(world, stage)) => {
-                            game = Some(if starts_with_tutorial(&settings, world, stage) {
-                                after_tutorial = Some(Next::Game(world, stage));
-                                Play::tutorial(progress.best, &play_assets, Tutorial::start())
-                            } else {
-                                Play::new(world, stage, progress.best, &play_assets)
+                        next @ (Some(Next::Game(..)) | Some(Next::Tutorial)) => {
+                            game = Some(match next {
+                                // MainMenuScreen::handleEvent(3): HELP plays
+                                // the tutorial, then returns to the menu.
+                                Some(Next::Tutorial) => {
+                                    after_tutorial = None;
+                                    Play::tutorial(progress.best, &play_assets, Tutorial::start())
+                                }
+                                Some(Next::Game(world, stage)) if starts_with_tutorial(&settings, world, stage) => {
+                                    after_tutorial = Some(Next::Game(world, stage));
+                                    Play::tutorial(progress.best, &play_assets, Tutorial::start())
+                                }
+                                Some(Next::Game(world, stage)) => Play::new(world, stage, progress.best, &play_assets),
+                                _ => unreachable!(),
                             });
                             screen = Screen::Game;
                             if !music_on {
@@ -1336,6 +1383,9 @@ async fn main() {
                 menu_screen.draw(&canvas, &menu_assets, &backdrop);
                 if kind == MenuKind::Main {
                     draw_project_link(&link_font, menu_screen.fx.alpha);
+                }
+                if let MenuKind::ScoresTable(mode, _) = kind {
+                    draw_scores_tabs(&canvas, &play_assets.hud.font, mode == 1, menu_screen.fx.alpha);
                 }
                 if let MenuKind::ScoresTable(mode, global) = kind {
                     scores::draw_rows(
