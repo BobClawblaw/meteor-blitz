@@ -1173,6 +1173,7 @@ async fn main() {
                 &play_assets.hud.font,
             ),
         }
+        canvas.set_bloom(settings.bloom);
         canvas.end();
         let t2 = get_time();
 

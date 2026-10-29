@@ -126,6 +126,132 @@ void main() {
     gl_FragColor = vec4(min(t.rgb + color.rgb, vec3(1.0)), t.a * color.a);
 }"#;
 
+/// Bloom's bright pass, downsampling 4x: a 4-tap box over the source
+/// (each tap a bilinear 2x2), keeping what is brighter than Threshold.
+const BRIGHT_FRAGMENT: &str = r#"#version 100
+precision mediump float;
+varying lowp vec2 uv;
+uniform sampler2D Texture;
+uniform vec2 Texel;
+uniform float Threshold;
+void main() {
+    vec3 c = 0.25 * (texture2D(Texture, uv + Texel * vec2(-1.0, -1.0)).rgb
+        + texture2D(Texture, uv + Texel * vec2(1.0, -1.0)).rgb
+        + texture2D(Texture, uv + Texel * vec2(-1.0, 1.0)).rgb
+        + texture2D(Texture, uv + Texel * vec2(1.0, 1.0)).rgb);
+    float l = max(c.r, max(c.g, c.b));
+    gl_FragColor = vec4(c * smoothstep(Threshold, 1.0, l), 1.0);
+}"#;
+
+/// Bloom's separable Gaussian, nine taps along Dir (in texels).
+const BLUR_FRAGMENT: &str = r#"#version 100
+precision mediump float;
+varying lowp vec2 uv;
+uniform sampler2D Texture;
+uniform vec2 Dir;
+void main() {
+    vec3 c = texture2D(Texture, uv).rgb * 0.227027;
+    c += texture2D(Texture, uv + Dir * 1.0).rgb * 0.1945946;
+    c += texture2D(Texture, uv - Dir * 1.0).rgb * 0.1945946;
+    c += texture2D(Texture, uv + Dir * 2.0).rgb * 0.1216216;
+    c += texture2D(Texture, uv - Dir * 2.0).rgb * 0.1216216;
+    c += texture2D(Texture, uv + Dir * 3.0).rgb * 0.054054;
+    c += texture2D(Texture, uv - Dir * 3.0).rgb * 0.054054;
+    c += texture2D(Texture, uv + Dir * 4.0).rgb * 0.016216;
+    c += texture2D(Texture, uv - Dir * 4.0).rgb * 0.016216;
+    gl_FragColor = vec4(c, 1.0);
+}"#;
+
+/// Bloom: what counts as bright, how strongly the glow is added, and the
+/// glow buffers' size relative to the canvas.
+const BLOOM_THRESHOLD: f32 = 0.8;
+const BLOOM_STRENGTH: f32 = 1.0;
+const BLOOM_DOWNSAMPLE: u32 = 4;
+
+/// Draws a full target from texture space: (0,0)-(1,1) to the whole pass.
+struct PassCamera {
+    render_pass: macroquad::texture::RenderPass,
+}
+
+impl Camera for PassCamera {
+    fn matrix(&self) -> Mat4 {
+        Mat4::orthographic_rh_gl(0.0, 1.0, 0.0, 1.0, -1.0, 1.0)
+    }
+    fn depth_enabled(&self) -> bool {
+        false
+    }
+    fn render_pass(&self) -> Option<macroquad::texture::RenderPass> {
+        Some(self.render_pass.clone())
+    }
+    fn viewport(&self) -> Option<(i32, i32, i32, i32)> {
+        None
+    }
+}
+
+/// One full-target quad sampling `tex` with the identity mapping.
+fn pass(target: &RenderTarget, tex: &Texture2D, material: &Material) {
+    set_camera(&PassCamera { render_pass: target.render_pass.clone() });
+    gl_use_material(material);
+    let v = |x: f32, y: f32| Vertex::new(x, y, 0.0, x, y, WHITE);
+    draw_mesh(&Mesh {
+        vertices: vec![v(0.0, 0.0), v(1.0, 0.0), v(1.0, 1.0), v(0.0, 1.0)],
+        indices: vec![0, 1, 2, 0, 2, 3],
+        texture: Some(tex.clone()),
+    });
+    gl_use_default_material();
+}
+
+/// Glow for bright pixels (port addition): a bright pass and a blur at a
+/// quarter of the canvas resolution, added over the frame at the blit.
+struct Bloom {
+    a: RenderTarget,
+    b: RenderTarget,
+    size: (u32, u32),
+    bright: Material,
+    blur: Material,
+}
+
+impl Bloom {
+    fn new(canvas: (u32, u32)) -> Bloom {
+        let size = ((canvas.0 / BLOOM_DOWNSAMPLE).max(1), (canvas.1 / BLOOM_DOWNSAMPLE).max(1));
+        let material = |fragment: &str, uniforms: Vec<UniformDesc>| {
+            load_material(
+                ShaderSource::Glsl { vertex: DEFAULT_VERTEX, fragment },
+                MaterialParams { uniforms, ..Default::default() },
+            )
+            .expect("bloom shader")
+        };
+        Bloom {
+            a: new_target(size),
+            b: new_target(size),
+            size,
+            bright: material(
+                BRIGHT_FRAGMENT,
+                vec![
+                    UniformDesc::new("Texel", UniformType::Float2),
+                    UniformDesc::new("Threshold", UniformType::Float1),
+                ],
+            ),
+            blur: material(BLUR_FRAGMENT, vec![UniformDesc::new("Dir", UniformType::Float2)]),
+        }
+    }
+
+    /// Renders the glow of `source` (the canvas, `canvas` pixels) into `a`.
+    fn render(&self, source: &Texture2D, canvas: (u32, u32)) {
+        self.bright.set_uniform("Texel", vec2(1.0 / canvas.0 as f32, 1.0 / canvas.1 as f32));
+        self.bright.set_uniform("Threshold", BLOOM_THRESHOLD);
+        pass(&self.a, source, &self.bright);
+        let texel = vec2(1.0 / self.size.0 as f32, 1.0 / self.size.1 as f32);
+        // Two blur rounds, the second twice as wide, for a soft falloff.
+        for spread in [1.0, 2.0] {
+            self.blur.set_uniform("Dir", vec2(texel.x * spread, 0.0));
+            pass(&self.b, &self.a.texture, &self.blur);
+            self.blur.set_uniform("Dir", vec2(0.0, texel.y * spread));
+            pass(&self.a, &self.b.texture, &self.blur);
+        }
+    }
+}
+
 /// Texture unit 1 was GL_DECAL: the decal layer over the base by the
 /// decal's alpha, alpha from the base. Both layers repeat and scroll.
 const BACKDROP_FRAGMENT: &str = r#"#version 100
@@ -265,6 +391,9 @@ pub struct Canvas {
     /// Rebuilt when the window's size or aspect changes.
     target: RefCell<RenderTarget>,
     target_size: Cell<(u32, u32)>,
+    bloom: RefCell<Bloom>,
+    /// Whether `end` adds the glow (Settings::bloom; MB_BLOOM=0 forces off).
+    bloom_on: Cell<bool>,
     white: Texture2D,
     menu_backdrop: RefCell<Mesh>,
     game_backdrop: RefCell<Mesh>,
@@ -348,6 +477,8 @@ impl Canvas {
         Canvas {
             target: RefCell::new(target),
             target_size: Cell::new(size),
+            bloom: RefCell::new(Bloom::new(size)),
+            bloom_on: Cell::new(false),
             white,
             menu_backdrop: RefCell::new(backdrop_mesh(true, view_w / CANVAS_W)),
             game_backdrop: RefCell::new(backdrop_mesh(false, view_w / CANVAS_W)),
@@ -355,6 +486,11 @@ impl Canvas {
             additive,
             flash,
         }
+    }
+
+    /// Turns the bloom pass on or off (MB_BLOOM=0 keeps it off).
+    pub fn set_bloom(&self, on: bool) {
+        self.bloom_on.set(on && !std::env::var("MB_BLOOM").is_ok_and(|v| v == "0"));
     }
 
     /// Runs `draw` with hit-flash shading (Texture::drawFlash).
@@ -395,6 +531,7 @@ impl Canvas {
         if size != self.target_size.get() {
             *self.target.borrow_mut() = new_target(size);
             self.target_size.set(size);
+            *self.bloom.borrow_mut() = Bloom::new(size);
             *self.menu_backdrop.borrow_mut() = backdrop_mesh(true, view_w / CANVAS_W);
             *self.game_backdrop.borrow_mut() = backdrop_mesh(false, view_w / CANVAS_W);
         }
@@ -408,6 +545,10 @@ impl Canvas {
     /// Blit the portrait target as the landscape image. Landscape (x, y) is
     /// portrait (320-y, 480-x); the target texture's v axis runs bottom-up.
     pub fn end(&self) {
+        let bloom = self.bloom_on.get();
+        if bloom {
+            self.bloom.borrow().render(&self.target.borrow().texture, self.target_size.get());
+        }
         set_default_camera();
         clear_background(BLACK);
         let r = Canvas::placement();
@@ -434,6 +575,20 @@ impl Canvas {
             texture: Some(self.target.borrow().texture.clone()),
         };
         draw_mesh(&quad);
+        if bloom {
+            let glow = Mesh {
+                vertices: quad
+                    .vertices
+                    .iter()
+                    .map(|v| Vertex { color: [255, 255, 255, (BLOOM_STRENGTH * 255.0) as u8], ..*v })
+                    .collect(),
+                indices: quad.indices.clone(),
+                texture: Some(self.bloom.borrow().a.texture.clone()),
+            };
+            gl_use_material(&self.additive);
+            draw_mesh(&glow);
+            gl_use_default_material();
+        }
     }
 
     /// `Background::draw` at `origin`: the base layer scrolls at 2x the

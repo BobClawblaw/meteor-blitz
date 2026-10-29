@@ -78,6 +78,8 @@ pub struct Settings {
     pub tutorial: bool,
     /// Port addition: fullscreen (F11 or Alt+Enter toggles it).
     pub fullscreen: bool,
+    /// Port addition: the bloom post-process.
+    pub bloom: bool,
 }
 
 impl Default for Settings {
@@ -95,6 +97,7 @@ impl Default for Settings {
             flip: false,
             tutorial: false,
             fullscreen: false,
+            bloom: true,
         }
     }
 }
@@ -146,6 +149,7 @@ impl Settings {
                 "flip" => s.flip = parse_bool(value, s.flip),
                 "tutorial" => s.tutorial = parse_bool(value, s.tutorial),
                 "fullscreen" => s.fullscreen = parse_bool(value, s.fullscreen),
+                "bloom" => s.bloom = parse_bool(value, s.bloom),
                 _ => {}
             }
         }
@@ -154,7 +158,7 @@ impl Settings {
 
     pub fn to_text(&self) -> String {
         format!(
-            "music={}\neffects={}\nshake={}\nshake_control={}\nboost_control={}\nbomb_button={}\nauto_pause={}\nauto_gravity={}\nauto_upgrade={}\nflip={}\ntutorial={}\nfullscreen={}\n",
+            "music={}\neffects={}\nshake={}\nshake_control={}\nboost_control={}\nbomb_button={}\nauto_pause={}\nauto_gravity={}\nauto_upgrade={}\nflip={}\ntutorial={}\nfullscreen={}\nbloom={}\n",
             self.music,
             self.effects,
             self.shake,
@@ -167,6 +171,7 @@ impl Settings {
             self.flip as u8,
             self.tutorial as u8,
             self.fullscreen as u8,
+            self.bloom as u8,
         )
     }
 }
@@ -1136,6 +1141,7 @@ mod tests {
             flip: true,
             tutorial: true,
             fullscreen: true,
+            bloom: false,
         };
         assert_eq!(Settings::parse(&s.to_text()), s);
     }
