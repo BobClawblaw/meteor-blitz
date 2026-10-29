@@ -350,6 +350,10 @@ fn heading(d: Vec2) -> f32 {
     }
 }
 
+/// Port change: shots leave from the ship's nose, this far along the aim
+/// from its centre (the ship's radius), instead of from the centre.
+const MUZZLE: f32 = SHIP_RADIUS;
+
 struct Bullet {
     /// Where the bullet was last update: hits are tested along the segment.
     prev: Vec2,
@@ -359,6 +363,19 @@ struct Bullet {
     /// Unit vector pointing back along the flight path, for the trail.
     back: Vec2,
     weapon: Weapon,
+}
+
+impl Bullet {
+    /// How far the shot has flown from the muzzle: trails drawn behind it
+    /// stop there, so a fresh shot does not reach back into the ship.
+    fn flown(&self) -> f32 {
+        let life = match self.weapon {
+            Weapon::Cannon => CANNON_LIFE,
+            Weapon::Fire => weapons::FIRE_LIFE,
+            Weapon::Laser => weapons::LASER_LIFE,
+        };
+        (life - self.life).max(0.0) * self.vel.length()
+    }
 }
 
 /// Ship::setState: 1 spawning (shielded), 2 shield fading, 3 vulnerable,
@@ -510,7 +527,7 @@ impl Ship {
             return;
         }
         self.cannon_timer %= interval;
-        let origin = self.pos + self.vel * dt;
+        let origin = self.pos + self.vel * dt + dir * MUZZLE;
         let base = heading(dir);
         for offset in CANNON_SPREAD[self.cannon_level] {
             let rad = (base + offset).to_radians();
@@ -533,7 +550,7 @@ impl Ship {
             Weapon::Fire | Weapon::Laser => {
                 self.aiming = true;
                 self.aim_dir = dir;
-                let origin = self.pos + self.vel * dt;
+                let origin = self.pos + self.vel * dt + dir * MUZZLE;
                 let mut shots = Vec::new();
                 let (life, weapon) = if self.weapon == Weapon::Fire {
                     self.fire_gun.fire(dt, origin, dir, &mut shots);
@@ -2478,7 +2495,10 @@ impl Play {
             let a = heading(b.vel).to_radians();
             let fwd = vec2(a.sin(), -a.cos());
             let side = vec2(a.cos(), a.sin());
-            let c = self.to_screen(self.bullet_pos(b)) - fwd * h * back;
+            // Set back along the flight, but a fresh shot's sprite never
+            // reaches behind the muzzle (it showed out of the ship's tail).
+            let tail = h * (back + 0.5);
+            let c = self.to_screen(self.bullet_pos(b)) - fwd * h * back + fwd * (tail - b.flown()).max(0.0);
             let n = verts.len() as u16;
             for (sx, sy, u, v) in [
                 (-0.5, -0.5, 0.0, 0.0),
@@ -2830,8 +2850,12 @@ impl Play {
             .filter(|b| b.weapon == Weapon::Cannon)
         {
             let p = self.to_screen(self.bullet_pos(b));
+            let flown = b.flown();
             for (behind, size) in CANNON_TRAIL {
-                points.push((p + b.back * behind, size));
+                // Only the part of the trail the shot has already flown.
+                if behind <= flown {
+                    points.push((p + b.back * behind, size));
+                }
             }
         }
         canvas.draw_points(&assets.cannon, &points, self.z, GREEN);
@@ -2940,7 +2964,8 @@ impl Play {
                 Weapon::Fire => continue,
             };
             let p = self.to_screen(self.bullet_pos(b));
-            line(p, p - b.vel * BULLET_STREAK, width, color);
+            let length = (b.vel.length() * BULLET_STREAK).min(b.flown());
+            line(p, p - b.vel.normalize_or_zero() * length, width, color);
         }
         canvas.draw_triangles(verts, indices, None, true);
     }
