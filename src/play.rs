@@ -820,12 +820,67 @@ impl Play {
         }
     }
 
+    /// `GameScreen::handleEvent`'s next-stage case: advance inside the same
+    /// screen, so the run's score, rings, upgrades, lives and bombs carry
+    /// over; only the stage's world state restarts. Returns false after the
+    /// last stage.
+    pub fn advance_stage(&mut self, assets: &PlayAssets) -> bool {
+        let Some((world, stage)) = self.next_stage() else {
+            return false;
+        };
+        let weapon = self.ship.weapon;
+        self.world = world;
+        self.stage = stage;
+        self.state = State::Entering;
+        self.alpha = 0.0;
+        self.z = START_Z;
+        self.elapsed = 0.0;
+        self.stage_time = 0.0;
+        self.shaken = false;
+        self.camera = Lead {
+            centre: Vec2::ZERO,
+            shake: Vec2::ZERO,
+            shake_power: 0.0,
+            shake_time: 0.0,
+            scale: 1.0,
+        };
+        self.scroll = Vec2::ZERO;
+        self.accumulator = 0.0;
+        self.field = Field::new(assets.rocks[0].frame_counts());
+        self.script = Script::arcade(world, stage);
+        self.pickups = Rings::default();
+        self.magnet = 0.0;
+        self.since_press = 1.0;
+        self.time = TimeScale::default();
+
+        // Ship::resetBoost and Ship::loadWeaponStateFromGlobal: the boost
+        // recharges for the new stage, while the bought levels and the
+        // selected weapon stay with the run.
+        let mut ship = Ship::armed(world);
+        ship.weapon = weapon;
+        ship.cannon_level = self.upgrades[Upgrade::Cannon as usize];
+        ship.cannon_timer = CANNON_INTERVAL[ship.cannon_level];
+        ship.fire_gun.level = self.upgrades[Upgrade::Fire as usize];
+        ship.laser_gun.level = self.upgrades[Upgrade::Laser as usize];
+        ship.speed_level = self.upgrades[Upgrade::Speed as usize];
+        ship.boost_level = self.upgrades[Upgrade::Boost as usize];
+        ship.boost_charge = ship.boost_recharge();
+        self.field.gun.level = self.upgrades[Upgrade::Gravity as usize] as u32;
+        self.ship = ship;
+        true
+    }
+
     pub fn set_shake_scale(&mut self, scale: f32) {
         self.camera.scale = scale.clamp(0.0, 1.0);
     }
 
     pub fn upgrade_level(&self, u: Upgrade) -> usize {
         self.upgrades[u as usize]
+    }
+
+    /// All six upgrade levels, for run diagnostics.
+    pub fn upgrade_levels(&self) -> [usize; 6] {
+        self.upgrades
     }
 
     pub fn upgrade_cost(&self, u: Upgrade) -> Option<u32> {

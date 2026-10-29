@@ -40,7 +40,7 @@ use hud::{Font, HudAssets};
 use menu::{MenuAssets, MenuBackdrop, MenuButton, MenuScreen};
 use name_entry::NameEntry;
 use pause::{Action, Page, Pause, PauseAssets, Settings};
-use play::{Play, PlayAssets, RockArt};
+use play::{Play, PlayAssets, RockArt, UPGRADES};
 use progress::Progress;
 use tutorial::Tutorial;
 use scores::Scores;
@@ -862,24 +862,23 @@ async fn main() {
                             screen = Screen::Menu(kind);
                         }
                         Some(Action::NextStage) => {
-                            let next = game.as_ref().and_then(|g| g.next_stage());
                             pause = None;
-                            match next {
-                                Some((world, stage)) => {
-                                    game =
-                                        Some(Play::new(world, stage, progress.best, &play_assets));
-                                }
-                                None => {
-                                    let kind = match game.as_ref() {
-                                        Some(g) if g.world < SURVIVAL => MenuKind::Stage(g.world),
-                                        _ => MenuKind::Mode,
-                                    };
-                                    game = None;
-                                    stop_sound(&music);
-                                    music_on = false;
-                                    menu_screen = build_menu(kind, &ui, &progress, true);
-                                    screen = Screen::Menu(kind);
-                                }
+                            // `GameScreen::handleEvent` starts the next stage
+                            // in the same screen, so the run's score, rings
+                            // and upgrades stay.
+                            let advanced = game
+                                .as_mut()
+                                .is_some_and(|g| g.advance_stage(&play_assets));
+                            if !advanced {
+                                let kind = match game.as_ref() {
+                                    Some(g) if g.world < SURVIVAL => MenuKind::Stage(g.world),
+                                    _ => MenuKind::Mode,
+                                };
+                                game = None;
+                                stop_sound(&music);
+                                music_on = false;
+                                menu_screen = build_menu(kind, &ui, &progress, true);
+                                screen = Screen::Menu(kind);
                             }
                         }
                         None => {}
@@ -920,9 +919,52 @@ async fn main() {
                             progress.best = progress.best.max(g.score);
                             progress.save();
                         }
-                        // `LocalScores::saveAndLoad` only asks for a name when
-                        // the run makes the table; the results popup follows.
-                        if scores.qualifies(run.survival, run.score) {
+                        // MB_AUTONEXT=1: scripted runs skip the results and
+                        // upgrade popups and advance at once, to check what
+                        // carries into the next stage. The last stage keeps
+                        // the normal results path.
+                        let auto_next = std::env::var_os("MB_AUTONEXT").is_some()
+                            && run.cleared
+                            && game.as_ref().is_some_and(|g| g.next_stage().is_some());
+                        if auto_next {
+                            if let Some(g) = game.as_mut() {
+                                // MB_BUY=<index> buys one upgrade before the
+                                // advance, to check that purchases carry.
+                                if let Some(u) = std::env::var("MB_BUY")
+                                    .ok()
+                                    .and_then(|v| v.parse::<usize>().ok())
+                                    .and_then(|n| UPGRADES.get(n).copied())
+                                {
+                                    g.upgrade_points += 1000;
+                                    g.buy_upgrade(u);
+                                }
+                                g.apply_time_bonus(run.bonus);
+                                let advanced = g.advance_stage(&play_assets);
+                                eprintln!(
+                                    "advance: ok {} world {} stage {} score {} rings {} points {} upgrades {:?}",
+                                    advanced,
+                                    g.world,
+                                    g.stage,
+                                    g.score,
+                                    g.rings,
+                                    g.upgrade_points,
+                                    g.upgrade_levels()
+                                );
+                                if advanced {
+                                    pause = None;
+                                } else {
+                                    pause = Some(Pause::results(
+                                        run.cleared,
+                                        run.world,
+                                        run.stage,
+                                        run.score,
+                                        run.multiplier,
+                                        run.time,
+                                        run.bonus,
+                                    ));
+                                }
+                            }
+                        } else if scores.qualifies(run.survival, run.score) {
                             screen = Screen::NameEntry(NameEntry::new(run.score));
                             pending = Some(run);
                         } else {
