@@ -1,3 +1,6 @@
+// Release builds on Windows open no console window.
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 //! Meteor Blitz — a port of the 2009 iPhone game. Window, screens, and loop.
 
 mod arrow;
@@ -16,6 +19,7 @@ mod options;
 mod mine;
 mod pad;
 mod particles;
+mod paths;
 mod pause;
 mod play;
 mod progress;
@@ -48,6 +52,21 @@ use progress::Progress;
 use tutorial::Tutorial;
 use scores::Scores;
 
+/// The window and taskbar icon (tools/make-icon.py), built in.
+fn window_icon() -> macroquad::miniquad::conf::Icon {
+    fn rgba<const N: usize>(png: &[u8]) -> [u8; N] {
+        let img = Image::from_file_with_format(png, Some(ImageFormat::Png)).expect("icon png");
+        let mut out = [0u8; N];
+        out.copy_from_slice(&img.bytes);
+        out
+    }
+    macroquad::miniquad::conf::Icon {
+        small: rgba(include_bytes!("../assets/icon/icon-16.png")),
+        medium: rgba(include_bytes!("../assets/icon/icon-32.png")),
+        big: rgba(include_bytes!("../assets/icon/icon-64.png")),
+    }
+}
+
 fn window_conf() -> Conf {
     // MB_WINDOW=480x320 gives a 1:1 window for pixel comparisons with the
     // original's frames (the F12 export is then exactly 480x320).
@@ -70,6 +89,7 @@ fn window_conf() -> Conf {
         // 120/144 options. In blocking mode it drops that pacer and draws
         // whenever an update is scheduled; the loop schedules one every
         // frame and paces itself to the Options cap.
+        icon: Some(window_icon()),
         platform: macroquad::miniquad::conf::Platform {
             blocking_event_loop: cfg!(target_os = "macos"),
             ..Default::default()
@@ -182,6 +202,8 @@ async fn load_ui_set() -> Ui {
         "labelLocalSurvivalScores",
         "labelGlobalSurvivalScores",
         "labelEnterName",
+        // Port addition: the project link (tools/make-github-mark.py).
+        "github",
     ] {
         names.push(label.to_owned());
     }
@@ -294,6 +316,15 @@ fn build_menu(kind: MenuKind, ui: &Ui, progress: &Progress, fade_backdrop: bool)
                     57.0,
                     3,
                 ),
+                // Port addition: the project link under the buttons; the
+                // mark is the button art, the address is drawn beside it
+                // (`draw_project_link`).
+                MenuButton {
+                    up: ui["github"].clone(),
+                    down: ui["github"].clone(),
+                    rect: PROJECT_LINK,
+                    event: PROJECT_LINK_EVENT,
+                },
             ],
             fade_backdrop,
         ),
@@ -421,6 +452,41 @@ fn build_menu(kind: MenuKind, ui: &Ui, progress: &Progress, fade_backdrop: bool)
             )
         }
     }
+}
+
+/// The project page, linked from the main menu (port addition).
+const PROJECT_URL: &str = "https://github.com/BobClawblaw/meteor-blitz";
+/// The link's hit area: the 16-unit mark and the address to its right,
+/// centred under the main-menu buttons.
+const PROJECT_LINK: Rect = Rect { x: 153.0, y: 304.0, w: 176.0, h: 16.0 };
+const PROJECT_LINK_EVENT: u8 = 4;
+
+/// The address beside the GitHub mark, in macroquad's built-in font (the
+/// game's bitmap font has no '/', '.' or '-').
+fn draw_project_link(alpha: f32) {
+    let text = PROJECT_URL.trim_start_matches("https://");
+    let r = PROJECT_LINK;
+    draw_text_ex(
+        text,
+        r.x + 19.0,
+        r.y + 11.5,
+        TextParams {
+            font_size: 40,
+            font_scale: 0.25,
+            color: Color::new(0.85, 0.85, 0.95, alpha),
+            ..Default::default()
+        },
+    );
+}
+
+/// Opens the project page in the default browser (not on the web build).
+fn open_project_page() {
+    #[cfg(target_os = "macos")]
+    let _ = std::process::Command::new("open").arg(PROJECT_URL).spawn();
+    #[cfg(windows)]
+    let _ = std::process::Command::new("explorer").arg(PROJECT_URL).spawn();
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let _ = std::process::Command::new("xdg-open").arg(PROJECT_URL).spawn();
 }
 
 /// Whether a game starts with the tutorial: the original ran it before
@@ -666,11 +732,9 @@ async fn load_pause_assets() -> PauseAssets {
 
 #[macroquad::main(window_conf)]
 async fn main() {
-    // MB_ROOT points at the project (assets and original/) when the game
-    // starts from elsewhere, as an .app bundle does.
-    if let Some(root) = std::env::var_os("MB_ROOT") {
-        let _ = std::env::set_current_dir(root);
-    }
+    // The data directory (the repo, a release bundle, or MB_ROOT) and the
+    // save folder.
+    paths::init();
     let ui = load_ui_set().await;
     let menu_assets = load_menu_assets().await;
     let play_assets = load_play_assets().await;
@@ -901,7 +965,9 @@ async fn main() {
                 });
                 if let Some(event) = menu_screen.update(dt).or(pad_back) {
                     play_effect(SOUND_BUTTON, settings.effects);
-                    if let Some(next) = menu_event(kind, event) {
+                    if kind == MenuKind::Main && event == PROJECT_LINK_EVENT {
+                        open_project_page();
+                    } else if let Some(next) = menu_event(kind, event) {
                         menu_next = Some(next);
                         menu_screen.fx.leave();
                     }
@@ -1138,6 +1204,9 @@ async fn main() {
         match screen {
             Screen::Menu(kind) => {
                 menu_screen.draw(&canvas, &menu_assets, &backdrop);
+                if kind == MenuKind::Main {
+                    draw_project_link(menu_screen.fx.alpha);
+                }
                 if let MenuKind::ScoresTable(mode, global) = kind {
                     scores::draw_rows(
                         &play_assets.hud.font,

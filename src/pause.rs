@@ -121,7 +121,7 @@ impl Settings {
     /// Reads the persisted settings; anything missing or malformed keeps the
     /// default. Mirrors `PausePopup::load`.
     pub fn load() -> Settings {
-        match std::fs::read_to_string(SETTINGS_PATH) {
+        match std::fs::read_to_string(crate::paths::save(SETTINGS_PATH)) {
             Ok(text) => Settings::parse(&text),
             // First launch: NSUserDefaults starts from the defaults and keeps
             // them, so persist them once here.
@@ -136,7 +136,7 @@ impl Settings {
     /// Mirrors `PausePopup::save`. On the web build there is no filesystem,
     /// so this silently does nothing and settings last for the session only.
     pub fn save(&self) {
-        let _ = std::fs::write(SETTINGS_PATH, self.to_text());
+        let _ = std::fs::write(crate::paths::save(SETTINGS_PATH), self.to_text());
     }
 
     /// Key=value lines, the same shape as `save.txt`.

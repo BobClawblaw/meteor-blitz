@@ -31,14 +31,14 @@ impl Default for Scores {
 
 impl Scores {
     pub fn load() -> Scores {
-        match std::fs::read_to_string(SCORES_PATH) {
+        match std::fs::read_to_string(crate::paths::save(SCORES_PATH)) {
             Ok(text) => Scores::parse(&text),
             Err(_) => Scores::default(),
         }
     }
 
     pub fn save(&self) {
-        let _ = std::fs::write(SCORES_PATH, self.to_text());
+        let _ = std::fs::write(crate::paths::save(SCORES_PATH), self.to_text());
     }
 
     /// `LocalScores::saveAndLoad`: inserts a run, keeps the table sorted and

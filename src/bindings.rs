@@ -265,14 +265,14 @@ fn index(action: Action) -> usize {
 
 impl Bindings {
     pub fn load() -> Bindings {
-        std::fs::read_to_string(PATH)
+        std::fs::read_to_string(crate::paths::save(PATH))
             .map(|t| Bindings::parse(&t))
             .unwrap_or_default()
     }
 
     /// On the web build there is no filesystem; bindings last the session.
     pub fn save(&self) {
-        let _ = std::fs::write(PATH, self.to_text());
+        let _ = std::fs::write(crate::paths::save(PATH), self.to_text());
     }
 
     fn parse(text: &str) -> Bindings {

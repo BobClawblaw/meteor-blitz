@@ -11,7 +11,7 @@ pub struct Progress {
 impl Progress {
     pub fn load() -> Progress {
         let mut p = Progress { best: 0, unlocked: 0 };
-        let Ok(text) = std::fs::read_to_string(SAVE_PATH) else {
+        let Ok(text) = std::fs::read_to_string(crate::paths::save(SAVE_PATH)) else {
             return p;
         };
         for line in text.lines() {
@@ -31,6 +31,6 @@ impl Progress {
     /// silently does nothing and progress lasts for the session only.
     #[allow(dead_code)]
     pub fn save(&self) {
-        let _ = std::fs::write(SAVE_PATH, format!("best={}\nunlocked={}\n", self.best, self.unlocked));
+        let _ = std::fs::write(crate::paths::save(SAVE_PATH), format!("best={}\nunlocked={}\n", self.best, self.unlocked));
     }
 }
