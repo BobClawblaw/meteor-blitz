@@ -158,6 +158,24 @@ void main() {
 const BLOOM_STRENGTH: f32 = 1.25;
 const BLOOM_DOWNSAMPLE: u32 = 4;
 
+/// The affine map from clip space back to the landscape canvas on the play
+/// plane (z = 0), as rows of a 2x2 matrix and an offset.
+fn ndc_to_canvas(view_w: f32) -> (Vec4, Vec2) {
+    let m = camera_matrix(view_w);
+    let ndc = |x: f32, y: f32| {
+        let h = m * vec4(x, y, 0.0, 1.0);
+        vec2(h.x / h.w, h.y / h.w)
+    };
+    let o = ndc(0.0, 0.0);
+    let ex = ndc(1.0, 0.0) - o;
+    let ey = ndc(0.0, 1.0) - o;
+    // [ex ey] maps canvas to ndc; invert it.
+    let inv = Mat2::from_cols(ex, ey).inverse();
+    let row0 = vec2(inv.x_axis.x, inv.y_axis.x);
+    let row1 = vec2(inv.x_axis.y, inv.y_axis.y);
+    (vec4(row0.x, row0.y, row1.x, row1.y), -(inv * o))
+}
+
 /// Draws a full target from texture space: (0,0)-(1,1) to the whole pass.
 struct PassCamera {
     render_pass: macroquad::texture::RenderPass,
@@ -242,19 +260,94 @@ impl Bloom {
 
 /// Texture unit 1 was GL_DECAL: the decal layer over the base by the
 /// decal's alpha, alpha from the base. Both layers repeat and scroll.
+///
+/// Port addition: with Lit on, the ground takes relief from its normal map
+/// under a fixed key light, and up to MAX_LIGHTS point lights (explosions,
+/// shots, the ship) light it. `canvas` is the fragment's position on the
+/// landscape canvas, from the vertex shader.
 const BACKDROP_FRAGMENT: &str = r#"#version 100
 precision mediump float;
 varying lowp vec4 color;
 varying lowp vec2 uv;
+varying highp vec2 canvas;
 uniform sampler2D Texture;
 uniform sampler2D Decal;
+uniform sampler2D Normal;
 uniform vec2 Scroll0;
 uniform vec2 Scroll1;
+uniform float Lit;
+uniform vec3 LightPos[12];
+uniform vec3 LightColor[12];
 void main() {
     vec4 base = texture2D(Texture, fract(uv + Scroll0));
     vec4 decal = texture2D(Decal, fract(uv + Scroll1));
-    gl_FragColor = vec4(mix(base.rgb, decal.rgb, decal.a) * color.rgb, base.a * color.a);
+    vec3 surface = mix(base.rgb, decal.rgb, decal.a);
+    if (Lit > 0.5) {
+        // Texture u runs with canvas x and v against canvas y.
+        vec3 t = texture2D(Normal, fract(uv + Scroll0)).xyz * 2.0 - 1.0;
+        vec3 n = normalize(vec3(t.x, -t.y, t.z));
+        // The key light, from the upper left; flat ground stays as drawn.
+        vec3 key = normalize(vec3(-0.45, -0.55, 0.7));
+        float relief = clamp(dot(n, key) / key.z, 0.55, 1.45);
+        // Clouds float above the relief.
+        relief = mix(relief, 1.0, decal.a * 0.8);
+        vec3 light = vec3(0.0);
+        for (int i = 0; i < 12; i++) {
+            vec2 d = LightPos[i].xy - canvas;
+            float r = LightPos[i].z;
+            float fall = clamp(1.0 - length(d) / max(r, 1.0), 0.0, 1.0);
+            vec3 l = normalize(vec3(d, 24.0));
+            light += LightColor[i] * fall * fall * (0.35 + 0.65 * max(dot(n, l), 0.0));
+        }
+        surface = surface * relief + surface * light * 3.0 + light * 0.25;
+    }
+    gl_FragColor = vec4(surface * color.rgb, base.a * color.a);
 }"#;
+
+/// The backdrop's vertex shader: the default one, plus the vertex's place
+/// on the landscape canvas (NdcToCanvas maps clip space back to it).
+const BACKDROP_VERTEX: &str = r#"#version 100
+attribute vec3 position;
+attribute vec2 texcoord;
+attribute vec4 color0;
+varying lowp vec2 uv;
+varying lowp vec4 color;
+varying highp vec2 canvas;
+uniform mat4 Model;
+uniform mat4 Projection;
+uniform vec4 NdcToCanvas;
+uniform vec2 NdcOffset;
+void main() {
+    gl_Position = Projection * Model * vec4(position, 1);
+    vec2 ndc = gl_Position.xy / gl_Position.w;
+    canvas = vec2(dot(NdcToCanvas.xy, ndc), dot(NdcToCanvas.zw, ndc)) + NdcOffset;
+    color = color0 / 255.0;
+    uv = texcoord;
+}"#;
+
+/// Sprites lit by nearby lights (port addition): the vertex colour's rgb is
+/// 0.5 for unlit and up to 1 for twice as bright.
+const LIT_FRAGMENT: &str = r#"#version 100
+precision mediump float;
+varying lowp vec4 color;
+varying lowp vec2 uv;
+uniform sampler2D Texture;
+void main() {
+    vec4 t = texture2D(Texture, uv);
+    gl_FragColor = vec4(t.rgb * color.rgb * 2.0, t.a * color.a);
+}"#;
+
+/// Point lights the ground shader takes at most.
+pub const MAX_LIGHTS: usize = 12;
+
+/// A point light on the landscape canvas: position, reach and colour
+/// (already scaled by its intensity).
+#[derive(Clone, Copy, Debug)]
+pub struct Light {
+    pub pos: Vec2,
+    pub radius: f32,
+    pub color: Vec3,
+}
 
 fn pipeline(dst: BlendFactor) -> PipelineParams {
     let blend = BlendState::new(
@@ -391,6 +484,13 @@ pub struct Canvas {
     backdrop_material: Material,
     additive: Material,
     flash: Material,
+    lit: Material,
+    /// Sprites are drawn with `lit` (Canvas::lighting).
+    lighting_on: Cell<bool>,
+    /// The ground's lights and normal map for the next `draw_backdrop`.
+    lights: RefCell<Vec<Light>>,
+    normal: RefCell<Option<Texture2D>>,
+    flat_normal: Texture2D,
 }
 
 /// Resolution of the offscreen canvas relative to the original 480x320
@@ -429,19 +529,35 @@ impl Canvas {
         let target = new_target(size);
         let backdrop_material = load_material(
             ShaderSource::Glsl {
-                vertex: DEFAULT_VERTEX,
+                vertex: BACKDROP_VERTEX,
                 fragment: BACKDROP_FRAGMENT,
             },
             MaterialParams {
                 pipeline_params: pipeline(BlendFactor::OneMinusValue(BlendValue::SourceAlpha)),
-                textures: vec!["Decal".to_owned()],
+                textures: vec!["Decal".to_owned(), "Normal".to_owned()],
                 uniforms: vec![
                     UniformDesc::new("Scroll0", UniformType::Float2),
                     UniformDesc::new("Scroll1", UniformType::Float2),
+                    UniformDesc::new("Lit", UniformType::Float1),
+                    UniformDesc::new("NdcToCanvas", UniformType::Float4),
+                    UniformDesc::new("NdcOffset", UniformType::Float2),
+                    UniformDesc::new("LightPos", UniformType::Float3).array(MAX_LIGHTS),
+                    UniformDesc::new("LightColor", UniformType::Float3).array(MAX_LIGHTS),
                 ],
             },
         )
         .expect("backdrop shader");
+        let lit = load_material(
+            ShaderSource::Glsl {
+                vertex: DEFAULT_VERTEX,
+                fragment: LIT_FRAGMENT,
+            },
+            MaterialParams {
+                pipeline_params: pipeline(BlendFactor::OneMinusValue(BlendValue::SourceAlpha)),
+                ..Default::default()
+            },
+        )
+        .expect("lit shader");
         let additive = load_material(
             ShaderSource::Glsl {
                 vertex: DEFAULT_VERTEX,
@@ -478,6 +594,11 @@ impl Canvas {
             backdrop_material,
             additive,
             flash,
+            lit,
+            lighting_on: Cell::new(false),
+            lights: RefCell::new(Vec::new()),
+            normal: RefCell::new(None),
+            flat_normal: Texture2D::from_rgba8(1, 1, &[128, 128, 255, 255]),
         }
     }
 
@@ -504,7 +625,29 @@ impl Canvas {
     pub fn flashing(&self, draw: impl FnOnce()) {
         gl_use_material(&self.flash);
         draw();
-        gl_use_default_material();
+        self.restore_material();
+    }
+
+    fn restore_material(&self) {
+        if self.lighting_on.get() {
+            gl_use_material(&self.lit);
+        } else {
+            gl_use_default_material();
+        }
+    }
+
+    /// Draws sprites with the lit material until turned off: their vertex
+    /// colour 0.5 is unlit, up to 1 twice as bright.
+    pub fn lighting(&self, on: bool) {
+        self.lighting_on.set(on);
+        self.restore_material();
+    }
+
+    /// Lights and normal map for the next game backdrop (None: unlit, as
+    /// the original).
+    pub fn set_ground_lighting(&self, normal: Option<&Texture2D>, lights: &[Light]) {
+        *self.normal.borrow_mut() = normal.cloned();
+        *self.lights.borrow_mut() = lights.iter().take(MAX_LIGHTS).copied().collect();
     }
 
     /// Where the landscape view lands in the window: the largest fit,
@@ -645,6 +788,23 @@ impl Canvas {
             texture: Some(base.clone()),
         };
         self.backdrop_material.set_texture("Decal", decal.clone());
+        // Port addition: ground lighting for the play plane.
+        let normal = if menu { None } else { self.normal.borrow().clone() };
+        self.backdrop_material.set_uniform("Lit", if normal.is_some() { 1.0f32 } else { 0.0 });
+        self.backdrop_material
+            .set_texture("Normal", normal.unwrap_or_else(|| self.flat_normal.clone()));
+        let (m, offset) = ndc_to_canvas(view_w());
+        self.backdrop_material.set_uniform("NdcToCanvas", m);
+        self.backdrop_material.set_uniform("NdcOffset", offset);
+        let lights = self.lights.borrow();
+        let mut pos = [Vec3::ZERO; MAX_LIGHTS];
+        let mut color = [Vec3::ZERO; MAX_LIGHTS];
+        for (i, l) in lights.iter().enumerate() {
+            pos[i] = vec3(l.pos.x, l.pos.y, l.radius);
+            color[i] = l.color;
+        }
+        self.backdrop_material.set_uniform_array("LightPos", &pos);
+        self.backdrop_material.set_uniform_array("LightColor", &color);
         // Background::draw scrolls the base layer by 2/1024 and the cloud
         // decal by 3/1024 per unit. In game the base is set to keep pace
         // with the play plane instead (see `glued_scroll`); clouds keep
@@ -849,6 +1009,21 @@ mod backdrop_tests {
         };
         // In clip units; scale to canvas units of this view.
         (p(c + vec3(1.0, 0.0, 0.0)) - p(c)).length() * view_w / 2.0
+    }
+
+    /// The shader's clip-to-canvas map undoes the camera on the play plane.
+    #[test]
+    fn ndc_maps_back_to_the_canvas() {
+        for w in [480.0, 569.0, 768.0] {
+            let (m, o) = ndc_to_canvas(w);
+            let cam = camera_matrix(w);
+            for p in [vec2(0.0, 0.0), vec2(240.0, 160.0), vec2(-40.0, 300.0), vec2(500.0, 12.0)] {
+                let h = cam * vec4(p.x, p.y, 0.0, 1.0);
+                let ndc = vec2(h.x / h.w, h.y / h.w);
+                let back = vec2(m.x * ndc.x + m.y * ndc.y, m.z * ndc.x + m.w * ndc.y) + o;
+                assert!(back.distance(p) < 1e-2, "{} {:?} {:?}", w, p, back);
+            }
+        }
     }
 
     /// A wider view keeps the original's play-plane scale (1.0017 canvas

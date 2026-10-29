@@ -519,11 +519,17 @@ async fn load_play_assets() -> PlayAssets {
         ("space4deep", "fogRed"),
     ];
     let mut backdrops = Vec::new();
+    let mut normals = Vec::new();
     for (base, decal) in pairs {
         backdrops.push((
             load_texture_file(base).await,
             load_texture_file(decal).await,
         ));
+        // tools/normalmaps.py: the base's relief, for the lit ground.
+        let path = art_path(&format!("normals/{}.png", base), &format!("assets/normals/{}.png", base));
+        let normal = load_texture(&path).await.unwrap();
+        normal.set_filter(FilterMode::Linear);
+        normals.push(normal);
     }
     let font_dat = art_path("ngage.dat", "original/app/ngage.dat");
     let font = Font::new(
@@ -582,6 +588,7 @@ async fn load_play_assets() -> PlayAssets {
             .await
             .expect("systems.dat"),
         backdrops,
+        normals,
     }
 }
 
@@ -998,6 +1005,7 @@ async fn main() {
                     }
                 } else if let Some(g) = game.as_mut() {
                     g.set_shake_scale(settings.shake);
+                    g.fx = settings.visual_fx && std::env::var_os("MB_FX_OFF").is_none();
                     g.update(dt);
                     for id in g.sounds.drain(..) {
                         play_effect(id, settings.effects);

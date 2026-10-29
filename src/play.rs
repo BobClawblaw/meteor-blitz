@@ -18,7 +18,7 @@ use crate::bindings::{self, Action};
 use crate::boss::{self, BossState, Piece};
 use crate::depot::{self, Depot};
 use crate::enemies::{wrap_near, Element, Event, Field, Rock, Script, Weapon};
-use crate::gfx::{draw_atlas_sprite, draw_quad, draw_sprite, tex_size, Canvas};
+use crate::gfx::{draw_atlas_sprite, draw_quad, draw_sprite, tex_size, Canvas, Light, CANVAS_H, CANVAS_W, MAX_LIGHTS};
 use crate::gravity;
 use crate::hud::{self, HudAssets, HudValues, Show};
 use crate::pad;
@@ -214,6 +214,8 @@ pub struct PlayAssets {
     pub power_labels: [Texture2D; 5],
     /// Base and decal planet textures per world (0-5), then survival.
     pub backdrops: Vec<(Texture2D, Texture2D)>,
+    /// Normal maps of the base textures, same order (tools/normalmaps.py).
+    pub normals: Vec<Texture2D>,
 }
 
 
@@ -717,7 +719,60 @@ pub struct Play {
     /// so 120/144 Hz output moves smoothly (port addition).
     prev: Snapshot,
     blend: f32,
+    /// Options > Lighting and effects (port addition): lit ground and
+    /// sprites, shockwaves, scorch marks, grading, ship effects.
+    pub fx: bool,
+    /// Lights from explosions and hits, fading out.
+    glows: Vec<Glow>,
+    /// This frame's lights on the canvas, for tinting sprites.
+    frame_lights: std::cell::RefCell<Vec<Light>>,
 }
+
+/// The light an event leaves (port addition): position, colour, reach and
+/// how long it fades.
+fn event_light(event: &Event) -> Option<(Vec2, Vec3, f32, f32)> {
+    let element = |e: &Element| match e {
+        Element::Normal => ROCK_LIGHT,
+        Element::Ice => ICE_LIGHT,
+        Element::Fire => FIRE_LIGHT,
+    };
+    Some(match event {
+        Event::RockDestroyed { pos, element: e, .. } => (*pos, element(e), 120.0, 0.45),
+        Event::RockHit { pos, element: e } => (*pos, element(e) * 0.5, 50.0, 0.12),
+        Event::MineHit { pos, .. } => (*pos, FIRE_LIGHT * 0.5, 50.0, 0.12),
+        Event::LobberDestroyed { pos, .. }
+        | Event::SeekerDestroyed { pos, .. }
+        | Event::TowerDestroyed { pos, .. }
+        | Event::ArrowDestroyed { pos, .. }
+        | Event::SnakeDestroyed { pos, .. }
+        | Event::ShyGuyDestroyed { pos, .. }
+        | Event::MineDestroyed { pos, .. } => (*pos, FIRE_LIGHT, 140.0, 0.5),
+        Event::SegmentDestroyed { pos, .. } | Event::PieceDestroyed { pos, .. } => {
+            (*pos, FIRE_LIGHT * 0.7, 80.0, 0.3)
+        }
+        Event::DepotDestroyed { pos, .. } => (*pos, WHITE_LIGHT, 180.0, 0.6),
+        Event::BossDying { pos } => (*pos, vec3(1.0, 0.5, 1.0), 260.0, 1.2),
+        Event::BossDead { pos, .. } => (*pos, WHITE_LIGHT, 380.0, 1.0),
+        Event::GravityBurst { pos } => (*pos, ICE_LIGHT, 110.0, 0.4),
+        _ => return None,
+    })
+}
+
+/// A light left by an explosion or hit, in world coordinates.
+struct Glow {
+    pos: Vec2,
+    color: Vec3,
+    radius: f32,
+    life: f32,
+    max: f32,
+}
+
+/// Light colours: fire, ice, rock dust, the ship's green, white heat.
+const FIRE_LIGHT: Vec3 = vec3(1.0, 0.55, 0.2);
+const ICE_LIGHT: Vec3 = vec3(0.45, 0.75, 1.0);
+const ROCK_LIGHT: Vec3 = vec3(1.0, 0.75, 0.45);
+const SHIP_LIGHT: Vec3 = vec3(0.35, 1.0, 0.45);
+const WHITE_LIGHT: Vec3 = vec3(1.0, 0.95, 0.85);
 
 /// Where everything stood at the start of a step. A list whose length
 /// changed in the step (a spawn or a kill) is drawn unblended that frame.
@@ -812,6 +867,9 @@ impl Play {
             tutorial: None,
             prev: Snapshot::default(),
             blend: 1.0,
+            fx: true,
+            glows: Vec::new(),
+            frame_lights: std::cell::RefCell::new(Vec::new()),
         }
     }
 
@@ -1026,6 +1084,66 @@ impl Play {
         self.to_screen(self.blended(prev, len, i, cur))
     }
 
+    /// A light that fades out over `seconds`.
+    fn glow(&mut self, pos: Vec2, color: Vec3, radius: f32, seconds: f32) {
+        if self.glows.len() < 64 {
+            self.glows.push(Glow { pos, color, radius, life: seconds, max: seconds });
+        }
+    }
+
+    /// The frame's strongest lights on the canvas: fading explosion glows,
+    /// then shots and the ship.
+    fn collect_lights(&self) -> Vec<Light> {
+        let mut lights: Vec<Light> = Vec::new();
+        let edge = crate::gfx::edge();
+        let mut add = |pos: Vec2, radius: f32, color: Vec3| {
+            let on_screen = pos.x > -edge - radius
+                && pos.x < CANVAS_W + edge + radius
+                && pos.y > -radius
+                && pos.y < CANVAS_H + radius;
+            if on_screen {
+                lights.push(Light { pos, radius, color });
+            }
+        };
+        for g in &self.glows {
+            let t = g.life / g.max;
+            add(self.to_screen(g.pos), g.radius * (0.6 + 0.4 * t), g.color * t * t);
+        }
+        // Shots: every few, so a stream reads as a moving light.
+        for (i, b) in self.ship.bullets.iter().enumerate() {
+            let (every, radius, color) = match b.weapon {
+                Weapon::Fire => (3, 90.0, FIRE_LIGHT * 0.9),
+                Weapon::Laser => (2, 70.0, ICE_LIGHT * 0.8),
+                Weapon::Cannon => (3, 50.0, SHIP_LIGHT * 0.5),
+            };
+            if i % every == 0 {
+                add(self.to_screen(self.bullet_pos(b)), radius, color);
+            }
+        }
+        if !matches!(self.ship.life, Life::Dead(_)) {
+            let boost = if self.ship.invincible > 0.0 { 1.5 } else { 1.0 };
+            add(self.to_screen(self.view_ship()), 60.0 * boost, SHIP_LIGHT * 0.3 * boost);
+        }
+        lights.sort_by(|a, b| (b.color.length() * b.radius).total_cmp(&(a.color.length() * a.radius)));
+        lights.truncate(MAX_LIGHTS);
+        lights
+    }
+
+    /// A sprite's vertex colour: lit by the frame's lights when effects
+    /// are on (the lit material reads 0.5 as unlit), else plain white.
+    fn tint(&self, at: Vec2, alpha: f32) -> Color {
+        if !self.fx {
+            return Color::new(1.0, 1.0, 1.0, alpha);
+        }
+        let mut light = Vec3::ZERO;
+        for l in self.frame_lights.borrow().iter() {
+            let fall = (1.0 - l.pos.distance(at) / l.radius.max(1.0)).clamp(0.0, 1.0);
+            light += l.color * fall * fall;
+        }
+        let c = (Vec3::splat(0.5) + light * 0.5).min(Vec3::ONE);
+        Color::new(c.x, c.y, c.z, alpha)
+    }
+
     fn snapshot(&self) -> Snapshot {
         let f = &self.field;
         Snapshot {
@@ -1090,6 +1208,10 @@ impl Play {
             }
         }
         self.effects.update(dt);
+        self.glows.retain_mut(|g| {
+            g.life -= dt;
+            g.life > 0.0
+        });
         self.elapsed += dt;
     }
 
@@ -1350,6 +1472,7 @@ impl Play {
         self.camera.shake(0.75, 7.5);
         self.script.delay();
         self.sounds.push(SOUND_SHIP_DESTROYED);
+        self.glow(self.ship.pos, SHIP_LIGHT, 200.0, 0.7);
         // Ship::setState(4): the multiplier starts over from this score.
         self.multiplier = 1;
         self.multiplier_base = self.score;
@@ -1475,6 +1598,7 @@ impl Play {
         }
         self.bombs -= 1;
         self.sounds.push(SOUND_BOMB);
+        self.glow(self.ship.pos, WHITE_LIGHT, 420.0, 0.8);
         self.field.bomb();
         self.effects.flash(Color::new(0.8, 0.8, 0.8, 1.0));
         self.camera.shake(0.75, 7.5);
@@ -1515,6 +1639,9 @@ impl Play {
     fn handle_events(&mut self) {
         let events: Vec<Event> = self.field.events.drain(..).collect();
         for event in events {
+            if let Some((pos, color, radius, seconds)) = event_light(&event) {
+                self.glow(pos, color, radius, seconds);
+            }
             match event {
                 Event::RockDestroyed {
                     pos,
@@ -2182,7 +2309,7 @@ impl Play {
         let n = self.field.pieces.len();
         for (i, p) in self.field.pieces.iter().enumerate() {
             let s = self.at(&self.prev.pieces, n, i, p.pos);
-            let color = Color::new(1.0, 1.0, 1.0, p.alpha);
+            let color = self.tint(s, p.alpha);
             let draw = || draw_sprite(&assets.boss_piece, s.x, s.y, p.angle, self.z + p.z, color);
             if p.flash {
                 canvas.flashing(draw);
@@ -2192,7 +2319,7 @@ impl Play {
         }
         let Some(b) = &self.field.boss else { return };
         let s = self.at(&self.prev.boss, 1, 0, b.pos);
-        let color = Color::new(1.0, 1.0, 1.0, b.alpha);
+        let color = self.tint(s, b.alpha);
         let tex = &assets.boss[b.frame % assets.boss.len()];
         let draw = || draw_sprite(tex, s.x, s.y, b.angle, self.z + b.z, color);
         if b.flash {
@@ -2216,7 +2343,7 @@ impl Play {
 
     fn draw_depot(&self, canvas: &Canvas, assets: &PlayAssets, d: &Depot, i: usize) {
         let p = self.at(&self.prev.depots, self.field.depots.len(), i, d.pos);
-        let color = Color::new(1.0, 1.0, 1.0, d.alpha);
+        let color = self.tint(p, d.alpha);
         let draw = || draw_sprite(&assets.depot, p.x, p.y, d.angle, self.z + d.z, color);
         if d.flash {
             canvas.flashing(draw);
@@ -2228,7 +2355,7 @@ impl Play {
     fn draw_rock(&self, art: &RockArt, rock: &Rock, i: usize) {
         let p = self.at(&self.prev.rocks, self.field.rocks.len(), i, rock.pos);
         let z = self.z + rock.z;
-        let color = Color::new(1.0, 1.0, 1.0, rock.alpha);
+        let color = self.tint(p, rock.alpha);
         match rock.size {
             0 => draw_atlas_sprite(&art.small, 4, 4, rock.frame, p.x, p.y, rock.angle, z, color),
             1 => draw_sprite(
@@ -2273,8 +2400,13 @@ impl Play {
         } else {
             self.scroll
         };
+        let lights = if self.fx { self.collect_lights() } else { Vec::new() };
+        let normal = assets.normals.get(self.world.min(assets.normals.len().saturating_sub(1)));
+        canvas.set_ground_lighting(normal.filter(|_| self.fx), &lights);
+        *self.frame_lights.borrow_mut() = lights;
         canvas.draw_backdrop(false, base, decal, origin, scroll, 1.0);
         canvas.set_glowing(true);
+        canvas.lighting(self.fx);
         // EnemyManager::sharedDraw: rings first, under everything else.
         let rings = &self.pickups.rings;
         for (i, r) in rings.iter().enumerate().filter(|(_, r)| r.power.is_none()) {
@@ -2287,14 +2419,14 @@ impl Play {
                 c.y,
                 r.angle,
                 self.z,
-                Color::new(1.0, 1.0, 1.0, r.alpha),
+                self.tint(p, r.alpha),
             );
         }
         // Power-ups, then their labels (BigBonus::draw).
         for (i, r) in rings.iter().enumerate() {
             let Some(power) = r.power else { continue };
             let p = self.at(&self.prev.rings, rings.len(), i, r.pos);
-            let color = Color::new(1.0, 1.0, 1.0, r.alpha);
+            let color = self.tint(p, r.alpha);
             draw_atlas_sprite(
                 &assets.power,
                 5,
@@ -2327,7 +2459,7 @@ impl Play {
         let n = self.field.mines.len();
         for (i, m) in self.field.mines.iter().enumerate() {
             let s = self.at(&self.prev.mines, n, i, m.pos);
-            let color = Color::new(1.0, 1.0, 1.0, m.alpha);
+            let color = self.tint(s, m.alpha);
             let draw = || draw_sprite(&assets.mine, s.x, s.y, m.angle, self.z + m.z, color);
             if m.flash {
                 canvas.flashing(draw);
@@ -2356,7 +2488,7 @@ impl Play {
             let a = t.angle.to_radians();
             let off = vec2(-a.sin(), a.cos()) * tower::SPRITE_OFFSET;
             let c = s + off;
-            let color = Color::new(1.0, 1.0, 1.0, t.alpha);
+            let color = self.tint(c, t.alpha);
             let draw = || draw_sprite(&assets.tower, c.x, c.y, t.angle, self.z + t.z, color);
             if t.flash {
                 canvas.flashing(draw);
@@ -2367,7 +2499,7 @@ impl Play {
         let n = self.field.lobbers.len();
         for (i, l) in self.field.lobbers.iter().enumerate() {
             let s = self.at(&self.prev.lobbers, n, i, l.pos);
-            let color = Color::new(1.0, 1.0, 1.0, l.alpha);
+            let color = self.tint(s, l.alpha);
             let draw = || draw_sprite(&assets.lobber, s.x, s.y, l.angle, self.z + l.z, color);
             if l.flash {
                 canvas.flashing(draw);
@@ -2375,7 +2507,7 @@ impl Play {
                 draw();
             }
             if let Some(b) = &l.ball {
-                let color = Color::new(1.0, 1.0, 1.0, b.alpha);
+                let color = self.tint(s, b.alpha);
                 let draw =
                     || draw_sprite(&assets.boss_piece, s.x, s.y, b.angle, self.z + b.z, color);
                 if b.flash {
@@ -2388,7 +2520,7 @@ impl Play {
         let n = self.field.seekers.len();
         for (i, k) in self.field.seekers.iter().enumerate() {
             let s = self.at(&self.prev.seekers, n, i, k.pos);
-            let color = Color::new(1.0, 1.0, 1.0, k.alpha);
+            let color = self.tint(s, k.alpha);
             let draw = || draw_sprite(&assets.seeker, s.x, s.y, k.angle, self.z + k.z, color);
             if k.flash {
                 canvas.flashing(draw);
@@ -2399,7 +2531,7 @@ impl Play {
         let n = self.field.arrows.len();
         for (i, a) in self.field.arrows.iter().enumerate() {
             let s = self.at(&self.prev.arrows, n, i, a.pos);
-            let color = Color::new(1.0, 1.0, 1.0, a.alpha);
+            let color = self.tint(s, a.alpha);
             let draw = || draw_sprite(&assets.arrow, s.x, s.y, a.angle, self.z + a.z, color);
             if a.flash {
                 canvas.flashing(draw);
@@ -2413,7 +2545,7 @@ impl Play {
         for (i, sn) in self.field.snakes.iter().enumerate() {
             for (j, seg) in sn.segments.iter().enumerate().rev() {
                 let s = self.at(&self.prev.segments, segs, first + j, seg.pos);
-                let color = Color::new(1.0, 1.0, 1.0, seg.alpha);
+                let color = self.tint(s, seg.alpha);
                 let draw = || {
                     draw_sprite(
                         &assets.snake_body,
@@ -2432,7 +2564,7 @@ impl Play {
             }
             first += sn.segments.len();
             let s = self.at(&self.prev.snakes, n, i, sn.pos);
-            let color = Color::new(1.0, 1.0, 1.0, sn.alpha);
+            let color = self.tint(s, sn.alpha);
             let draw = || draw_sprite(&assets.snake_head, s.x, s.y, sn.angle, self.z + sn.z, color);
             if sn.flash {
                 canvas.flashing(draw);
@@ -2443,7 +2575,7 @@ impl Play {
         let n = self.field.shy_guys.len();
         for (i, g) in self.field.shy_guys.iter().enumerate() {
             let s = self.at(&self.prev.shy_guys, n, i, g.pos);
-            let color = Color::new(1.0, 1.0, 1.0, g.alpha);
+            let color = self.tint(s, g.alpha);
             let draw = || {
                 draw_atlas_sprite(
                     &assets.shy_guy,
@@ -2464,6 +2596,7 @@ impl Play {
             }
         }
         self.draw_boss(canvas, assets);
+        canvas.lighting(false);
 
         // Cannon fire: green additive point sprites trailing each bullet.
         let mut points = Vec::new();

@@ -26,6 +26,7 @@ enum Row {
     Fullscreen,
     Widescreen,
     Bloom,
+    VisualFx,
     FrameRate,
     Music,
     Effects,
@@ -39,10 +40,11 @@ enum Row {
     Reset,
 }
 
-const MAIN_ROWS: [Row; 10] = [
+const MAIN_ROWS: [Row; 11] = [
     Row::Fullscreen,
     Row::Widescreen,
     Row::Bloom,
+    Row::VisualFx,
     Row::FrameRate,
     Row::Music,
     Row::Effects,
@@ -54,8 +56,8 @@ const MAIN_ROWS: [Row; 10] = [
 
 /// Layout, in canvas units.
 const TITLE_Y: f32 = 10.0;
-const MAIN_TOP: f32 = 44.0;
-const MAIN_PITCH: f32 = 25.0;
+const MAIN_TOP: f32 = 40.0;
+const MAIN_PITCH: f32 = 23.0;
 const BIND_TOP: f32 = 52.0;
 const BIND_PITCH: f32 = 20.0;
 const ROW_SCALE: f32 = 0.6;
@@ -216,6 +218,7 @@ impl Options {
             }
             Row::Widescreen => settings.widescreen = !settings.widescreen,
             Row::Bloom => settings.bloom = !settings.bloom,
+            Row::VisualFx => settings.visual_fx = !settings.visual_fx,
             Row::FrameRate => settings.fps = cycle(settings.fps, true),
             Row::Tutorial => settings.tutorial = !settings.tutorial,
             Row::Music | Row::Effects | Row::Shake => return None,
@@ -280,6 +283,7 @@ impl Options {
                 Row::Fullscreen => "Fullscreen",
                 Row::Widescreen => "Widescreen",
                 Row::Bloom => "Bloom",
+                Row::VisualFx => "Lighting and effects",
                 Row::FrameRate => "Frame rate cap",
                 Row::Music => "Music",
                 Row::Effects => "Sound effects",
@@ -295,6 +299,7 @@ impl Options {
                 Row::Fullscreen => on_off(font, settings.fullscreen, y, white),
                 Row::Widescreen => on_off(font, settings.widescreen, y, white),
                 Row::Bloom => on_off(font, settings.bloom, y, white),
+                Row::VisualFx => on_off(font, settings.visual_fx, y, white),
                 Row::FrameRate => font.text(&settings.fps.to_string(), VALUE_X, y, ROW_SCALE, Align::Right, white),
                 Row::Tutorial => on_off(font, settings.tutorial, y, white),
                 Row::Music | Row::Effects | Row::Shake => {

@@ -85,6 +85,9 @@ pub struct Settings {
     /// Port addition: the frame-rate cap (60, 120 or 144); the simulation
     /// stays at 60 Hz and frames between steps are blended.
     pub fps: u32,
+    /// Port addition: lit ground and sprites, shockwaves, scorch marks,
+    /// colour grading and ship effects.
+    pub visual_fx: bool,
 }
 
 impl Default for Settings {
@@ -105,6 +108,7 @@ impl Default for Settings {
             bloom: true,
             widescreen: true,
             fps: 60,
+            visual_fx: true,
         }
     }
 }
@@ -158,6 +162,7 @@ impl Settings {
                 "fullscreen" => s.fullscreen = parse_bool(value, s.fullscreen),
                 "bloom" => s.bloom = parse_bool(value, s.bloom),
                 "widescreen" => s.widescreen = parse_bool(value, s.widescreen),
+                "visual_fx" => s.visual_fx = parse_bool(value, s.visual_fx),
                 "fps" => s.fps = value.parse().ok().filter(|f| FPS_CAPS.contains(f)).unwrap_or(s.fps),
                 _ => {}
             }
@@ -167,7 +172,7 @@ impl Settings {
 
     pub fn to_text(&self) -> String {
         format!(
-            "music={}\neffects={}\nshake={}\nshake_control={}\nboost_control={}\nbomb_button={}\nauto_pause={}\nauto_gravity={}\nauto_upgrade={}\nflip={}\ntutorial={}\nfullscreen={}\nbloom={}\nwidescreen={}\nfps={}\n",
+            "music={}\neffects={}\nshake={}\nshake_control={}\nboost_control={}\nbomb_button={}\nauto_pause={}\nauto_gravity={}\nauto_upgrade={}\nflip={}\ntutorial={}\nfullscreen={}\nbloom={}\nwidescreen={}\nfps={}\nvisual_fx={}\n",
             self.music,
             self.effects,
             self.shake,
@@ -183,6 +188,7 @@ impl Settings {
             self.bloom as u8,
             self.widescreen as u8,
             self.fps,
+            self.visual_fx as u8,
         )
     }
 }
@@ -1158,6 +1164,7 @@ mod tests {
             bloom: false,
             widescreen: false,
             fps: 144,
+            visual_fx: false,
         };
         assert_eq!(Settings::parse(&s.to_text()), s);
     }
