@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Meteor Blitz</title>
+    <style>
+      html, body { margin: 0; height: 100%; overflow: hidden; background: #05060a; }
+      canvas { display: block; width: 100vw; height: 100vh; outline: none; }
+    </style>
+  </head>
+  <body>
+    <canvas id="glcanvas" width="1280" height="720" tabindex="0"></canvas>
+    <script src="./web/mq_js_bundle.js"></script>
+    <script>
+      // miniquad reads keys from canvas.onkeydown, so the canvas must hold focus.
+      const gameCanvas = document.getElementById("glcanvas");
+      gameCanvas.focus();
+      gameCanvas.addEventListener("mousedown", () => gameCanvas.focus());
+      // Keys pressed while the canvas is not focused still reach the game.
+      for (const type of ["keydown", "keyup"]) {
+        window.addEventListener(type, (e) => {
+          if (document.activeElement !== gameCanvas && gameCanvas["on" + type]) {
+            gameCanvas["on" + type](e);
+          }
+        });
+      }
+      // Game controllers: the game reads the first connected pad through the
+      // Gamepad API each frame (src/pad.rs): 4 axes, then 17 button values
+      // in the standard layout. Returns 0 when no pad is connected.
+      miniquad_add_plugin({
+        name: "meteor_blitz_gamepad",
+        version: 1,
+        register_plugin: function (importObject) {
+          importObject.env.mb_gamepad_read = function (ptr) {
+            const pads = navigator.getGamepads ? navigator.getGamepads() : [];
+            let pad = null;
+            for (const p of pads) {
+              if (p && p.connected && (pad === null || p.mapping === "standard")) pad = p;
+            }
+            if (pad === null) return 0;
+            const out = new Float32Array(wasm_memory.buffer, ptr, 21);
+            for (let i = 0; i < 4; i++) out[i] = pad.axes[i] || 0;
+            for (let i = 0; i < 17; i++) out[4 + i] = pad.buttons[i] ? pad.buttons[i].value : 0;
+            return 1;
+          };
+        },
+      });
+      load("./web/meteor-blitz.wasm");
+    </script>
+  </body>
+</html>

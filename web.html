@@ -2,30 +2,11 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Meteor Blitz</title>
-    <style>
-      html, body { margin: 0; height: 100%; overflow: hidden; background: #05060a; }
-      canvas { display: block; width: 100vw; height: 100vh; outline: none; }
-    </style>
+    <!-- The game page is index.html (served at the site root on GitHub Pages). -->
+    <meta http-equiv="refresh" content="0; url=./" />
   </head>
   <body>
-    <canvas id="glcanvas" width="1280" height="720" tabindex="0"></canvas>
-    <script src="./web/mq_js_bundle.js"></script>
-    <script>
-      // miniquad reads keys from canvas.onkeydown, so the canvas must hold focus.
-      const gameCanvas = document.getElementById("glcanvas");
-      gameCanvas.focus();
-      gameCanvas.addEventListener("mousedown", () => gameCanvas.focus());
-      // Keys pressed while the canvas is not focused still reach the game.
-      for (const type of ["keydown", "keyup"]) {
-        window.addEventListener(type, (e) => {
-          if (document.activeElement !== gameCanvas && gameCanvas["on" + type]) {
-            gameCanvas["on" + type](e);
-          }
-        });
-      }
-      load("./web/meteor-blitz.wasm");
-    </script>
+    <a href="./">Meteor Blitz</a>
   </body>
 </html>

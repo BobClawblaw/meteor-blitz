@@ -10,6 +10,12 @@
 // Starts its own headless Chrome with remote debugging, waits WAIT_MS of real
 // time (virtual time freezes the game's first frames), captures through the
 // DevTools Protocol, and exits. Set CHROME to override the browser path.
+//
+// MOCK_PAD=1 replaces navigator.getGamepads with a fake standard pad that
+// taps A every 2.5 s from 12 s in (after the page has loaded; that walks
+// Play > Arcade > World 1 > Stage 1.1 from the main menu) and holds the left
+// stick right from 25 s, to check the web build's controller path without a
+// real pad.
 import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -85,6 +91,22 @@ try {
   }
   await send("Page.enable");
   await send("Runtime.enable");
+  if (process.env.MOCK_PAD) {
+    await send("Page.addScriptToEvaluateOnNewDocument", { source: `
+      (() => {
+        const start = performance.now();
+        const button = (v) => ({ pressed: v > 0.5, touched: v > 0, value: v });
+        navigator.getGamepads = () => {
+          const t = performance.now() - start;
+          const buttons = Array.from({ length: 17 }, () => button(0));
+          // A for 150 ms every 2.5 s, from 12 s in, four times.
+          if (t > 12000 && t < 22000 && (t - 12000) % 2500 < 150) buttons[0] = button(1);
+          const axes = t > 25000 ? [1, 0, 0, 0] : [0, 0, 0, 0];
+          return [{ id: "mock", index: 0, connected: true, mapping: "standard", axes, buttons, timestamp: t }];
+        };
+      })();
+    ` });
+  }
   await send("Page.navigate", { url });
   await sleep(waitMs);
   for (const [cx, cy] of clicks) {

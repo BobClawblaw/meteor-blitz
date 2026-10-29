@@ -1,9 +1,8 @@
-//! Game controllers (Xbox and other standard pads) through gilrs, polled
-//! once per frame. The original was touch-only; this stands in for its
-//! two wheels and buttons. Not available in the web build.
-
-// The web build has no controller backend yet: the shared helpers sit idle.
-#![cfg_attr(target_arch = "wasm32", allow(dead_code))]
+//! Game controllers (Xbox and other standard pads), polled once per frame:
+//! Apple's GameController framework on macOS, gilrs on Windows and Linux,
+//! and the browser's Gamepad API on the web (through the page's
+//! `mb_gamepad_read`, index.html). The original was touch-only; this stands
+//! in for its two wheels and buttons.
 
 use macroquad::prelude::*;
 
@@ -123,6 +122,51 @@ mod raw {
     }
 }
 
+/// The web: the browser's Gamepad API, read by `mb_gamepad_read` in
+/// index.html, which writes the first connected pad's four axes and 17
+/// button values (the W3C "standard" layout, which is the Xbox layout).
+#[cfg(target_arch = "wasm32")]
+mod raw {
+    use super::*;
+
+    extern "C" {
+        fn mb_gamepad_read(out: *mut f32) -> i32;
+    }
+
+    const AXES: usize = 4;
+
+    pub fn read() -> Option<Raw> {
+        let mut v = [0f32; AXES + 17];
+        if unsafe { mb_gamepad_read(v.as_mut_ptr()) } == 0 {
+            return None;
+        }
+        let button = |i: usize| v[AXES + i];
+        let pairs = [
+            (Button::A, button(0) > 0.5),
+            (Button::B, button(1) > 0.5),
+            (Button::X, button(2) > 0.5),
+            (Button::Y, button(3) > 0.5),
+            (Button::LeftBumper, button(4) > 0.5),
+            (Button::RightBumper, button(5) > 0.5),
+            (Button::LeftTrigger, button(6) > TRIGGER_DOWN),
+            (Button::RightTrigger, button(7) > TRIGGER_DOWN),
+            (Button::View, button(8) > 0.5),
+            (Button::Start, button(9) > 0.5),
+            (Button::Up, button(12) > 0.5),
+            (Button::Down, button(13) > 0.5),
+            (Button::Left, button(14) > 0.5),
+            (Button::Right, button(15) > 0.5),
+        ];
+        Some(Raw {
+            name: "gamepad".to_owned(),
+            // The Gamepad API has y down; `stick` takes y up.
+            left: stick(v[0], -v[1]),
+            right: stick(v[2], -v[3]),
+            held: pairs.iter().filter(|(_, down)| *down).map(|(b, _)| *b).collect(),
+        })
+    }
+}
+
 /// Windows and Linux: gilrs.
 #[cfg(all(not(target_arch = "wasm32"), not(target_os = "macos")))]
 mod raw {
@@ -173,7 +217,6 @@ mod raw {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 mod backend {
     use super::*;
     use std::cell::{Cell, RefCell};
@@ -281,15 +324,6 @@ mod backend {
     }
 }
 
-#[cfg(target_arch = "wasm32")]
-mod backend {
-    use super::*;
-    pub fn poll() {}
-    pub(super) fn with<R>(f: impl FnOnce(&State) -> R) -> R {
-        f(&State::default())
-    }
-}
-
 /// Reads the controllers; call once at the start of each frame.
 pub fn poll() {
     backend::poll();
@@ -301,15 +335,9 @@ pub fn left() -> Vec2 {
 }
 
 /// Menu navigation from the left stick, edge-triggered and repeating while
-/// held. `None` on the web build, which has no pad backend.
-#[cfg(not(target_arch = "wasm32"))]
+/// held.
 pub fn nav(dt: f32) -> Option<Button> {
     backend::nav(dt)
-}
-
-#[cfg(target_arch = "wasm32")]
-pub fn nav(_dt: f32) -> Option<Button> {
-    None
 }
 
 /// Right stick, y down, length 0-1 (zero inside the dead zone).
