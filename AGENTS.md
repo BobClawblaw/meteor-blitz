@@ -2,7 +2,7 @@
 
 ## Ground rules
 
-- **No PII in commits or files.** Author identity is `BobClawblaw <BobClawblaw@users.noreply.github.com>`.
+- **No PII in commits or files.** Author identity is `BobClawblaw <288991054+BobClawblaw@users.noreply.github.com>`.
 - **Serial execution.** One task at a time. No parallel subagent fan-out.
 - **Commit after every task.** Conventional commits.
 - **Worklog.** Append to `worklog/YYYY-MM-DD.md` before finishing a session: what changed, what was verified with real output, what is next, blockers. Append only.
