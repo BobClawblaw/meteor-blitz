@@ -1195,6 +1195,7 @@ async fn main() {
                         None => {}
                     }
                     if let Some(g) = game.as_mut() {
+                        g.update_visuals(dt);
                         for id in g.sounds.drain(..) {
                             play_effect(id, settings.effects);
                         }

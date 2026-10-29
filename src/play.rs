@@ -1326,6 +1326,35 @@ impl Play {
         self.ship.pos
     }
 
+    /// While a popup covers the game, only its visuals keep time: particle
+    /// effects and flashes, lights, shockwaves and scorch marks run out
+    /// behind the popup instead of freezing at their peak (a boss's white
+    /// death flash and shockwave stayed on the results screen).
+    pub fn update_visuals(&mut self, dt: f32) {
+        self.accumulator += dt;
+        while self.accumulator >= STEP {
+            self.accumulator -= STEP;
+            self.age_visuals(STEP);
+        }
+    }
+
+    /// One step of the purely visual timers.
+    fn age_visuals(&mut self, dt: f32) {
+        self.effects.update(dt);
+        self.glows.retain_mut(|g| {
+            g.life -= dt;
+            g.life > 0.0
+        });
+        self.shocks.retain_mut(|s| {
+            s.age += dt;
+            s.age < s.life
+        });
+        self.scorches.retain_mut(|s| {
+            s.age += dt;
+            s.age < SCORCH_LIFE
+        });
+    }
+
     pub fn update(&mut self, dt: f32) {
         self.accumulator += dt;
         while self.accumulator >= STEP {
@@ -1363,19 +1392,7 @@ impl Play {
                 self.camera.update(dt, Vec2::ZERO);
             }
         }
-        self.effects.update(dt);
-        self.glows.retain_mut(|g| {
-            g.life -= dt;
-            g.life > 0.0
-        });
-        self.shocks.retain_mut(|s| {
-            s.age += dt;
-            s.age < s.life
-        });
-        self.scorches.retain_mut(|s| {
-            s.age += dt;
-            s.age < SCORCH_LIFE
-        });
+        self.age_visuals(dt);
         self.elapsed += dt;
     }
 
