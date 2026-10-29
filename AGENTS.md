@@ -37,6 +37,7 @@ Done (faithful to the binary unless noted):
 - Pause, controls, upgrade, clear and game-over popups from `PausePopup`: layouts and gradients match the decompiled draw code; keyboard/mouse navigation; upgrade shop; survival auto-upgrade toggle.
 - Deliberate change from the original: the planet backdrop scrolls at the play plane's screen speed, so rocks stay glued to the ground (`gfx::glued_scroll`). The original's rate let them slide.
 - Performance: the loop is paced at 60 Hz (the original's simulation rate); macOS controller polling no longer posts a LaunchServices KVO notification every frame.
+- Stage advance keeps the run: `Play::advance_stage` starts the next stage in the same screen, carrying score, rings, upgrade points, upgrades, lives, bombs and multiplier, like the original's `GameScreen::handleEvent` next-stage case; only the stage's world state restarts.
 
 Approximations / not yet faithful:
 - Pause buttons use the generic 26x26 nine-slice plus runtime text instead of the original pre-rendered/dynamic button art; sliders are simplified rectangles.
@@ -49,6 +50,7 @@ Controls:
 - Keyboard and mouse: WASD moves, left mouse fires toward the cursor, Space boosts, right mouse or B bombs, Q or the wheel switches weapon.
 - Gravity gun: double-click, or E, while firing.
 - Pause: Esc opens; arrows/WASD move the selection, Enter/A activates, Esc/B goes back; mouse clicks activate items.
+- Controller menus: the D-pad and the left stick move the selection (the stick steps once per push and repeats while held); A activates, B backs out.
 - Game controller: mapped in `src/pad.rs`. Windows reads it through gilrs's XInput backend (verified 2026-10-20: A, B, X, Y, LB, RB, LT, RT, D-pad, both sticks full range; View and Start not yet pressed in a logged run). The default WGI backend dropped most input from the Bluetooth LE pad, and its Drop failed fast on window close; `Gilrs` is kept in `ManuallyDrop`.
 - macOS reads pads through Apple's GameController framework. Verified 2026-10-28 with the Xbox Series controller over USB (045e:0b12): left and right sticks full range, A, B, X, Y, LB, RB, LT, RT, D-pad, Start and View all reach `src/pad.rs` (`MB_PAD_LOG=1`). The earlier "all values zero" result was a sleeping pad or a run loop that never turned, not a driver problem: the HID reports stream and the framework reports live values once the main queue is pumped.
 
@@ -69,5 +71,6 @@ Test hooks (env):
 - `MB_DUMP_SETTINGS=1` prints the settings loaded from `settings.txt` and exits, for checking persistence without a GUI.
 - `MB_NAME=<name>` confirms the `labelEnterName` field for scripted runs; `MB_MENU=name` opens it directly.
 - `MB_TUTORIAL=1` keeps a tutorial hint up from the start, for captures.
-- `cargo test` covers the boss patterns, the gravity gun and the ground scroll.
+- `MB_AUTONEXT=1` advances a cleared stage at once (skipping the results/upgrade popups) and prints `advance:` with the carried score, rings, points and upgrades; `MB_BUY=<0-5>` buys that upgrade first, to check that purchases carry.
+- `cargo test` covers the boss patterns, the gravity gun, the ground scroll and stick menu navigation.
 
