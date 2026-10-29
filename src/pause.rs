@@ -182,9 +182,17 @@ pub struct Pause {
     score: u64,
     multiplier: u32,
     cleared: bool,
+    /// The slider the mouse grabbed; it follows the pointer until release.
+    dragging: Option<SliderKind>,
 }
 
-#[derive(Clone, Copy)]
+/// Keyboard/controller step for a selected slider.
+const SLIDER_STEP: f32 = 0.05;
+/// How far above and below a slider's track a press still grabs it
+/// (the 25x25 peg sits on the track).
+const SLIDER_GRAB: f32 = 14.0;
+
+#[derive(Clone, Copy, PartialEq, Debug)]
 enum SliderKind {
     Music,
     Effects,
@@ -205,6 +213,8 @@ enum ItemAction {
     ToggleAutoGravity,
     ToggleAutoUpgrade,
     Buy(Upgrade),
+    /// A slider in the selection order: Left/Right adjust it.
+    Slider(SliderKind),
 }
 
 struct Item {
@@ -233,6 +243,7 @@ impl Pause {
             score: 0,
             multiplier: 1,
             cleared: false,
+            dragging: None,
         }
     }
 
@@ -265,6 +276,7 @@ impl Pause {
             score,
             multiplier,
             cleared,
+            dragging: None,
         }
     }
 
@@ -318,22 +330,37 @@ impl Pause {
         }
 
         let nav = pad::nav(dt);
-        let nav_up = matches!(nav, Some(pad::Button::Up) | Some(pad::Button::Left));
-        let nav_down = matches!(nav, Some(pad::Button::Down) | Some(pad::Button::Right));
-        let up = is_key_pressed(KeyCode::Up)
+        let vertical_up = is_key_pressed(KeyCode::Up)
             || is_key_pressed(KeyCode::W)
-            || is_key_pressed(KeyCode::Left)
-            || is_key_pressed(KeyCode::A)
             || pad::pressed(pad::Button::Up)
-            || pad::pressed(pad::Button::Left)
-            || nav_up;
-        let down = is_key_pressed(KeyCode::Down)
+            || nav == Some(pad::Button::Up);
+        let vertical_down = is_key_pressed(KeyCode::Down)
             || is_key_pressed(KeyCode::S)
-            || is_key_pressed(KeyCode::Right)
-            || is_key_pressed(KeyCode::D)
             || pad::pressed(pad::Button::Down)
+            || nav == Some(pad::Button::Down);
+        let left = is_key_pressed(KeyCode::Left)
+            || is_key_pressed(KeyCode::A)
+            || pad::pressed(pad::Button::Left)
+            || nav == Some(pad::Button::Left);
+        let right = is_key_pressed(KeyCode::Right)
+            || is_key_pressed(KeyCode::D)
             || pad::pressed(pad::Button::Right)
-            || nav_down;
+            || nav == Some(pad::Button::Right);
+        // On a slider, Left/Right adjust it; elsewhere they move the
+        // selection like Up/Down.
+        let slider = match items.get(self.selected).map(|i| i.action) {
+            Some(ItemAction::Slider(kind)) => Some(kind),
+            _ => None,
+        };
+        if let Some(kind) = slider {
+            let step = if right { SLIDER_STEP } else if left { -SLIDER_STEP } else { 0.0 };
+            if step != 0.0 {
+                let v = slider_value(kind, settings);
+                set_slider_value(kind, settings, (v + step).clamp(0.0, 1.0));
+            }
+        }
+        let up = vertical_up || (slider.is_none() && left);
+        let down = vertical_down || (slider.is_none() && right);
         if up {
             self.selected = (self.selected + items.len() - 1) % items.len().max(1);
         }
@@ -351,33 +378,35 @@ impl Pause {
             self.back(play);
         }
 
-        // Sliders are mouse-only, as in the original's touch controls.
+        // Mouse: a press on or near a slider grabs it (as a touch did in
+        // the original), and the value follows the pointer until release.
         let mouse = Canvas::mouse();
         if is_mouse_button_pressed(MouseButton::Left) {
-            for (kind, rect) in self.sliders() {
-                if mouse.x >= rect.x - 6.0
-                    && mouse.x <= rect.x + rect.w + 6.0
-                    && mouse.y >= rect.y - 12.0
-                    && mouse.y <= rect.y + rect.h + 6.0
-                {
-                    self.set_slider(kind, settings, mouse.x, rect);
-                }
-            }
-            for item in &items {
-                if item.rect.contains(mouse) && item.enabled {
-                    self.activate(item.action, play, settings);
-                    break;
+            self.dragging = self
+                .sliders()
+                .into_iter()
+                .find(|(_, r)| {
+                    mouse.x >= r.x - SLIDER_GRAB
+                        && mouse.x <= r.x + r.w + SLIDER_GRAB
+                        && (mouse.y - r.y).abs() <= SLIDER_GRAB
+                })
+                .map(|(kind, _)| kind);
+            if self.dragging.is_none() {
+                for item in &items {
+                    if item.rect.contains(mouse) && item.enabled {
+                        self.activate(item.action, play, settings);
+                        break;
+                    }
                 }
             }
         }
-    }
-
-    fn set_slider(&mut self, kind: SliderKind, settings: &mut Settings, x: f32, rect: Rect) {
-        let value = ((x - rect.x) / rect.w).clamp(0.0, 1.0);
-        match kind {
-            SliderKind::Music => settings.music = value,
-            SliderKind::Effects => settings.effects = value,
-            SliderKind::Shake => settings.shake = value,
+        if !is_mouse_button_down(MouseButton::Left) {
+            self.dragging = None;
+        }
+        if let Some(kind) = self.dragging {
+            if let Some((_, r)) = self.sliders().into_iter().find(|(k, _)| *k == kind) {
+                set_slider_value(kind, settings, ((mouse.x - r.x) / r.w).clamp(0.0, 1.0));
+            }
         }
     }
 
@@ -430,6 +459,7 @@ impl Pause {
             ItemAction::ToggleAutoPause => settings.auto_pause = !settings.auto_pause,
             ItemAction::ToggleAutoGravity => settings.auto_gravity = !settings.auto_gravity,
             ItemAction::ToggleAutoUpgrade => settings.auto_upgrade = !settings.auto_upgrade,
+            ItemAction::Slider(_) => {}
             ItemAction::Buy(upgrade) => {
                 if play.buy_upgrade(upgrade) {
                     play.sounds.push(9);
@@ -455,16 +485,25 @@ impl Pause {
             action,
             enabled: true,
         };
+        // A slider's selection frame spans its track and the peg's height.
+        let slider = |x: f32, y: f32, w: f32, kind| Item {
+            rect: Rect::new(x - SLIDER_GRAB, y - SLIDER_GRAB, w + 2.0 * SLIDER_GRAB, 2.0 * SLIDER_GRAB),
+            action: ItemAction::Slider(kind),
+            enabled: true,
+        };
         match self.page {
             Page::Main => vec![
                 button(30.0, 99.0, 129.0, 41.0, ItemAction::Flip),
+                slider(170.0, 116.0, 240.0, SliderKind::Music),
+                button(30.0, 155.0, 129.0, 41.0, ItemAction::Page(Page::Controls)),
+                slider(170.0, 173.0, 240.0, SliderKind::Effects),
                 button(150.0, 230.0, 80.0, 40.0, ItemAction::Resume),
                 button(250.0, 230.0, 80.0, 40.0, ItemAction::Page(Page::Quit)),
                 button(370.0, 50.0, 100.0, 30.0, ItemAction::Page(Page::Upgrade)),
-                button(30.0, 155.0, 129.0, 41.0, ItemAction::Page(Page::Controls)),
             ],
             Page::Controls => vec![
                 button(30.0, 89.0, 129.0, 41.0, ItemAction::ToggleShake),
+                slider(189.0, 104.0, 167.0, SliderKind::Shake),
                 button(30.0, 135.0, 129.0, 41.0, ItemAction::ToggleBoost),
                 button(30.0, 181.0, 129.0, 41.0, ItemAction::ToggleBomb),
                 button(320.0, 135.0, 129.0, 41.0, ItemAction::ToggleAutoPause),
@@ -1092,5 +1131,21 @@ mod tests {
         assert_eq!(s.shake, 0.3);
         assert_eq!(s.auto_pause, Settings::default().auto_pause);
         assert_eq!(Settings::parse(""), Settings::default());
+    }
+}
+
+fn slider_value(kind: SliderKind, settings: &Settings) -> f32 {
+    match kind {
+        SliderKind::Music => settings.music,
+        SliderKind::Effects => settings.effects,
+        SliderKind::Shake => settings.shake,
+    }
+}
+
+fn set_slider_value(kind: SliderKind, settings: &mut Settings, value: f32) {
+    match kind {
+        SliderKind::Music => settings.music = value,
+        SliderKind::Effects => settings.effects = value,
+        SliderKind::Shake => settings.shake = value,
     }
 }

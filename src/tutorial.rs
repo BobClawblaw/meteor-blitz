@@ -1,28 +1,22 @@
-//! `Tutorial`: the one-off captions shown when a HUD element first appears.
+//! `Tutorial`: the captions panel (`captions.png`) the original draws over
+//! the game.
 //!
-//! The original gated them with `Tutorial::canShowHighScore`,
-//! `canShowMultiplier`, `canShowNumBombs` and `canShowNumLives`, and drew
-//! `captions.png` over the game. Each hint fires once per session.
+//! `Tutorial::draw` returns at once unless `Tutorial::active` is set, which
+//! only the tutorial mode does; in arcade and survival play the panel never
+//! shows. (`canShowHighScore` and the like hide HUD elements during the
+//! tutorial's early steps; they do not raise captions.) The tutorial mode is
+//! not ported yet, so the panel appears only when forced for captures.
 
 use macroquad::prelude::*;
 
 use crate::gfx::{draw_quad, Canvas, CANVAS_W};
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Hint {
-    HighScore,
-    Multiplier,
-    Bombs,
-    Lives,
-}
-
 pub struct Tutorial {
-    shown: [bool; 4],
-    active: Option<Hint>,
+    active: bool,
     timer: f32,
 }
 
-/// `captions.png` size, and how long a hint stays up with its fades.
+/// `captions.png` size, and how long a forced panel stays up with its fades.
 const CAPTION_W: f32 = 125.0;
 const CAPTION_H: f32 = 112.0;
 const HINT_TIME: f32 = 5.0;
@@ -30,49 +24,26 @@ const FADE: f32 = 0.4;
 
 impl Tutorial {
     pub fn new() -> Tutorial {
-        Tutorial { shown: [false; 4], active: None, timer: 0.0 }
+        Tutorial { active: false, timer: 0.0 }
     }
 
-    /// One hint at a time, first come first served, from the live HUD values.
-    pub fn update(
-        &mut self,
-        dt: f32,
-        score: u64,
-        multiplier: u32,
-        bombs: u32,
-        lives: u32,
-        initial_lives: u32,
-        initial_bombs: u32,
-    ) {
-        if self.active.is_none() {
-            let candidates = [
-                (Hint::HighScore, score > 0),
-                (Hint::Multiplier, multiplier > 1),
-                (Hint::Bombs, bombs < initial_bombs),
-                (Hint::Lives, lives < initial_lives),
-            ];
-            if let Some((hint, _)) = candidates.into_iter().find(|(hint, on)| *on && !self.shown[*hint as usize]) {
-                self.shown[hint as usize] = true;
-                self.active = Some(hint);
-                self.timer = 0.0;
-            }
-        }
-        if self.active.is_some() {
+    pub fn update(&mut self, dt: f32) {
+        if self.active {
             self.timer += dt;
             if self.timer >= HINT_TIME {
-                self.active = None;
+                self.active = false;
             }
         }
     }
 
-    /// MB_TUTORIAL=1 keeps a hint up from the start, for captures.
+    /// MB_TUTORIAL=1 shows the panel from the start, for captures.
     pub fn force(&mut self) {
-        self.active = Some(Hint::HighScore);
+        self.active = true;
         self.timer = HINT_TIME * 0.5;
     }
 
     pub fn draw(&self, _canvas: &Canvas, captions: &Texture2D) {
-        if self.active.is_none() {
+        if !self.active {
             return;
         }
         let alpha = if self.timer < FADE {
@@ -97,22 +68,22 @@ impl Tutorial {
 mod tests {
     use super::*;
 
+    /// Arcade play never raises the panel, whatever happens on the HUD.
     #[test]
-    fn hints_fire_once_each() {
+    fn no_captions_in_normal_play() {
         let mut t = Tutorial::new();
-        t.update(0.1, 10, 1, 3, 3, 3, 3);
-        assert_eq!(t.active, Some(Hint::HighScore));
-        t.update(5.0, 10, 1, 3, 3, 3, 3);
-        assert!(t.active.is_none());
-        t.update(0.1, 20, 1, 3, 3, 3, 3);
-        assert!(t.active.is_none(), "same hint must not repeat");
-        t.update(0.1, 20, 2, 3, 3, 3, 3);
-        assert_eq!(t.active, Some(Hint::Multiplier));
-        t.update(5.0, 20, 2, 3, 3, 3, 3);
-        t.update(0.1, 20, 2, 2, 3, 3, 3);
-        assert_eq!(t.active, Some(Hint::Bombs));
-        t.update(5.0, 20, 2, 2, 3, 3, 3);
-        t.update(0.1, 20, 2, 2, 2, 3, 3);
-        assert_eq!(t.active, Some(Hint::Lives));
+        for _ in 0..600 {
+            t.update(1.0 / 60.0);
+            assert!(!t.active);
+        }
+    }
+
+    #[test]
+    fn a_forced_panel_times_out() {
+        let mut t = Tutorial::new();
+        t.force();
+        assert!(t.active);
+        t.update(HINT_TIME);
+        assert!(!t.active);
     }
 }

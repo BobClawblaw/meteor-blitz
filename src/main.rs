@@ -937,15 +937,7 @@ async fn main() {
                 } else if let Some(g) = game.as_mut() {
                     g.set_shake_scale(settings.shake);
                     g.update(dt);
-                    tutorial.update(
-                        dt,
-                        g.score,
-                        g.multiplier,
-                        g.bombs,
-                        g.lives,
-                        g.initial_lives(),
-                        g.initial_bombs(),
-                    );
+                    tutorial.update(dt);
                     for id in g.sounds.drain(..) {
                         play_effect(id, settings.effects);
                     }
