@@ -391,13 +391,23 @@ fn draw_panel(canvas: &Canvas, font: &Font, p: &Panel, hint: Option<&str>, alpha
         height += 3.0;
     }
     let box_w = width + 20.0;
+    // Panels at the screen's sides follow its edges in a wide view, as the
+    // HUD items they point at do.
+    let edge = crate::gfx::edge();
+    let anchor = if p.x <= 1.0 {
+        p.x - edge
+    } else if p.x >= 479.0 {
+        p.x + edge
+    } else {
+        p.x
+    };
     let x = match p.align {
-        Align::Left => p.x,
-        Align::Centre => p.x - box_w * 0.5,
-        Align::Right => p.x - box_w,
+        Align::Left => anchor,
+        Align::Centre => anchor - box_w * 0.5,
+        Align::Right => anchor - box_w,
     };
     // A hint can widen a box past the screen edge; keep it on screen.
-    let x = if hint.is_some() { x.clamp(0.0, (480.0 - box_w).max(0.0)) } else { x };
+    let x = if hint.is_some() { x.clamp(-edge, (480.0 + edge - box_w).max(-edge)) } else { x };
     canvas.fill_rect(x, p.y, box_w, height + 10.0, Color::new(0.0, 0.0, 0.0, 0.75 * alpha));
     let centre = x + box_w * 0.5;
     let white_text = Color::new(1.0, 1.0, 1.0, alpha);

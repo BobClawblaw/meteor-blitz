@@ -230,39 +230,41 @@ fn counter(assets: &HudAssets, icon: &Texture2D, n: u32, x: f32, dir: f32, color
 pub fn draw(assets: &HudAssets, v: &HudValues) {
     let dim = Color::new(1.0, 1.0, 1.0, COUNTER_ALPHA);
     let show = v.show;
+    // A wide view pins the corners' items to the screen edges.
+    let (left, right) = (-crate::gfx::edge(), crate::gfx::edge());
     if show.lives_and_bombs {
         counter(assets, &assets.ship_counter, v.lives, LIVES_X, 1.0, dim);
         counter(assets, &assets.bomb_counter, v.bombs, BOMBS_X, -1.0, dim);
     }
 
     if show.score {
-        assets.font.number(v.score, SCORE_POS.x, SCORE_POS.y, 1.0, Align::Left, dim);
+        assets.font.number(v.score, SCORE_POS.x + left, SCORE_POS.y, 1.0, Align::Left, dim);
     }
 
     if show.multiplier {
         if v.multiplier >= 10 {
-            assets.font.number(1, MULTIPLIER_TEN_X, MULTIPLIER_Y, 1.0, Align::Left, dim);
-            assets.font.number(0, MULTIPLIER_X, MULTIPLIER_Y, 1.0, Align::Left, dim);
+            assets.font.number(1, MULTIPLIER_TEN_X + right, MULTIPLIER_Y, 1.0, Align::Left, dim);
+            assets.font.number(0, MULTIPLIER_X + right, MULTIPLIER_Y, 1.0, Align::Left, dim);
         } else {
-            assets.font.number(v.multiplier as u64, MULTIPLIER_X, MULTIPLIER_Y, 1.0, Align::Left, dim);
+            assets.font.number(v.multiplier as u64, MULTIPLIER_X + right, MULTIPLIER_Y, 1.0, Align::Left, dim);
         }
-        assets.font.text("x", MULTIPLIER_X_LABEL.x, MULTIPLIER_X_LABEL.y, MULTIPLIER_X_SCALE, Align::Left, dim);
+        assets.font.text("x", MULTIPLIER_X_LABEL.x + right, MULTIPLIER_X_LABEL.y, MULTIPLIER_X_SCALE, Align::Left, dim);
     }
 
     if show.high_score {
         let high = v.high_score.max(v.score);
-        assets.font.number(high, HIGH_SCORE_X, SMALL_Y, SMALL, Align::Right, dim);
-        let label_x = HIGH_SCORE_LABEL_X - assets.font.number_width(high, SMALL);
+        assets.font.number(high, HIGH_SCORE_X + right, SMALL_Y, SMALL, Align::Right, dim);
+        let label_x = HIGH_SCORE_LABEL_X + right - assets.font.number_width(high, SMALL);
         assets.font.text("High Score ", label_x, SMALL_Y, SMALL, Align::Right, dim);
     }
 
     if show.rings {
-        assets.font.number(v.rings as u64, RINGS_X, SMALL_Y, SMALL, Align::Left, dim);
+        assets.font.number(v.rings as u64, RINGS_X + left, SMALL_Y, SMALL, Align::Left, dim);
         let w = assets.font.number_width(v.rings as u64, SMALL);
-        draw_quad(&assets.ring, w + RING_ICON_GAP, RING_ICON_Y, 1.0, 0.0, dim);
+        draw_quad(&assets.ring, left + w + RING_ICON_GAP, RING_ICON_Y, 1.0, 0.0, dim);
     }
 
     if show.pause {
-        draw_quad(&assets.pause, PAUSE_POS.x, PAUSE_POS.y, 1.0, 0.0, WHITE);
+        draw_quad(&assets.pause, PAUSE_POS.x + right, PAUSE_POS.y, 1.0, 0.0, WHITE);
     }
 }

@@ -34,7 +34,7 @@ impl NameEntry {
         if is_key_pressed(KeyCode::Backspace) {
             self.name.pop();
         }
-        is_key_pressed(KeyCode::Enter) || is_key_pressed(KeyCode::Escape)
+        crate::pad::enter_pressed() || is_key_pressed(KeyCode::Escape)
     }
 
     pub fn draw(

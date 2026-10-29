@@ -6,18 +6,67 @@
 //! (`BasicScreen::draw`, `GameScreen::draw`). Content here is given in the
 //! original's landscape coordinates (480x320, y down) plus a depth; the
 //! portrait target is blitted onto the window as a 480x320 landscape image.
+//!
+//! The port widens the view to the window's aspect (up to 2.4:1): the
+//! camera sees more of the world to either side, while every screen keeps
+//! drawing in the original 480x320 coordinates, centred. `edge()` is how far
+//! the view reaches past those 480 units on each side, for anything pinned
+//! to the screen edges (the HUD, full-screen fills).
 
 use macroquad::miniquad::{
     BlendFactor, BlendState, BlendValue, Comparison, CullFace, Equation, PipelineParams,
     UniformDesc, UniformType,
 };
 use macroquad::prelude::*;
+use std::cell::{Cell, RefCell};
+use std::sync::atomic::{AtomicU32, Ordering};
 
 pub const CANVAS_W: f32 = 480.0;
 pub const CANVAS_H: f32 = 320.0;
 /// The original framebuffer is portrait; the world is rotated into it.
+/// Its long side is the view width (480 in the original).
 const FB_W: f32 = 320.0;
-const FB_H: f32 = 480.0;
+/// The widest view: 2.4:1 covers 21:9 monitors.
+const MAX_ASPECT: f32 = 2.4;
+
+/// The view width in canvas units, set each frame by `Canvas::begin`.
+static VIEW_W: AtomicU32 = AtomicU32::new(0x43F0_0000); // 480.0
+
+pub fn view_w() -> f32 {
+    f32::from_bits(VIEW_W.load(Ordering::Relaxed))
+}
+
+/// How far the view reaches past the 480-unit canvas on each side.
+pub fn edge() -> f32 {
+    (view_w() - CANVAS_W) * 0.5
+}
+
+/// The window's aspect, from 3:2 (the original) to 2.4:1. MB_WIDE=0 keeps
+/// the original 3:2 view (letterboxed), for emulator comparisons.
+fn window_view_w() -> f32 {
+    if std::env::var("MB_WIDE").is_ok_and(|v| v == "0") {
+        return CANVAS_W;
+    }
+    (CANVAS_H * screen_width() / screen_height()).clamp(CANVAS_W, CANVAS_H * MAX_ASPECT).round()
+}
+
+/// Director::initWithView's camera for a view `view_w` wide: the original
+/// at 480, and wider views keep the play plane's scale (the vertical
+/// field of view stays put, the horizontal one opens up).
+fn camera_matrix(view_w: f32) -> Mat4 {
+    let fov = 2.0 * ((FOV_Y_DEG.to_radians() * 0.5).tan() * view_w / CANVAS_W).atan();
+    let proj = Mat4::perspective_rh_gl(fov, FB_W / view_w, Z_NEAR, Z_FAR);
+    let view = Mat4::look_at_rh(
+        vec3(FB_W * 0.5, view_w * 0.5, EYE_Z),
+        vec3(FB_W * 0.5, view_w * 0.5, 0.0),
+        vec3(0.0, 1.0, 0.0),
+    );
+    let rotate = Mat4::from_translation(vec3(FB_W * 0.5, view_w * 0.5, 0.0))
+        * Mat4::from_rotation_z((-90.0f32).to_radians())
+        * Mat4::from_rotation_x(180.0f32.to_radians())
+        * Mat4::from_translation(vec3(-CANVAS_W * 0.5, -CANVAS_H * 0.5, 0.0));
+    proj * view * rotate
+}
 
 // Director::initWithView: gluPerspective(60, w/h, 0.5, 1500) and
 // gluLookAt((w/2, h/2, EYE_Z) -> (w/2, h/2, 0), up +y).
@@ -32,8 +81,10 @@ const CELL: f32 = 64.0;
 const GRID: usize = 16;
 pub const BACKDROP_SIZE: f32 = CELL * GRID as f32;
 const TEXEL_PER_UNIT: f32 = 0.002;
-const DRAWN_X: std::ops::RangeInclusive<usize> = 1..=14;
-const DRAWN_Y: std::ops::RangeInclusive<usize> = 3..=12;
+/// Cells drawn either side of the centre: columns 1-14 and rows 3-12 of
+/// the 16x16 grid. A wide view adds columns in proportion.
+const DRAWN_HALF_X: f32 = 7.0;
+const DRAWN_HALF_Y: i32 = 5;
 
 // World::initOffsetZs: the surface is a sphere of radius 700 (z = 700 -
 // sqrt(700^2 - d^2)), looked up by integer squared distance.
@@ -111,21 +162,12 @@ fn pipeline(dst: BlendFactor) -> PipelineParams {
 /// landscape rotation. Maps landscape (x, y, z) to portrait (320-y, 480-x, -z).
 struct OriginalCamera {
     render_pass: macroquad::texture::RenderPass,
+    view_w: f32,
 }
 
 impl Camera for OriginalCamera {
     fn matrix(&self) -> Mat4 {
-        let proj = Mat4::perspective_rh_gl(FOV_Y_DEG.to_radians(), FB_W / FB_H, Z_NEAR, Z_FAR);
-        let view = Mat4::look_at_rh(
-            vec3(FB_W * 0.5, FB_H * 0.5, EYE_Z),
-            vec3(FB_W * 0.5, FB_H * 0.5, 0.0),
-            vec3(0.0, 1.0, 0.0),
-        );
-        let rotate = Mat4::from_translation(vec3(FB_W * 0.5, FB_H * 0.5, 0.0))
-            * Mat4::from_rotation_z((-90.0f32).to_radians())
-            * Mat4::from_rotation_x(180.0f32.to_radians())
-            * Mat4::from_translation(vec3(-CANVAS_W * 0.5, -CANVAS_H * 0.5, 0.0));
-        proj * view * rotate
+        camera_matrix(self.view_w)
     }
     fn depth_enabled(&self) -> bool {
         false
@@ -139,11 +181,13 @@ impl Camera for OriginalCamera {
 }
 
 /// `World::getOffsetZ`: height of the planet surface below the plane at a
-/// point `(dx, dy)` from the world centre.
-fn offset_z(dx: f32, dy: f32) -> f32 {
+/// point `(dx, dy)` from the world centre, on a sphere `wide` times the
+/// original's radius (1 is the original).
+fn offset_z(dx: f32, dy: f32, wide: f32) -> f32 {
+    let (r, r2) = (SPHERE_R * wide, SPHERE_R2 * wide * wide);
     let d2 = (dx * dx + dy * dy) as i32;
-    if d2 < SPHERE_R2 as i32 {
-        SPHERE_R - (SPHERE_R2 - d2 as f32).sqrt()
+    if d2 < r2 as i32 {
+        r - (r2 - d2 as f32).sqrt()
     } else {
         f32::INFINITY
     }
@@ -151,14 +195,24 @@ fn offset_z(dx: f32, dy: f32) -> f32 {
 
 /// `Background::Background(base, decal, flipped)`: a curved grid centred on
 /// its origin. Menus build it flipped (surface curving away), the game not.
-fn backdrop_mesh(flipped: bool) -> Mesh {
+///
+/// `wide` is the view width over the original's 480. The grid gains
+/// columns to fill a wide view, and the game's planet grows with it so its
+/// limb stays off screen (the centre, and so the ground scroll, is
+/// unchanged); cells past the sphere are left out.
+fn backdrop_mesh(flipped: bool, wide: f32) -> Mesh {
     let sign = if flipped { -1.0 } else { 1.0 };
-    let mut vertices = Vec::with_capacity((GRID + 1) * (GRID + 1));
-    for ix in 0..=GRID {
-        for iy in 0..=GRID {
-            let x = ix as f32 * CELL - BACKDROP_SIZE * 0.5;
-            let y = iy as f32 * CELL - BACKDROP_SIZE * 0.5;
-            let z = sign * offset_z(-x, -y);
+    // Growing faster than the width keeps the corners covered at 21:9.
+    let sphere = if flipped { 1.0 } else { wide.powf(1.5) };
+    let half_x = (DRAWN_HALF_X * wide).ceil() as i32 + (wide > 1.0) as i32;
+    let cols = (2 * half_x + 1) as usize;
+    let rows = (2 * DRAWN_HALF_Y + 1) as usize;
+    let mut vertices = Vec::with_capacity(cols * rows);
+    for ix in -half_x..=half_x {
+        for iy in -DRAWN_HALF_Y..=DRAWN_HALF_Y {
+            let x = ix as f32 * CELL;
+            let y = iy as f32 * CELL;
+            let z = sign * offset_z(-x, -y, sphere);
             // The menu's flipped surface takes the texture axes swapped
             // (measured against the emulator menu frame); the play-plane
             // mesh keeps the mapping used by the glued ground scroll.
@@ -171,11 +225,14 @@ fn backdrop_mesh(flipped: bool) -> Mesh {
         }
     }
     let mut indices = Vec::new();
-    for ix in DRAWN_X {
-        for iy in DRAWN_Y {
-            let i0 = (ix * (GRID + 1) + iy) as u16;
-            let i1 = ((ix + 1) * (GRID + 1) + iy) as u16;
-            indices.extend_from_slice(&[i0, i1, i0 + 1, i1, i1 + 1, i0 + 1]);
+    for ix in 0..cols - 1 {
+        for iy in 0..rows - 1 {
+            let i0 = (ix * rows + iy) as u16;
+            let i1 = ((ix + 1) * rows + iy) as u16;
+            let quad = [i0, i1, i0 + 1, i1, i1 + 1, i0 + 1];
+            if quad.iter().all(|&i| vertices[i as usize].position.z.is_finite()) {
+                indices.extend_from_slice(&quad);
+            }
         }
     }
     Mesh {
@@ -205,10 +262,12 @@ pub const MAX_BATCH_VERTICES: usize = 8000;
 pub const MAX_BATCH_INDICES: usize = 4800;
 
 pub struct Canvas {
-    target: RenderTarget,
+    /// Rebuilt when the window's size or aspect changes.
+    target: RefCell<RenderTarget>,
+    target_size: Cell<(u32, u32)>,
     white: Texture2D,
-    menu_backdrop: Mesh,
-    game_backdrop: Mesh,
+    menu_backdrop: RefCell<Mesh>,
+    game_backdrop: RefCell<Mesh>,
     backdrop_material: Material,
     additive: Material,
     flash: Material,
@@ -217,14 +276,26 @@ pub struct Canvas {
 /// Resolution of the offscreen canvas relative to the original 480x320
 /// framebuffer. The default matches the window's fitted canvas so the blit
 /// is 1:1; MB_RENDER_SCALE pins it (1 keeps emulator comparisons exact).
-fn render_scale() -> f32 {
+fn render_scale(view_w: f32) -> f32 {
     if let Ok(v) = std::env::var("MB_RENDER_SCALE") {
         if let Ok(s) = v.parse::<f32>() {
             return s.clamp(1.0, 6.0);
         }
     }
-    let fit = (screen_width() / CANVAS_W).min(screen_height() / CANVAS_H);
+    let fit = (screen_width() / view_w).min(screen_height() / CANVAS_H);
     fit.clamp(1.0, 6.0)
+}
+
+/// The offscreen target's pixel size for a view `view_w` wide.
+fn target_size(view_w: f32) -> (u32, u32) {
+    let scale = render_scale(view_w);
+    ((FB_W * scale).round() as u32, (view_w * scale).round() as u32)
+}
+
+fn new_target((w, h): (u32, u32)) -> RenderTarget {
+    let target = render_target(w, h);
+    target.texture.set_filter(FilterMode::Linear);
+    target
 }
 
 impl Canvas {
@@ -232,12 +303,10 @@ impl Canvas {
         // Render at the window's canvas resolution instead of the original
         // 320x480 framebuffer, so the final blit is 1:1 rather than an
         // upscale. MB_RENDER_SCALE pins it (1 for pixel-perfect captures).
-        let scale = render_scale();
-        let target = render_target(
-            (FB_W * scale).round() as u32,
-            (FB_H * scale).round() as u32,
-        );
-        target.texture.set_filter(FilterMode::Linear);
+        let view_w = window_view_w();
+        VIEW_W.store(view_w.to_bits(), Ordering::Relaxed);
+        let size = target_size(view_w);
+        let target = new_target(size);
         let backdrop_material = load_material(
             ShaderSource::Glsl {
                 vertex: DEFAULT_VERTEX,
@@ -277,10 +346,11 @@ impl Canvas {
         .expect("flash shader");
         let white = Texture2D::from_rgba8(1, 1, &[255, 255, 255, 255]);
         Canvas {
-            target,
+            target: RefCell::new(target),
+            target_size: Cell::new(size),
             white,
-            menu_backdrop: backdrop_mesh(true),
-            game_backdrop: backdrop_mesh(false),
+            menu_backdrop: RefCell::new(backdrop_mesh(true, view_w / CANVAS_W)),
+            game_backdrop: RefCell::new(backdrop_mesh(false, view_w / CANVAS_W)),
             backdrop_material,
             additive,
             flash,
@@ -294,10 +364,12 @@ impl Canvas {
         gl_use_default_material();
     }
 
-    /// Where the landscape canvas lands in the window: largest 3:2 fit, centred.
+    /// Where the landscape view lands in the window: the largest fit,
+    /// centred.
     fn placement() -> Rect {
-        let scale = (screen_width() / CANVAS_W).min(screen_height() / CANVAS_H);
-        let (w, h) = (CANVAS_W * scale, CANVAS_H * scale);
+        let view_w = view_w();
+        let scale = (screen_width() / view_w).min(screen_height() / CANVAS_H);
+        let (w, h) = (view_w * scale, CANVAS_H * scale);
         Rect::new(
             (screen_width() - w) * 0.5,
             (screen_height() - h) * 0.5,
@@ -306,16 +378,29 @@ impl Canvas {
         )
     }
 
-    /// Mouse position in canvas coordinates.
+    /// Mouse position in canvas coordinates (x runs past 0..480 in a wide
+    /// view).
     pub fn mouse() -> Vec2 {
         let r = Canvas::placement();
         let (mx, my) = mouse_position();
-        vec2((mx - r.x) / r.w * CANVAS_W, (my - r.y) / r.h * CANVAS_H)
+        vec2((mx - r.x) / r.w * view_w() - edge(), (my - r.y) / r.h * CANVAS_H)
     }
 
+    /// Starts a frame: follows the window's aspect and size, then targets
+    /// the offscreen canvas.
     pub fn begin(&self) {
+        let view_w = window_view_w();
+        VIEW_W.store(view_w.to_bits(), Ordering::Relaxed);
+        let size = target_size(view_w);
+        if size != self.target_size.get() {
+            *self.target.borrow_mut() = new_target(size);
+            self.target_size.set(size);
+            *self.menu_backdrop.borrow_mut() = backdrop_mesh(true, view_w / CANVAS_W);
+            *self.game_backdrop.borrow_mut() = backdrop_mesh(false, view_w / CANVAS_W);
+        }
         set_camera(&OriginalCamera {
-            render_pass: self.target.render_pass.clone(),
+            render_pass: self.target.borrow().render_pass.clone(),
+            view_w,
         });
         clear_background(BLACK);
     }
@@ -326,14 +411,15 @@ impl Canvas {
         set_default_camera();
         clear_background(BLACK);
         let r = Canvas::placement();
+        let view_w = view_w();
         let corner = |x: f32, y: f32| {
-            let (lx, ly) = (x * CANVAS_W, y * CANVAS_H);
+            let (lx, ly) = (x * view_w, y * CANVAS_H);
             Vertex::new(
                 r.x + x * r.w,
                 r.y + y * r.h,
                 0.0,
                 (FB_W - ly) / FB_W,
-                (FB_H - lx) / FB_H,
+                (view_w - lx) / view_w,
                 WHITE,
             )
         };
@@ -345,7 +431,7 @@ impl Canvas {
                 corner(0.0, 1.0),
             ],
             indices: vec![0, 1, 2, 0, 2, 3],
-            texture: Some(self.target.texture.clone()),
+            texture: Some(self.target.borrow().texture.clone()),
         };
         draw_mesh(&quad);
     }
@@ -362,9 +448,9 @@ impl Canvas {
         alpha: f32,
     ) {
         let source = if menu {
-            &self.menu_backdrop
+            self.menu_backdrop.borrow()
         } else {
-            &self.game_backdrop
+            self.game_backdrop.borrow()
         };
         let a = (alpha.clamp(0.0, 1.0) * 255.0) as u8;
         let vertices = source
@@ -587,19 +673,28 @@ mod backdrop_tests {
 
     /// On-screen length of a 1-unit step at depth `z` near the canvas centre.
     fn step(z: f32) -> f32 {
-        let proj = Mat4::perspective_rh_gl(FOV_Y_DEG.to_radians(), FB_W / FB_H, Z_NEAR, Z_FAR);
-        let view = Mat4::look_at_rh(vec3(FB_W * 0.5, FB_H * 0.5, EYE_Z), vec3(FB_W * 0.5, FB_H * 0.5, 0.0), vec3(0.0, 1.0, 0.0));
-        let rotate = Mat4::from_translation(vec3(FB_W * 0.5, FB_H * 0.5, 0.0))
-            * Mat4::from_rotation_z((-90.0f32).to_radians())
-            * Mat4::from_rotation_x(180.0f32.to_radians())
-            * Mat4::from_translation(vec3(-CANVAS_W * 0.5, -CANVAS_H * 0.5, 0.0));
-        let m = proj * view * rotate;
+        step_in(z, CANVAS_W)
+    }
+
+    fn step_in(z: f32, view_w: f32) -> f32 {
+        let m = camera_matrix(view_w);
         let c = vec3(CANVAS_W * 0.5, CANVAS_H * 0.5, z);
         let p = |v: Vec3| {
             let h = m * v.extend(1.0);
             vec2(h.x / h.w, h.y / h.w)
         };
-        (p(c + vec3(1.0, 0.0, 0.0)) - p(c)).length()
+        // In clip units; scale to canvas units of this view.
+        (p(c + vec3(1.0, 0.0, 0.0)) - p(c)).length() * view_w / 2.0
+    }
+
+    /// A wider view keeps the original's play-plane scale (1.0017 canvas
+    /// units per unit: its eye distance and field of view nearly agree).
+    #[test]
+    fn wide_views_keep_the_scale() {
+        let original = step_in(0.0, CANVAS_W);
+        for w in [568.9, 768.0] {
+            assert!((step_in(0.0, w) / original - 1.0).abs() < 1e-4, "{} {}", w, step_in(0.0, w));
+        }
     }
 
     /// The glued scroll moves the ground at the rocks' speed on screen, at

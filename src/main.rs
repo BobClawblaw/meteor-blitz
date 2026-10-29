@@ -60,6 +60,7 @@ fn window_conf() -> Conf {
         window_width: width,
         window_height: height,
         high_dpi,
+        window_resizable: true,
         sample_count: 4,
         ..Default::default()
     }
@@ -729,6 +730,10 @@ async fn main() {
         std::process::exit(0);
     }
 
+    if settings.fullscreen {
+        set_fullscreen(true);
+    }
+
     let mut screen = Screen::Menu(MenuKind::Main);
     let mut menu_screen = build_menu(MenuKind::Main, &ui, &progress, true);
     let mut menu_next: Option<Next> = None;
@@ -846,6 +851,13 @@ async fn main() {
         let dt = get_frame_time().min(0.05);
         let t0 = get_time();
         pad::poll();
+        // F11 or Alt+Enter toggles fullscreen, remembered across launches.
+        let alt = is_key_down(KeyCode::LeftAlt) || is_key_down(KeyCode::RightAlt);
+        if is_key_pressed(KeyCode::F11) || (alt && is_key_pressed(KeyCode::Enter)) {
+            settings.fullscreen = !settings.fullscreen;
+            set_fullscreen(settings.fullscreen);
+            settings.save();
+        }
         if music_on {
             set_sound_volume(&music, settings.music);
         }
@@ -908,7 +920,7 @@ async fn main() {
                 }
                 if kind == MenuKind::Main
                     && menu_screen.fx.ready()
-                    && (is_key_pressed(KeyCode::Enter) || pad::pressed(pad::Button::Start))
+                    && (pad::enter_pressed() || pad::pressed(pad::Button::Start))
                 {
                     menu_next = Some(Next::Menu(MenuKind::Mode));
                     menu_screen.fx.leave();
@@ -1099,7 +1111,7 @@ async fn main() {
                     } else {
                         let pad_pause =
                             pad::pressed(pad::Button::Start) || pad::pressed(pad::Button::View);
-                        let icon = Rect::new(449.0, -1.0, 32.0, 22.0);
+                        let icon = Rect::new(449.0 + gfx::edge(), -1.0, 32.0, 22.0);
                         let clicked = is_mouse_button_pressed(MouseButton::Left)
                             && icon.contains(Canvas::mouse());
                         if (is_key_pressed(KeyCode::Escape) || pad_pause || clicked) && g.can_pause() {

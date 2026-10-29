@@ -59,6 +59,12 @@ impl MenuBackdrop {
         let z = self.bg_z.unwrap_or(BACKDROP_Z);
         canvas.draw_backdrop(true, &assets.space, &assets.fog, vec3(BACKDROP_X, BACKDROP_Y, z), self.scroll, alpha);
         draw_quad(&assets.horizon, 0.0, 0.0, HORIZON_SCALE, 0.0, Color::new(1.0, 1.0, 1.0, alpha));
+        // The horizon's left edge is the planet's dark side: a wide view
+        // continues it to the screen edge.
+        let edge = crate::gfx::edge();
+        if edge > 0.0 {
+            canvas.fill_rect(-edge, 0.0, edge, crate::gfx::CANVAS_H, Color::new(0.0, 0.0, 0.0, alpha));
+        }
     }
 }
 

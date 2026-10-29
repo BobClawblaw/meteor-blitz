@@ -76,6 +76,8 @@ pub struct Settings {
     /// the HELP page's checkbox. When set, World 1 Stage 1 and survival
     /// start with the tutorial.
     pub tutorial: bool,
+    /// Port addition: fullscreen (F11 or Alt+Enter toggles it).
+    pub fullscreen: bool,
 }
 
 impl Default for Settings {
@@ -92,6 +94,7 @@ impl Default for Settings {
             auto_upgrade: false,
             flip: false,
             tutorial: false,
+            fullscreen: false,
         }
     }
 }
@@ -142,6 +145,7 @@ impl Settings {
                 "auto_upgrade" => s.auto_upgrade = parse_bool(value, s.auto_upgrade),
                 "flip" => s.flip = parse_bool(value, s.flip),
                 "tutorial" => s.tutorial = parse_bool(value, s.tutorial),
+                "fullscreen" => s.fullscreen = parse_bool(value, s.fullscreen),
                 _ => {}
             }
         }
@@ -150,7 +154,7 @@ impl Settings {
 
     pub fn to_text(&self) -> String {
         format!(
-            "music={}\neffects={}\nshake={}\nshake_control={}\nboost_control={}\nbomb_button={}\nauto_pause={}\nauto_gravity={}\nauto_upgrade={}\nflip={}\ntutorial={}\n",
+            "music={}\neffects={}\nshake={}\nshake_control={}\nboost_control={}\nbomb_button={}\nauto_pause={}\nauto_gravity={}\nauto_upgrade={}\nflip={}\ntutorial={}\nfullscreen={}\n",
             self.music,
             self.effects,
             self.shake,
@@ -162,6 +166,7 @@ impl Settings {
             self.auto_upgrade as u8,
             self.flip as u8,
             self.tutorial as u8,
+            self.fullscreen as u8,
         )
     }
 }
@@ -374,7 +379,7 @@ impl Pause {
         if down {
             self.selected = (self.selected + 1) % items.len().max(1);
         }
-        if pad::pressed(pad::Button::A) || is_key_pressed(KeyCode::Enter) {
+        if pad::pressed(pad::Button::A) || pad::enter_pressed() {
             if let Some(item) = items.get(self.selected) {
                 if item.enabled {
                     self.activate(item.action, play, settings);
@@ -653,15 +658,18 @@ impl Pause {
         let a = self.alpha * 0.85;
         let top = Color::new(0.2, 0.2, 0.2, a);
         let black = Color::new(0.0, 0.0, 0.0, a);
-        gradient(canvas, assets, 0.0, 40.0, CANVAS_W, 120.0, top, black);
-        gradient(canvas, assets, 0.0, 160.0, CANVAS_W, 120.0, black, top);
+        // The bands span a wide view's full width.
+        let edge = crate::gfx::edge();
+        let (x0, half) = (-edge, 240.0 + edge);
+        gradient(canvas, assets, x0, 40.0, CANVAS_W + 2.0 * edge, 120.0, top, black);
+        gradient(canvas, assets, x0, 160.0, CANVAS_W + 2.0 * edge, 120.0, black, top);
         // The rules use the popup alpha, not the panel's 0.85.
         let dim = Color::new(0.25, 0.25, 0.25, self.alpha);
         let white = Color::new(1.0, 1.0, 1.0, self.alpha);
-        hgradient(canvas, assets, 0.0, 40.0, 240.0, 1.0, dim, white);
-        hgradient(canvas, assets, 240.0, 40.0, 240.0, 1.0, white, dim);
-        hgradient(canvas, assets, 0.0, 280.0, 240.0, 1.0, dim, white);
-        hgradient(canvas, assets, 240.0, 280.0, 240.0, 1.0, white, dim);
+        hgradient(canvas, assets, x0, 40.0, half, 1.0, dim, white);
+        hgradient(canvas, assets, 240.0, 40.0, half, 1.0, white, dim);
+        hgradient(canvas, assets, x0, 280.0, half, 1.0, dim, white);
+        hgradient(canvas, assets, 240.0, 280.0, half, 1.0, white, dim);
     }
 
     fn draw_main(&self, canvas: &Canvas, assets: &PauseAssets, font: &Font, settings: &Settings) {
@@ -1127,6 +1135,7 @@ mod tests {
             auto_upgrade: true,
             flip: true,
             tutorial: true,
+            fullscreen: true,
         };
         assert_eq!(Settings::parse(&s.to_text()), s);
     }

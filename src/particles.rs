@@ -396,20 +396,14 @@ impl Effects {
             canvas.draw_triangles(verts, indices, texture, additive);
         }
         // FlashManager::draw: full-screen colour at depth 0.
+        let (x0, x1) = (-crate::gfx::edge(), crate::gfx::CANVAS_W + crate::gfx::edge());
         for (color, _, _) in &self.flashes {
             canvas.draw_triangles(
                 vec![
-                    Vertex::new(0.0, 0.0, 0.0, 0.0, 0.0, *color),
-                    Vertex::new(crate::gfx::CANVAS_W, 0.0, 0.0, 1.0, 0.0, *color),
-                    Vertex::new(
-                        crate::gfx::CANVAS_W,
-                        crate::gfx::CANVAS_H,
-                        0.0,
-                        1.0,
-                        1.0,
-                        *color,
-                    ),
-                    Vertex::new(0.0, crate::gfx::CANVAS_H, 0.0, 0.0, 1.0, *color),
+                    Vertex::new(x0, 0.0, 0.0, 0.0, 0.0, *color),
+                    Vertex::new(x1, 0.0, 0.0, 1.0, 0.0, *color),
+                    Vertex::new(x1, crate::gfx::CANVAS_H, 0.0, 1.0, 1.0, *color),
+                    Vertex::new(x0, crate::gfx::CANVAS_H, 0.0, 0.0, 1.0, *color),
                 ],
                 vec![0, 1, 2, 0, 2, 3],
                 None,
