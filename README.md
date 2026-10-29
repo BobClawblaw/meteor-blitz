@@ -87,7 +87,7 @@ Defaults; everything except the sticks, Esc and menu navigation can be rebound o
 | Bomb | right mouse button, or B | B or RB |
 | Switch weapon | Q or mouse wheel | X or Y |
 | Gravity gun | E, or double-click while firing | LT |
-| Pause | Esc | Start or View |
+| Pause (quit, on the main menu) | Esc | Start or View |
 | Fullscreen | F11 or Alt+Enter | |
 | Menus | arrows/WASD, Enter, Esc | D-pad or left stick, A, B |
 

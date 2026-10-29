@@ -70,26 +70,12 @@ mod raw {
         static MONITORING: Cell<bool> = const { Cell::new(false) };
     }
 
-    #[link(name = "CoreFoundation", kind = "framework")]
-    extern "C" {
-        static kCFRunLoopDefaultMode: *const std::ffi::c_void;
-        fn CFRunLoopRunInMode(mode: *const std::ffi::c_void, seconds: f64, return_after_source: u8) -> i32;
-    }
-
-    /// GameController posts its updates as blocks on the main queue, which
-    /// miniquad's event loop (a zero-timeout NSEvent poll) never lets run:
-    /// give the main run loop a turn so they arrive.
-    fn pump_main_queue() {
-        const HANDLED_SOURCE: i32 = 4;
-        for _ in 0..64 {
-            if unsafe { CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.0, 1) } != HANDLED_SOURCE {
-                break;
-            }
-        }
-    }
-
+    /// GameController posts its updates as blocks on the main queue. The
+    /// event loop waits between frames (main.rs `frame_timer`), so the main
+    /// run loop turns there and they arrive; pumping the run loop here,
+    /// inside a frame, let a menu-bar click open its menu mid-frame and
+    /// crash the game.
     pub fn read() -> Option<Raw> {
-        pump_main_queue();
         unsafe {
             MONITORING.with(|m| {
                 if !m.get() {

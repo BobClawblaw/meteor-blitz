@@ -33,7 +33,7 @@ mod waves;
 mod weapons;
 
 use std::collections::HashMap;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "macos")))]
 use std::time::{Duration, Instant};
 
 use macroquad::audio::{
@@ -52,6 +52,111 @@ use progress::Progress;
 use tutorial::Tutorial;
 use scores::Scores;
 
+/// macOS frame pacing for the blocking event loop: a repeating run-loop
+/// timer at the frame-rate cap schedules the next frame and posts an empty
+/// application event to wake the loop. Between frames the loop waits in
+/// `nextEventMatchingMask`, which lets the run loop turn outside any frame:
+/// GameController's main-queue updates arrive there, and a click on the
+/// menu bar opens its menu there. (Turning the run loop inside a frame let
+/// that menu open mid-frame; AppKit then redrew the window, which started a
+/// second frame inside the first, and macroquad aborted.) The timer runs in
+/// the default mode only, so it pauses while a menu is open.
+#[cfg(target_os = "macos")]
+mod frame_timer {
+    use objc2::runtime::{AnyObject, Bool};
+    use objc2::{class, msg_send, Encode, Encoding};
+    use std::cell::Cell;
+    use std::ffi::c_void;
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct Point {
+        x: f64,
+        y: f64,
+    }
+
+    unsafe impl Encode for Point {
+        const ENCODING: Encoding = Encoding::Struct("CGPoint", &[f64::ENCODING, f64::ENCODING]);
+    }
+
+    #[link(name = "CoreFoundation", kind = "framework")]
+    extern "C" {
+        static kCFRunLoopDefaultMode: *const c_void;
+        fn CFRunLoopGetMain() -> *mut c_void;
+        fn CFAbsoluteTimeGetCurrent() -> f64;
+        fn CFRunLoopTimerCreate(
+            allocator: *const c_void,
+            fire_date: f64,
+            interval: f64,
+            flags: usize,
+            order: isize,
+            callout: extern "C" fn(*mut c_void, *mut c_void),
+            context: *mut c_void,
+        ) -> *mut c_void;
+        fn CFRunLoopAddTimer(run_loop: *mut c_void, timer: *mut c_void, mode: *const c_void);
+        fn CFRunLoopTimerInvalidate(timer: *mut c_void);
+        fn CFRelease(object: *const c_void);
+    }
+
+    /// NSEventTypeApplicationDefined.
+    const APPLICATION_DEFINED: u64 = 15;
+    /// The interval for an uncapped run (MB_FPS=0).
+    const UNCAPPED: f64 = 0.001;
+
+    thread_local! {
+        static TIMER: Cell<(*mut c_void, f64)> = const { Cell::new((std::ptr::null_mut(), 0.0)) };
+    }
+
+    extern "C" fn tick(_timer: *mut c_void, _info: *mut c_void) {
+        macroquad::miniquad::window::schedule_update();
+        unsafe {
+            let event: *mut AnyObject = msg_send![
+                class!(NSEvent),
+                otherEventWithType: APPLICATION_DEFINED,
+                location: Point { x: 0.0, y: 0.0 },
+                modifierFlags: 0u64,
+                timestamp: 0.0f64,
+                windowNumber: 0isize,
+                context: std::ptr::null_mut::<AnyObject>(),
+                subtype: 0i16,
+                data1: 0isize,
+                data2: 0isize
+            ];
+            let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
+            let _: () = msg_send![app, postEvent: event, atStart: Bool::NO];
+        }
+    }
+
+    /// Runs the timer at `fps` (0: uncapped), replacing it when the rate
+    /// changes.
+    pub fn set_rate(fps: f64) {
+        let interval = if fps > 0.0 { 1.0 / fps } else { UNCAPPED };
+        TIMER.with(|t| {
+            let (old, old_interval) = t.get();
+            if !old.is_null() && old_interval == interval {
+                return;
+            }
+            unsafe {
+                if !old.is_null() {
+                    CFRunLoopTimerInvalidate(old);
+                    CFRelease(old);
+                }
+                let timer = CFRunLoopTimerCreate(
+                    std::ptr::null(),
+                    CFAbsoluteTimeGetCurrent() + interval,
+                    interval,
+                    0,
+                    0,
+                    tick,
+                    std::ptr::null_mut(),
+                );
+                CFRunLoopAddTimer(CFRunLoopGetMain(), timer, kCFRunLoopDefaultMode);
+                t.set((timer, interval));
+            }
+        });
+    }
+}
+
 /// The window and taskbar icon (tools/make-icon.py), built in.
 fn window_icon() -> macroquad::miniquad::conf::Icon {
     fn rgba<const N: usize>(png: &[u8]) -> [u8; N] {
@@ -66,6 +171,8 @@ fn window_icon() -> macroquad::miniquad::conf::Icon {
         big: rgba(include_bytes!("../assets/icon/icon-64.png")),
     }
 }
+
+
 
 fn window_conf() -> Conf {
     // MB_WINDOW=480x320 gives a 1:1 window for pixel comparisons with the
@@ -86,9 +193,9 @@ fn window_conf() -> Conf {
         sample_count: 4,
         // macOS: miniquad paces frames with a CVDisplayLink on the main
         // display (60 Hz here, wherever the window is), which would cap the
-        // 120/144 options. In blocking mode it drops that pacer and draws
-        // whenever an update is scheduled; the loop schedules one every
-        // frame and paces itself to the Options cap.
+        // 120/144 options. In blocking mode it drops that pacer, waits for
+        // events, and draws when an update is scheduled: `frame_timer`
+        // schedules one at the Options cap.
         icon: Some(window_icon()),
         platform: macroquad::miniquad::conf::Platform {
             blocking_event_loop: cfg!(target_os = "macos"),
@@ -908,7 +1015,7 @@ async fn main() {
         .ok()
         .and_then(|v| v.parse().ok())
         .or(if shot_path.is_some() { Some(0.0) } else { None });
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(all(not(target_arch = "wasm32"), not(target_os = "macos")))]
     let mut next_deadline = Instant::now();
 
     loop {
@@ -979,6 +1086,10 @@ async fn main() {
                         menu_next = Some(next);
                         menu_screen.fx.leave();
                     }
+                }
+                // Esc on the main menu quits (port addition).
+                if kind == MenuKind::Main && menu_screen.fx.ready() && is_key_pressed(KeyCode::Escape) {
+                    macroquad::miniquad::window::order_quit();
                 }
                 if kind == MenuKind::Main
                     && menu_screen.fx.ready()
@@ -1326,12 +1437,15 @@ async fn main() {
             }
             std::process::exit(0);
         }
-        // Blocking event loop (macOS): ask for the next frame now.
-        macroquad::miniquad::window::schedule_update();
-        next_frame().await;
         #[cfg(not(target_arch = "wasm32"))]
+        let target_fps = fps_override.unwrap_or(settings.fps as f64);
+        // macOS: the frame timer asks for the next frame, so the event loop
+        // waits (and the run loop turns) between frames.
+        #[cfg(target_os = "macos")]
+        frame_timer::set_rate(target_fps);
+        next_frame().await;
+        #[cfg(all(not(target_arch = "wasm32"), not(target_os = "macos")))]
         {
-            let target_fps = fps_override.unwrap_or(settings.fps as f64);
             if target_fps > 0.0 {
                 let period = Duration::from_secs_f64(1.0 / target_fps);
                 next_deadline += period;
