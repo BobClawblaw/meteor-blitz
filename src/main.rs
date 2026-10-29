@@ -183,11 +183,17 @@ async fn load_ui_set() -> Ui {
 }
 
 async fn load_menu_assets() -> MenuAssets {
+    // MB_BG_BASE / MB_BG_DECAL_TEX override the pair while matching the
+    // emulator frame (the original loads space4deep + fogRed).
+    let base = std::env::var("MB_BG_BASE").unwrap_or_else(|_| "space4deep".to_owned());
+    let decal = std::env::var("MB_BG_DECAL_TEX").unwrap_or_else(|_| "fogRed".to_owned());
     let menu = MenuAssets {
-        space: load_texture("original/textures/space4deep.png")
+        space: load_texture(&format!("original/textures/{base}.png"))
             .await
             .unwrap(),
-        fog: load_texture("original/textures/fogRed.png").await.unwrap(),
+        fog: load_texture(&format!("original/textures/{decal}.png"))
+            .await
+            .unwrap(),
         horizon: load_ui("horizon").await,
     };
     for tex in [&menu.space, &menu.fog] {

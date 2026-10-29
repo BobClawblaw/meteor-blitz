@@ -159,15 +159,15 @@ fn backdrop_mesh(flipped: bool) -> Mesh {
             let x = ix as f32 * CELL - BACKDROP_SIZE * 0.5;
             let y = iy as f32 * CELL - BACKDROP_SIZE * 0.5;
             let z = sign * offset_z(-x, -y);
-            // GL textures have their origin at the bottom, so v runs the other way.
-            vertices.push(Vertex::new(
-                x,
-                y,
-                z,
-                x * TEXEL_PER_UNIT,
-                -y * TEXEL_PER_UNIT,
-                WHITE,
-            ));
+            // The menu's flipped surface takes the texture axes swapped
+            // (measured against the emulator menu frame); the play-plane
+            // mesh keeps the mapping used by the glued ground scroll.
+            let (u, v) = if flipped {
+                (y * TEXEL_PER_UNIT, x * TEXEL_PER_UNIT)
+            } else {
+                (x * TEXEL_PER_UNIT, -y * TEXEL_PER_UNIT)
+            };
+            vertices.push(Vertex::new(x, y, z, u, v, WHITE));
         }
     }
     let mut indices = Vec::new();
@@ -356,29 +356,37 @@ impl Canvas {
                 ..*v
             })
             .collect();
+        // The menu mesh takes the texture axes swapped, so its scroll
+        // components swap with them; the play-plane mesh keeps x/y.
+        let wrap = |k: f32| {
+            let (sx, sy) = if menu {
+                (scroll.y, scroll.x)
+            } else {
+                (scroll.x, scroll.y)
+            };
+            vec2(
+                (sx * k).rem_euclid(BACKDROP_SIZE) / BACKDROP_SIZE,
+                (sy * k).rem_euclid(BACKDROP_SIZE) / BACKDROP_SIZE,
+            )
+        };
         let mesh = Mesh {
             vertices,
             indices: source.indices.clone(),
             texture: Some(base.clone()),
-        };
-        let wrap = |k: f32| {
-            vec2(
-                (scroll.x * k).rem_euclid(BACKDROP_SIZE) / BACKDROP_SIZE,
-                (scroll.y * k).rem_euclid(BACKDROP_SIZE) / BACKDROP_SIZE,
-            )
         };
         self.backdrop_material.set_texture("Decal", decal.clone());
         // Background::draw scrolls the base layer by 2/1024 and the cloud
         // decal by 3/1024 per unit. In game the base is set to keep pace
         // with the play plane instead (see `glued_scroll`); clouds keep
         // their 1.5x lead over it.
-        let k = if menu { ORIGINAL_SCROLL } else { glued_scroll() };
         // The mesh's v runs against y (GL textures start at the bottom), so
         // in game the vertical scroll goes the other way for the ground to
         // move opposite the ship, as it does horizontally.
+        let k = if menu { ORIGINAL_SCROLL } else { glued_scroll() };
         let flip = |v: Vec2| if menu { v } else { vec2(v.x, (1.0 - v.y).fract()) };
         self.backdrop_material.set_uniform("Scroll0", flip(wrap(k)));
-        self.backdrop_material.set_uniform("Scroll1", flip(wrap(k * 1.5)));
+        self.backdrop_material
+            .set_uniform("Scroll1", flip(wrap(k * 1.5)));
         gl_use_material(&self.backdrop_material);
         draw_mesh(&mesh);
         gl_use_default_material();

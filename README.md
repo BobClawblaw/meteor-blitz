@@ -22,7 +22,7 @@ Verified against emulator frames: the main-menu buttons are pixel-exact, and the
 
 Known approximations:
 
-- The 3D planet backdrop is a flat approximation; the emulator's background differs in scroll phase and brightness.
+- The 3D planet backdrop uses the decompiled curved mesh and the original textures; the menu's texture axes are matched to the emulator frame, but the play-plane backdrop still differs in scroll phase and brightness.
 - Pause button labels are drawn with the original `ngage` font at the measured atlas scale rather than from the engine's per-label atlas, so glyph pixels differ slightly.
 - The Global high-score tab reports that the leaderboard is offline, because the original Game Center server is gone.
 

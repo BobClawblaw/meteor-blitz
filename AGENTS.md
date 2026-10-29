@@ -44,7 +44,7 @@ Approximations / not yet faithful:
 - `Settings` (music, effects, flip, shake, boost, bomb, auto pause/gravity/upgrade) now persist to `settings.txt`, matching `PausePopup::save/load`; a first launch writes the defaults, and changes are written through as they are made.
 - High-score tables keep local arcade and survival rows in `scores.txt`. A run that makes the table opens `labelEnterName` first (typed letters/digits, up to eight; Escape keeps `PLAYER`), and the Global tab reports that the leaderboard is offline, since the original's Game Center server is gone.
 - The HELP page shows the original control diagram (`keyboard.png`) with the caption block (`captions.png`) below it. In game, the tutorial hints (`Tutorial::canShow*`) show `captions.png` once per session when the player first scores, reaches multiplier 2, uses a bomb, or loses a life.
-- Menu fidelity, measured with `tools/compare_frame.py` against `original/screenshots/emu/main_menu.png`: the four main-menu buttons are pixel-exact (mean abs diff 0.04-0.10). The backdrop still differs (whole frame 7.8, backdrop band 9.6) because the emulator frame was taken at an unknown scroll phase and its 3D background is not reproduced exactly.
+- Menu fidelity, measured with `tools/compare_frame.py` against `original/screenshots/emu/main_menu.png`: the four main-menu buttons are pixel-exact (mean abs diff 0.04-0.10). The backdrop uses the original `space4deep`+`fogRed` textures and the decompiled curved mesh; the menu mesh's texture axes are swapped to match the frame (u=y, v=x, with the scroll components), giving a best whole-frame diff of 7.5 (was 7.8). The residual is the emulator's unknown scroll phase and the PVRTC decode. The play-plane backdrop keeps the glued ground-scroll mapping.
 
 Controls:
 - Keyboard and mouse: WASD moves, left mouse fires toward the cursor, Space boosts, right mouse or B bombs, Q or the wheel switches weapon.
@@ -65,6 +65,7 @@ Test hooks (env):
 - `MB_SHOT` and `MB_SHOT_FRAME` capture a frame and exit.
 - `MB_PAUSE=<menu|controls|upgrade|clear|gameover>` opens a pause page for screenshot runs; it starts stage 1.1 when no stage is running, so the popup draws over a game. `original/screenshots/emu/frame_00030.png` is the pause main-page reference.
 - `MB_LABEL_SCALE=<n>` pins the pause button label scale (default 0.4), for comparing label sizes against the emulator.
+- `MB_BG_BASE` / `MB_BG_DECAL_TEX` override the menu backdrop textures (defaults `space4deep`/`fogRed`), for comparing against emulator frames.
 - `MB_AUTOFIRE`, `MB_GUN`, `MB_BOMB_AT`, `MB_WEAPON` and `MB_DRIFT` drive play unattended.
 - `MB_FPS=<n>` overrides the 60 Hz frame cap (`0` = uncapped). `MB_PROF=1` prints update/draw CPU per 120 frames; `MB_PROF_FRAMES=n` exits after n frames for benchmarks. Screenshot runs are uncapped unless `MB_FPS` is given, so `MB_SHOT_FRAME` still selects the same state.
 - `MB_PAD_LOG` prints controller input. To tell a game bug from a driver one on Windows, run an XInput reader (`XInputGetState` on xinput1_4.dll) alongside and compare.

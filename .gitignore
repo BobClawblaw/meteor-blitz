@@ -7,3 +7,5 @@ shots/
 .cargo-home/
 settings.txt
 scores.txt
+__pycache__/
+*.pyc
