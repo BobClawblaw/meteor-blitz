@@ -589,6 +589,7 @@ async fn load_play_assets() -> PlayAssets {
             .expect("systems.dat"),
         backdrops,
         normals,
+        scorch: play::scorch_texture(),
     }
 }
 

@@ -216,6 +216,36 @@ pub struct PlayAssets {
     pub backdrops: Vec<(Texture2D, Texture2D)>,
     /// Normal maps of the base textures, same order (tools/normalmaps.py).
     pub normals: Vec<Texture2D>,
+    /// A soft burn mark for scorch decals (`scorch_texture`).
+    pub scorch: Texture2D,
+}
+
+/// A soft, ragged burn mark: dark in the middle, fading out, with noise so
+/// overlapping marks do not look stamped (port addition).
+pub fn scorch_texture() -> Texture2D {
+    const N: u16 = 64;
+    let mut img = Image::gen_image_color(N, N, Color::new(0.0, 0.0, 0.0, 0.0));
+    let mut seed: u32 = 0x9e37_79b9;
+    let mut noise = || {
+        seed ^= seed << 13;
+        seed ^= seed >> 17;
+        seed ^= seed << 5;
+        (seed % 1000) as f32 / 1000.0
+    };
+    for y in 0..N {
+        for x in 0..N {
+            let d = vec2(x as f32 + 0.5, y as f32 + 0.5) / N as f32 * 2.0 - Vec2::ONE;
+            let a = d.y.atan2(d.x);
+            let ragged = 0.8 + 0.12 * (a * 5.0).sin() + 0.08 * (a * 11.0).cos();
+            let r = d.length() / ragged;
+            let core = (1.0 - r).clamp(0.0, 1.0);
+            let alpha = core.powf(0.8) * (0.75 + 0.25 * noise());
+            img.set_pixel(x as u32, y as u32, Color::new(0.07, 0.045, 0.03, alpha));
+        }
+    }
+    let tex = Texture2D::from_image(&img);
+    tex.set_filter(FilterMode::Linear);
+    tex
 }
 
 
@@ -726,6 +756,8 @@ pub struct Play {
     glows: Vec<Glow>,
     /// Shockwave rings from big explosions.
     shocks: Vec<Shock>,
+    /// Burn marks on the ground, oldest first.
+    scorches: Vec<Scorch>,
     /// This frame's lights on the canvas, for tinting sprites.
     frame_lights: std::cell::RefCell<Vec<Light>>,
 }
@@ -756,6 +788,35 @@ fn event_light(event: &Event) -> Option<(Vec2, Vec3, f32, f32)> {
         Event::BossDying { pos } => (*pos, vec3(1.0, 0.5, 1.0), 260.0, 1.2),
         Event::BossDead { pos, .. } => (*pos, WHITE_LIGHT, 380.0, 1.0),
         Event::GravityBurst { pos } => (*pos, ICE_LIGHT, 110.0, 0.4),
+        _ => return None,
+    })
+}
+
+/// A burn mark where something exploded; it fades over its last seconds.
+struct Scorch {
+    pos: Vec2,
+    size: f32,
+    angle: f32,
+    age: f32,
+}
+
+const SCORCH_LIFE: f32 = 15.0;
+const SCORCH_FADE: f32 = 5.0;
+const MAX_SCORCHES: usize = 96;
+
+/// The burn mark an event leaves (port addition): its size, if any.
+fn event_scorch(event: &Event) -> Option<(Vec2, f32)> {
+    Some(match event {
+        Event::RockDestroyed { pos, size, effects: true, .. } => (*pos, 18.0 + 12.0 * *size as f32),
+        Event::LobberDestroyed { pos, .. }
+        | Event::SeekerDestroyed { pos, .. }
+        | Event::TowerDestroyed { pos, .. }
+        | Event::ArrowDestroyed { pos, .. }
+        | Event::SnakeDestroyed { pos, .. }
+        | Event::ShyGuyDestroyed { pos, .. }
+        | Event::MineDestroyed { pos, .. } => (*pos, 30.0),
+        Event::DepotDestroyed { pos, .. } => (*pos, 44.0),
+        Event::BossDead { pos, .. } => (*pos, 90.0),
         _ => return None,
     })
 }
@@ -907,6 +968,7 @@ impl Play {
             fx: true,
             glows: Vec::new(),
             shocks: Vec::new(),
+            scorches: Vec::new(),
             frame_lights: std::cell::RefCell::new(Vec::new()),
         }
     }
@@ -1277,6 +1339,10 @@ impl Play {
         self.shocks.retain_mut(|s| {
             s.age += dt;
             s.age < s.life
+        });
+        self.scorches.retain_mut(|s| {
+            s.age += dt;
+            s.age < SCORCH_LIFE
         });
         self.elapsed += dt;
     }
@@ -1714,6 +1780,13 @@ impl Play {
             }
             if let Some((pos, radius, strength, seconds)) = event_shock(&event) {
                 self.shock(pos, radius, strength, seconds);
+            }
+            if let Some((pos, size)) = event_scorch(&event) {
+                if self.scorches.len() >= MAX_SCORCHES {
+                    self.scorches.remove(0);
+                }
+                let angle = rand::gen_range(0.0, std::f32::consts::TAU);
+                self.scorches.push(Scorch { pos, size, angle, age: 0.0 });
             }
             match event {
                 Event::RockDestroyed {
@@ -2482,6 +2555,9 @@ impl Play {
             canvas.set_post(&self.waves(), world_grade(self.world));
         }
         canvas.draw_backdrop(false, base, decal, origin, scroll, 1.0);
+        if self.fx {
+            self.draw_scorches(canvas, assets);
+        }
         canvas.set_glowing(true);
         canvas.lighting(self.fx);
         // EnemyManager::sharedDraw: rings first, under everything else.
@@ -2711,6 +2787,26 @@ impl Play {
         self.effects
             .draw(canvas, &assets.spark, self.z, |p| self.to_screen(p));
         self.draw_hud(canvas, assets);
+    }
+
+    /// Burn marks on the play plane, in one batch.
+    fn draw_scorches(&self, canvas: &Canvas, assets: &PlayAssets) {
+        let mut verts = Vec::with_capacity(self.scorches.len() * 4);
+        let mut indices: Vec<u16> = Vec::with_capacity(self.scorches.len() * 6);
+        for s in &self.scorches {
+            let fade = ((SCORCH_LIFE - s.age) / SCORCH_FADE).min(1.0);
+            let c = self.to_screen(s.pos);
+            let color = Color::new(1.0, 1.0, 1.0, 0.8 * fade);
+            let (sn, cs) = s.angle.sin_cos();
+            let h = s.size * 0.5;
+            let n = verts.len() as u16;
+            for (x, y, u, v) in [(-1.0, -1.0, 0.0, 0.0), (1.0, -1.0, 1.0, 0.0), (1.0, 1.0, 1.0, 1.0), (-1.0, 1.0, 0.0, 1.0)] {
+                let p = c + vec2(x * cs - y * sn, x * sn + y * cs) * h;
+                verts.push(Vertex::new(p.x, p.y, self.z, u, v, color));
+            }
+            indices.extend_from_slice(&[n, n + 1, n + 2, n, n + 2, n + 3]);
+        }
+        canvas.draw_triangles(verts, indices, Some(&assets.scorch), false);
     }
 
     fn draw_ship(&self, assets: &PlayAssets) {
