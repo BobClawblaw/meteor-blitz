@@ -20,13 +20,13 @@ Playable end to end:
 - Native-resolution rendering: the canvas renders at the window's fitted resolution with a 1:1 blit, and the pixel font uses nearest filtering. The original 480×320 framebuffer stays available via `MB_RENDER_SCALE=1` for emulator comparisons.
 - HD art on desktop: 4x sprites, UI and font atlas, and 2x terrain textures, generated from the originals by `tools/upscale4x.py` (xBR for pixel art, Real-ESRGAN for the terrain). `MB_HD=0` selects the untouched originals, which is what the emulator-frame comparisons use; the web build stays on the originals.
 
-Verified against emulator frames: the main-menu buttons are pixel-exact, and the pause panel's bands, rules, button nine-slice and slider knob match the decompiled drawing and the emulator pause frame. `cargo test` covers the boss patterns, gravity gun, ground scroll, settings, scores, tutorial gates and stick menu navigation.
+Verified against emulator frames: the main-menu buttons are pixel-exact, and the pause panel's bands, rules, button nine-slice and slider knob match the decompiled drawing and the emulator pause frame; the popup's labels were measured against that frame (whole-frame diff 13.1). `cargo test` covers the boss patterns, gravity gun, ground scroll, settings, scores, tutorial gates and stick menu navigation.
 
 Known approximations:
 
 - The 3D planet backdrop uses the decompiled curved mesh and the original textures; the menu's texture axes are matched to the emulator frame, but the play-plane backdrop still differs in scroll phase and brightness.
 - HD art is a generated approximation, not the original art: xBR smooths the pixel sprites/UI and the ESRGAN terrain is reinterpreted. The emulator-frame comparisons therefore run with `MB_HD=0` (originals); with HD on, the main-menu frame diff rises from 7.5 to 8.3.
-- Pause button labels are drawn with the original `ngage` font at the measured atlas scale rather than from the engine's per-label atlas, so glyph pixels differ slightly.
+- Pause button labels use the original `ngage` glyphs at the measured 0.54 scale with linear filtering (the engine rasterised labels into low-resolution textures), rather than the engine's per-label atlas, so glyph shapes still differ slightly.
 - The Global high-score tab reports that the leaderboard is offline, because the original Game Center server is gone.
 
 ## Build

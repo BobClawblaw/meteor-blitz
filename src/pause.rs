@@ -14,6 +14,10 @@ use crate::play::{Play, Upgrade, UPGRADES};
 
 pub struct PauseAssets {
     pub button: Texture2D,
+    /// The popup's text: the original `ngage` atlas at 1x with linear
+    /// filtering, since the engine drew labels from a low-resolution
+    /// rasterised texture rather than the HUD's crisp glyph quads.
+    pub label_font: Font,
     pub white: Texture2D,
     /// Slider knob (`Slider::draw` draws the 25x25 peg texture).
     pub peg: Texture2D,
@@ -536,13 +540,13 @@ impl Pause {
         &self,
         canvas: &Canvas,
         assets: &PauseAssets,
-        font: &Font,
         play: &Play,
         settings: &Settings,
     ) {
         if self.alpha <= 0.0 {
             return;
         }
+        let font = &assets.label_font;
         self.draw_panel(canvas, assets);
         match self.page {
             Page::Main => self.draw_main(canvas, assets, font, settings),
@@ -841,7 +845,7 @@ impl Pause {
         font.text(
             text,
             x + w * 0.5,
-            y + h * 0.5 - 7.5 * scale,
+            y + h * 0.5 - 7.5 * scale + label_dy(),
             scale,
             Align::Centre,
             Color::new(1.0, 1.0, 1.0, self.alpha),
@@ -921,7 +925,11 @@ impl Pause {
 /// a fixed size, so the port draws them at one scale; 0.4 matches the
 /// emulator pause frame. `MB_LABEL_SCALE` pins it for captures.
 fn fit_scale(_font: &Font, _text: &str, _w: f32, _h: f32) -> f32 {
-    const LABEL_SCALE: f32 = 0.4;
+    // Measured against frame_00030.png: the emulator's labels are about
+    // 1.35x the previous 0.4 atlas scale, and the glyphs are blurred by the
+    // engine's label-texture scaling. A single fixed scale fits every page
+    // best (per-label fits overfit our glyph metrics).
+    const LABEL_SCALE: f32 = 0.54;
     static FORCED: std::sync::OnceLock<Option<f32>> = std::sync::OnceLock::new();
     let forced = *FORCED.get_or_init(|| {
         std::env::var("MB_LABEL_SCALE")
@@ -929,6 +937,19 @@ fn fit_scale(_font: &Font, _text: &str, _w: f32, _h: f32) -> f32 {
             .and_then(|v| v.parse::<f32>().ok())
     });
     forced.map_or(LABEL_SCALE, |s| s.clamp(0.35, 0.9))
+}
+
+/// A vertical nudge for the pause labels. The original draws the label
+/// texture at the button's centre; our glyph quads sit about 1 px high, so
+/// the measured offset compensates. `MB_LABEL_DY` overrides it.
+fn label_dy() -> f32 {
+    static DY: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
+    *DY.get_or_init(|| {
+        std::env::var("MB_LABEL_DY")
+            .ok()
+            .and_then(|v| v.parse::<f32>().ok())
+            .unwrap_or(1.0)
+    })
 }
 
 /// A 26x26 button background drawn as the original `DynamicButton`'s

@@ -575,8 +575,18 @@ async fn load_play_assets() -> PlayAssets {
 }
 
 async fn load_pause_assets() -> PauseAssets {
+    // The popup text uses the original 1x atlas with linear filtering: the
+    // engine rasterised each label into a low-resolution texture, so the
+    // glyphs are blurred rather than the HUD's crisp quads.
+    let label_font = Font::new(
+        load_texture("assets/ui/ngage.png").await.unwrap(),
+        &load_file("original/app/ngage.dat").await.unwrap(),
+        1.0,
+    );
+    label_font.set_filter(FilterMode::Linear);
     PauseAssets {
         button: load_ui("button").await,
+        label_font,
         white: Texture2D::from_rgba8(1, 1, &[255, 255, 255, 255]),
         peg: load_ui("peg").await,
         upgrade_bg: load_ui("buttonUpgradeBackground").await,
@@ -1051,7 +1061,7 @@ async fn main() {
                     g.draw(&canvas, &play_assets);
                     tutorial.draw(&canvas, &ui["captions"]);
                     if let Some(p) = pause.as_ref() {
-                        p.draw(&canvas, &pause_assets, &play_assets.hud.font, g, &settings);
+                        p.draw(&canvas, &pause_assets, g, &settings);
                     }
                 }
             }

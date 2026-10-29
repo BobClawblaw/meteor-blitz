@@ -65,6 +65,12 @@ impl Font {
         }
     }
 
+    /// Overrides the atlas filtering, e.g. linear for the pause labels,
+    /// which the original rasterised into a low-resolution texture.
+    pub fn set_filter(&self, filter: FilterMode) {
+        self.texture.set_filter(filter);
+    }
+
     /// TextureAtlas::add: a glyph's quad, top-left at (x, y), scaled.
     fn glyph(&self, index: usize, x: f32, y: f32, scale: f32, color: Color) {
         let [gx, gy, gw, gh] = self.glyphs[index];
