@@ -4,13 +4,28 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Meteor Blitz</title>
+    <link rel="icon" type="image/png" href="./assets/icon/icon-64.png" />
     <style>
       html, body { margin: 0; height: 100%; overflow: hidden; background: #05060a; }
       canvas { display: block; width: 100vw; height: 100vh; outline: none; }
+      #loading {
+        position: fixed; inset: 0; display: flex; flex-direction: column;
+        align-items: center; justify-content: center; gap: 14px;
+        color: #c8cbe0; font: 600 15px/1.4 system-ui, sans-serif; letter-spacing: 0.04em;
+      }
+      #loading .title { font-size: 28px; font-weight: 800; color: #eef0ff; letter-spacing: 0.12em; }
+      #loading .bar { width: min(360px, 70vw); height: 6px; background: #1c1f2e; border-radius: 3px; overflow: hidden; }
+      #loading .fill { width: 0%; height: 100%; background: linear-gradient(90deg, #4fd27a, #8be3ff); transition: width 0.15s; }
+      #loading.error { color: #ff9a9a; }
     </style>
   </head>
   <body>
     <canvas id="glcanvas" width="1280" height="720" tabindex="0"></canvas>
+    <div id="loading">
+      <div class="title">METEOR BLITZ</div>
+      <div class="bar"><div class="fill"></div></div>
+      <div class="status">Loading…</div>
+    </div>
     <script src="./web/mq_js_bundle.js"></script>
     <script>
       // miniquad reads keys from canvas.onkeydown, so the canvas must hold focus.
@@ -25,6 +40,7 @@
           }
         });
       }
+
       // Game controllers: the game reads the first connected pad through the
       // Gamepad API each frame (src/pad.rs): 4 axes, then 17 button values
       // in the standard layout. Returns 0 when no pad is connected.
@@ -46,7 +62,83 @@
           };
         },
       });
-      load("./web/meteor-blitz.wasm");
+
+      // The game's data comes in one pack (tools/web_pack.py) instead of
+      // hundreds of requests: file loads the pack holds are answered from
+      // memory, anything else falls back to miniquad's own request.
+      const pack = new Map();
+      miniquad_add_plugin({
+        name: "meteor_blitz_pack",
+        version: 1,
+        register_plugin: function (importObject) {
+          const fetchFile = importObject.env.fs_load_file;
+          importObject.env.fs_load_file = function (ptr, len) {
+            const path = UTF8ToString(ptr, len).replace(/^\.\//, "");
+            const data = pack.get(path);
+            if (data === undefined) return fetchFile(ptr, len);
+            const id = FS.unique_id;
+            FS.unique_id += 1;
+            FS.loaded_files[id] = data;
+            // As miniquad's loader does, report it after this call returns.
+            setTimeout(() => wasm_exports.file_loaded(id), 0);
+            return id;
+          };
+        },
+      });
+
+      function unpack(buffer) {
+        const view = new DataView(buffer);
+        const bytes = new Uint8Array(buffer);
+        const decoder = new TextDecoder();
+        if (decoder.decode(bytes.subarray(0, 5)) !== "MBPK1") throw new Error("bad data pack");
+        let at = 5;
+        const count = view.getUint32(at, true);
+        at += 4;
+        for (let i = 0; i < count; i++) {
+          const nameLength = view.getUint16(at, true);
+          at += 2;
+          const name = decoder.decode(bytes.subarray(at, at + nameLength));
+          at += nameLength;
+          const size = view.getUint32(at, true);
+          at += 4;
+          pack.set(name, bytes.subarray(at, at + size));
+          at += size;
+        }
+      }
+
+      const loading = document.getElementById("loading");
+      const fill = loading.querySelector(".fill");
+      const status = loading.querySelector(".status");
+
+      async function start() {
+        const response = await fetch("./web/data.pack.gz");
+        if (!response.ok) throw new Error("data pack: HTTP " + response.status);
+        const total = Number(response.headers.get("content-length")) || 0;
+        const reader = response.body.getReader();
+        const chunks = [];
+        let received = 0;
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          chunks.push(value);
+          received += value.length;
+          if (total) {
+            fill.style.width = Math.min(100, (received / total) * 100).toFixed(1) + "%";
+            status.textContent = "Loading… " + (received / 1048576).toFixed(1) + " / " + (total / 1048576).toFixed(1) + " MB";
+          }
+        }
+        status.textContent = "Starting…";
+        const unzipped = new Blob(chunks).stream().pipeThrough(new DecompressionStream("gzip"));
+        unpack(await new Response(unzipped).arrayBuffer());
+        loading.remove();
+        gameCanvas.focus();
+        load("./web/meteor-blitz.wasm");
+      }
+
+      start().catch((e) => {
+        loading.classList.add("error");
+        status.textContent = "Could not load the game: " + e.message;
+      });
     </script>
   </body>
 </html>
