@@ -1,33 +1,42 @@
-# Meteor Blitz — faithful port
+# Meteor Blitz — a modern port
 
-A source-faithful port of Alley Labs' *Meteor Blitz* (iOS, 2009), rebuilt from the original 1.4 IPA. The game logic is translated from the decompiled ARMv6 binary; terrain, UI art, music and SFX are decoded from the original app. Rust + macroquad, one codebase for macOS, Windows and the web (WASM).
+A love letter to Alley Labs' *Meteor Blitz* (iOS, 2009), given away freely and remade in Rust through AI-assisted reverse engineering. The game logic, tuning, waves and bosses are translated from the decompiled ARMv6 binary of the original 1.4 release, and the art, music and sound come from its app bundle. On top of that faithful core, the presentation is rebuilt for today's machines: widescreen, high refresh rates, dynamic lighting, post-processing and rebindable controls. One Rust + macroquad codebase runs on macOS, Windows and the web (WASM).
+
+![Gameplay](screenshots/gameplay.png)
 
 | | |
 |---|---|
-| ![Main menu](screenshots/menu.png) | ![Gameplay](screenshots/gameplay.png) |
-| ![Pause menu](screenshots/pause.png) | ![Controls](screenshots/controls.png) |
-| ![High scores](screenshots/scores.png) | ![Help](screenshots/help.png) |
+| ![Laser fight in world 3](screenshots/gameplay-laser.png) | ![The lava world](screenshots/gameplay-lava.png) |
+| ![Main menu](screenshots/menu.png) | ![Pause menu](screenshots/pause.png) |
+| ![Options](screenshots/options.png) | ![Rebindable controls](screenshots/controls.png) |
 
-## Status
+![Ultrawide](screenshots/ultrawide.png)
 
-Playable end to end:
+## What's new
 
-- 30 arcade stages (6 worlds × 5) and survival mode, with the original wave tables, stage clear, unlock progression and boss.
+- **Widescreen and ultrawide.** The view follows the window from 3:2 up to 21:9. You see more of the playfield at the original scale; the HUD pins to the screen edges and menus stay centred. The window resizes freely, and F11 or Alt+Enter toggles fullscreen.
+- **120 and 144 Hz.** The simulation still runs at the original's 60 Hz, and frames in between are interpolated, so motion stays smooth at 120 or 144 fps (Options > Frame rate cap).
+- **Lighting.** Explosions, shots and the ship light the planet. The terrain has relief from generated normal maps, and nearby rocks and enemies pick up the light.
+- **Glow, shockwaves and colour.** Bloom comes from what emits light (flames, lasers, sparks, explosions), never from bright clouds or the HUD. Bombs, boss deaths and big explosions send out shockwaves that bend the screen, and each world has its own colour grade.
+- **Effects.** Round, glowing particles replace the original square points. Explosions leave scorch marks that fade. The ship has an engine trail, boost speed lines and a shield glow, and fast shots and enemies thrown by the gravity gun leave streaks.
+- **HD art.** 4x sprites, UI and font, and 2x terrain, generated from the originals (`tools/upscale4x.py`).
+- **Options screen** (the SETTINGS button): fullscreen, widescreen, bloom, lighting and effects, frame-rate cap, audio, screen shake, and the tutorial.
+- **Rebindable controls** (HELP, or Options > Controls): every action has a keyboard/mouse binding and a controller binding, saved to `controls.txt`.
+- **Tutorial.** The original's 27-step tutorial is ported. It is optional: switch on "Tutorial before first game" in Options.
+- **Quality of life.** Settings and local high scores persist, and a run that makes the table asks for a name. Ring pickups no longer stack into one very loud sound.
+
+Lighting and effects, bloom and widescreen can each be switched off in Options for a look closer to the original.
+
+## The game
+
+Everything from the original is in:
+
+- 30 arcade stages (6 worlds × 5) and survival mode, with the original wave tables, stage clears, unlock progression and boss.
 - Every enemy kind from the binary: rocks, depots, mines, shy guys, snakes, arrows, towers, seekers, lobbers and the boss.
-- Cannon, fire and laser weapons, gravity gun, bombs, boost, rings, multiplier, power-ups and the upgrade shop.
-- Menus and the pause/controls/upgrade/clear/game-over popups, ported from `PausePopup`; settings persist across launches; local high-score tables with name entry when a run ends; HELP/tutorial captions and in-game hints.
-- Keyboard/mouse and game controller input (Xbox pads on macOS through GameController and on Windows through XInput). The web build has no controller backend yet.
-- Native-resolution rendering: the canvas renders at the window's fitted resolution with a 1:1 blit, and the pixel font uses nearest filtering. The original 480×320 framebuffer stays available via `MB_RENDER_SCALE=1` for emulator comparisons.
-- HD art on desktop: 4x sprites, UI and font atlas, and 2x terrain textures, generated from the originals by `tools/upscale4x.py` (xBR for pixel art, Real-ESRGAN for the terrain). `MB_HD=0` selects the untouched originals, which is what the emulator-frame comparisons use; the web build stays on the originals.
+- Cannon, fire and laser weapons, the gravity gun, bombs, boost, rings, the multiplier, power-ups and the upgrade shop.
+- The pause, controls, upgrade, clear and game-over popups, ported from the original `PausePopup`.
 
-Verified against emulator frames: the main-menu buttons are pixel-exact, and the pause panel's bands, rules, button nine-slice and slider knob match the decompiled drawing and the emulator pause frame; the popup's labels were measured against that frame (whole-frame diff 13.1). `cargo test` covers the boss patterns, gravity gun, ground scroll, settings, scores, tutorial gates and stick menu navigation.
-
-Known approximations:
-
-- The 3D planet backdrop uses the decompiled curved mesh and the original textures; the menu's texture axes are matched to the emulator frame, but the play-plane backdrop still differs in scroll phase and brightness.
-- HD art is a generated approximation, not the original art: xBR smooths the pixel sprites/UI and the ESRGAN terrain is reinterpreted. The emulator-frame comparisons therefore run with `MB_HD=0` (originals); with HD on, the main-menu frame diff rises from 7.5 to 8.3.
-- Pause button labels use the original `ngage` glyphs at the measured 0.54 scale with linear filtering (the engine rasterised labels into low-resolution textures), rather than the engine's per-label atlas, so glyph shapes still differ slightly.
-- The Global high-score tab reports that the leaderboard is offline, because the original Game Center server is gone.
+The Global high-score tab reports that the leaderboard is offline, because the original Game Center server is gone.
 
 ## Build
 
@@ -35,10 +44,11 @@ Known approximations:
 cargo run --release
 ```
 
-The HD art set is committed under `assets/4x/`; `cargo run` picks it up on desktop. To regenerate it (needs `ffmpeg`; the Real-ESRGAN ncnn binary is optional and falls back to Lanczos):
+The HD art set is committed under `assets/4x/`; `cargo run` picks it up on desktop. To regenerate it (needs `ffmpeg`; the Real-ESRGAN ncnn binary is optional and falls back to Lanczos), and the terrain normal maps:
 
 ```bash
 python3 tools/upscale4x.py --only all
+python3 tools/normalmaps.py
 ```
 
 macOS app bundle (GameController routes controller input to app bundles):
@@ -59,27 +69,32 @@ python3 -m http.server 8765
 To check that the wasm bundle actually renders, without a browser window (needs Node 22+ and Chrome):
 
 ```bash
-node tools/web_screenshot.mjs http://127.0.0.1:8765/web.html /tmp/web.png 12000 480 320
-# trailing X,Y pairs click through the menus, e.g. to stage 1.1:
-node tools/web_screenshot.mjs http://127.0.0.1:8765/web.html /tmp/play.png 9000 480 320 240,240 134,182 95,112 93,115
+node tools/web_screenshot.mjs http://127.0.0.1:8765/web.html /tmp/web.png 20000 1280 720
 ```
 
 Windows: build with the MSVC toolchain; the controller backend uses XInput (see `AGENTS.md` for the Windows build notes).
 
 ## Controls
 
+Defaults; everything except the sticks, Esc and menu navigation can be rebound on the Controls page.
+
 | Action | Keyboard / mouse | Controller |
 | --- | --- | --- |
 | Move | WASD | left stick |
 | Aim / fire | mouse + left button | right stick, or RT |
-| Boost | Space (or double-tap movement) | A or LB |
+| Boost | Space | A or LB |
 | Bomb | right mouse button, or B | B or RB |
 | Switch weapon | Q or mouse wheel | X or Y |
 | Gravity gun | E, or double-click while firing | LT |
-| Pause / leave stage | Esc | Start or View |
+| Pause | Esc | Start or View |
+| Fullscreen | F11 or Alt+Enter | |
 | Menus | arrows/WASD, Enter, Esc | D-pad or left stick, A, B |
 
-Settings and local scores live in `settings.txt` and `scores.txt` next to the executable.
+Settings, bindings and local scores live in `settings.txt`, `controls.txt` and `scores.txt` next to the executable.
+
+## Fidelity
+
+The original look is still there underneath. `MB_WIDE=0 MB_HD=0 MB_RENDER_SCALE=1 MB_BLOOM=0 MB_FX_OFF=1` renders the original 480×320 framebuffer with the original art. Against touchHLE emulator frames, the main-menu buttons are pixel-exact, and the pause panel matches the decompiled drawing. `cargo test` covers the boss patterns, gravity gun, ground scroll, frame interpolation, the camera at wide aspects, settings, bindings, scores, the tutorial and menu navigation.
 
 ## Provenance
 
@@ -92,9 +107,9 @@ Settings and local scores live in `settings.txt` and `scores.txt` next to the ex
 
 ## Layout
 
-- `src/` — the port: game screen, enemies, weapons, HUD, menus, pause popups, scores, controller input.
-- `assets/` — decoded UI, terrain, sprites and audio used at runtime; `assets/4x/` holds the generated HD copies.
-- `tools/` — asset decoders, the web build, the macOS app wrapper and the emulator-frame comparison tool.
+- `src/` — the port: game screen, enemies, weapons, HUD, menus, pause popups, options and bindings, scores, controller input, rendering.
+- `assets/` — decoded UI, terrain, sprites and audio used at runtime; `assets/4x/` holds the generated HD copies, `assets/normals/` the terrain normal maps.
+- `tools/` — asset decoders, the upscaler and normal-map generator, the web build, the macOS app wrapper and the emulator-frame comparison tool.
 - `docs/port-plan.md`, `AGENTS.md`, `worklog/` — plan, ground rules/resume status, and the development log.
 
-The original game and assets are © Alley Labs. This is a fan port of the 2009 release.
+The original game and assets are © Alley Labs. This is a free, non-commercial fan port of the 2009 release.
