@@ -43,6 +43,7 @@ Approximations / not yet faithful:
 - `Settings` (music, effects, flip, shake, boost, bomb, auto pause/gravity/upgrade) now persist to `settings.txt`, matching `PausePopup::save/load`; a first launch writes the defaults, and changes are written through as they are made.
 - High-score tables keep local arcade and survival rows in `scores.txt`. A run that makes the table opens `labelEnterName` first (typed letters/digits, up to eight; Escape keeps `PLAYER`), and the Global tab reports that the leaderboard is offline, since the original's Game Center server is gone.
 - The HELP page shows the original control diagram (`keyboard.png`). The in-game tutorial captions (`captions.png`) are not shown yet.
+- Menu fidelity, measured with `tools/compare_frame.py` against `original/screenshots/emu/main_menu.png`: the four main-menu buttons are pixel-exact (mean abs diff 0.04-0.10). The backdrop still differs (whole frame 7.8, backdrop band 9.6) because the emulator frame was taken at an unknown scroll phase and its 3D background is not reproduced exactly.
 
 Controls:
 - Keyboard and mouse: WASD moves, left mouse fires toward the cursor, Space boosts, right mouse or B bombs, Q or the wheel switches weapon.

@@ -66,8 +66,13 @@ def main():
     ap.add_argument("--mask", action="append", default=[], help="x0,y0,x1,y1 to exclude")
     ap.add_argument("--phase", help="x0,y0,x1,y1: score by phase-correlation peak of this region instead")
     ap.add_argument("--env", action="append", default=[], help="extra NAME=VALUE for the port")
+    ap.add_argument("--region", action="append", default=[], help="NAME=x0,y0,x1,y1 to score separately")
     args = ap.parse_args()
     masks = [tuple(int(v) for v in m.split(",")) for m in args.mask]
+    regions = []
+    for item in args.region:
+        name, rect = item.split("=", 1)
+        regions.append((name, tuple(int(v) for v in rect.split(","))))
     ref_im = Image.open(args.ref).convert("RGB")
     ref = np.asarray(ref_im)
     if ref_im.size != (480, 320):
@@ -94,6 +99,12 @@ def main():
     out.paste(port_im, (480, 0))
     out.paste(ImageChops.difference(ref_im, port_im), (960, 0))
     out.save(ROOT / "shots" / "compare.png")
+    if regions:
+        best_port = np.asarray(port_im).astype(int)
+        print("per-region mean abs diff against the reference:")
+        for name, (x0, y0, x1, y1) in regions:
+            d = float(np.abs(ref[y0:y1, x0:x1].astype(int) - best_port[y0:y1, x0:x1]).mean())
+            print(f"  {name:24s} {d:.2f}")
 
 
 if __name__ == "__main__":
