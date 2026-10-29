@@ -16,6 +16,7 @@ mod particles;
 mod pause;
 mod play;
 mod progress;
+mod scores;
 mod seeker;
 mod shyguy;
 mod snake;
@@ -38,6 +39,7 @@ use menu::{MenuAssets, MenuBackdrop, MenuButton, MenuScreen};
 use pause::{Action, Page, Pause, PauseAssets, Settings};
 use play::{Play, PlayAssets, RockArt};
 use progress::Progress;
+use scores::Scores;
 
 fn window_conf() -> Conf {
     // MB_WINDOW=480x320 gives a 1:1 window for pixel comparisons with the
@@ -70,6 +72,13 @@ enum MenuKind {
     World,
     /// StageSelectScreen (14): stage of `world`
     Stage(usize),
+    /// The HELP button's tutorial page: the original's control diagram.
+    Help,
+    /// HighScoresSelectScreen: arcade or survival scores.
+    ScoresSelect,
+    /// HighScoresScreen: the table for `mode` (0 arcade, 1 survival), local
+    /// or global.
+    ScoresTable(usize, bool),
 }
 
 /// sounds.raw holds effects 1-17 (music.raw is id 0).
@@ -114,6 +123,8 @@ async fn load_ui_set() -> Ui {
         "Arcade",
         "Survival",
         "Back",
+        "Local",
+        "Global",
     ] {
         names.push(format!("button{}", b));
         names.push(format!("button{}Down", b));
@@ -123,6 +134,11 @@ async fn load_ui_set() -> Ui {
         "labelSelectMode",
         "labelSelectWorld",
         "labelSelectStage",
+        "keyboard",
+        "labelLocalArcadeScores",
+        "labelGlobalArcadeScores",
+        "labelLocalSurvivalScores",
+        "labelGlobalSurvivalScores",
     ] {
         names.push(label.to_owned());
     }
@@ -325,6 +341,40 @@ fn build_menu(kind: MenuKind, ui: &Ui, progress: &Progress, fade_backdrop: bool)
             }
             MenuScreen::new(ui["labelSelectStage"].clone(), -9.0, buttons, fade_backdrop)
         }
+        // Tutorial page: the original's control diagram (`keyboard.png`, the
+        // full 480-wide sheet), centred vertically, plus the back button.
+        MenuKind::Help => MenuScreen::new(ui["keyboard"].clone(), 69.0, vec![back(6)], fade_backdrop),
+        // HighScoresSelectScreen: the same two-choice layout as PlayScreen.
+        MenuKind::ScoresSelect => MenuScreen::new(
+            ui["labelSelectMode"].clone(),
+            0.0,
+            vec![
+                back(2),
+                button(ui, "buttonArcade", "buttonArcadeDown", 47.0, 118.0, 175.0, 128.0, 0),
+                button(ui, "buttonSurvival", "buttonSurvivalDown", 258.0, 118.0, 175.0, 128.0, 1),
+            ],
+            fade_backdrop,
+        ),
+        // HighScoresScreen: the mode's label, the rows (drawn by `scores`),
+        // and the Local/Global tabs.
+        MenuKind::ScoresTable(mode, global) => {
+            let label = match (mode, global) {
+                (0, false) => "labelLocalArcadeScores",
+                (0, true) => "labelGlobalArcadeScores",
+                (1, false) => "labelLocalSurvivalScores",
+                _ => "labelGlobalSurvivalScores",
+            };
+            MenuScreen::new(
+                ui[label].clone(),
+                0.0,
+                vec![
+                    back(6),
+                    button(ui, "buttonLocal", "buttonLocalDown", 16.0, 258.0, 126.0, 54.0, 1),
+                    button(ui, "buttonGlobal", "buttonGlobalDown", 338.0, 258.0, 126.0, 54.0, 2),
+                ],
+                fade_backdrop,
+            )
+        }
     }
 }
 
@@ -332,6 +382,15 @@ fn build_menu(kind: MenuKind, ui: &Ui, progress: &Progress, fade_backdrop: bool)
 fn menu_event(kind: MenuKind, event: u8) -> Option<Next> {
     match (kind, event) {
         (MenuKind::Main, 0) => Some(Next::Menu(MenuKind::Mode)),
+        (MenuKind::Main, 3) => Some(Next::Menu(MenuKind::Help)),
+        (MenuKind::Help, 6) => Some(Next::Menu(MenuKind::Main)),
+        (MenuKind::Main, 1) => Some(Next::Menu(MenuKind::ScoresSelect)),
+        (MenuKind::ScoresSelect, 0) => Some(Next::Menu(MenuKind::ScoresTable(0, false))),
+        (MenuKind::ScoresSelect, 1) => Some(Next::Menu(MenuKind::ScoresTable(1, false))),
+        (MenuKind::ScoresSelect, 2) => Some(Next::Menu(MenuKind::Main)),
+        (MenuKind::ScoresTable(mode, _), 1) => Some(Next::Menu(MenuKind::ScoresTable(mode, false))),
+        (MenuKind::ScoresTable(mode, _), 2) => Some(Next::Menu(MenuKind::ScoresTable(mode, true))),
+        (MenuKind::ScoresTable(..), 6) => Some(Next::Menu(MenuKind::ScoresSelect)),
         (MenuKind::Mode, 0) => Some(Next::Menu(MenuKind::World)),
         (MenuKind::Mode, 1) => Some(Next::Game(SURVIVAL, 1)),
         (MenuKind::Mode, 2) => Some(Next::Menu(MenuKind::Main)),
@@ -560,6 +619,7 @@ async fn main() {
     let canvas = Canvas::new();
     let mut backdrop = MenuBackdrop::new();
     let mut progress = Progress::load();
+    let mut scores = Scores::load();
     let mut settings = Settings::load();
     // MB_DUMP_SETTINGS prints the loaded settings and exits, for checking
     // persistence without a GUI.
@@ -588,6 +648,22 @@ async fn main() {
             &play_assets,
         ));
         screen = Screen::Game;
+    }
+    // MB_MENU=<main|mode|help> opens a menu screen directly, for captures.
+    if let Ok(name) = std::env::var("MB_MENU") {
+        let kind = match name.as_str() {
+            "help" => MenuKind::Help,
+            "mode" => MenuKind::Mode,
+            "scores" => MenuKind::ScoresSelect,
+            "scores-arcade" => MenuKind::ScoresTable(0, false),
+            "scores-survival" => MenuKind::ScoresTable(1, false),
+            "scores-global" => MenuKind::ScoresTable(0, true),
+            "main" => MenuKind::Main,
+            _ => MenuKind::Main,
+        };
+        game = None;
+        screen = Screen::Menu(kind);
+        menu_screen = build_menu(kind, &ui, &progress, true);
     }
     // MB_PAUSE opens a popup for screenshot runs.
     if let Ok(kind) = std::env::var("MB_PAUSE") {
@@ -652,6 +728,9 @@ async fn main() {
                     MenuKind::Mode => Some(2),
                     MenuKind::World => Some(7),
                     MenuKind::Stage(_) => Some(6),
+                    MenuKind::Help => Some(6),
+                    MenuKind::ScoresSelect => Some(2),
+                    MenuKind::ScoresTable(..) => Some(6),
                     MenuKind::Main => None,
                 };
                 let pad_back = back.filter(|_| {
@@ -756,6 +835,11 @@ async fn main() {
                         play_effect(id, settings.effects);
                     }
                     if let Some(cleared) = g.result() {
+                        // `LocalScores::saveAndLoad`: every finished run is
+                        // offered to the table. Name entry is still to come,
+                        // so runs are filed under the default name.
+                        scores.insert(g.world == SURVIVAL, "PLAYER", g.score);
+                        scores.save();
                         if g.world < SURVIVAL {
                             progress.unlocked = progress.unlocked.max(g.world * 5 + g.stage);
                             progress.best = progress.best.max(g.score);
@@ -788,7 +872,18 @@ async fn main() {
 
         canvas.begin();
         match screen {
-            Screen::Menu(_) => menu_screen.draw(&canvas, &menu_assets, &backdrop),
+            Screen::Menu(kind) => {
+                menu_screen.draw(&canvas, &menu_assets, &backdrop);
+                if let MenuKind::ScoresTable(mode, global) = kind {
+                    scores::draw_rows(
+                        &play_assets.hud.font,
+                        &scores,
+                        mode == 1,
+                        global,
+                        menu_screen.fx.alpha,
+                    );
+                }
+            }
             Screen::Game => {
                 if let Some(g) = game.as_ref() {
                     g.draw(&canvas, &play_assets);
