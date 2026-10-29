@@ -560,6 +560,7 @@ async fn load_pause_assets() -> PauseAssets {
     PauseAssets {
         button: load_ui("button").await,
         white: Texture2D::from_rgba8(1, 1, &[255, 255, 255, 255]),
+        peg: load_ui("peg").await,
         upgrade_bg: load_ui("buttonUpgradeBackground").await,
         upgrade_icons: [
             load_ui("buttonUpgradeStandard").await,

@@ -15,6 +15,8 @@ use crate::play::{Play, Upgrade, UPGRADES};
 pub struct PauseAssets {
     pub button: Texture2D,
     pub white: Texture2D,
+    /// Slider knob (`Slider::draw` draws the 25x25 peg texture).
+    pub peg: Texture2D,
     pub upgrade_bg: Texture2D,
     pub upgrade_icons: [Texture2D; 6],
     pub upgrade_disabled: [Texture2D; 6],
@@ -875,14 +877,14 @@ impl Pause {
             1.0,
             Color::new(0.08, 0.08, 0.08, a),
         );
-        rect(
-            canvas,
-            assets,
-            x + value * w - 6.0,
-            y - 6.0,
-            12.0,
-            12.0,
+        // Slider::draw: the knob is the 25x25 peg texture at the value,
+        // offset by 12 px left and 11 px up.
+        draw_texture_ex(
+            &assets.peg,
+            x + value * w - 12.0,
+            y - 11.0,
             Color::new(1.0, 1.0, 1.0, a),
+            DrawTextureParams::default(),
         );
     }
 
