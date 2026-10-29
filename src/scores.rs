@@ -132,7 +132,7 @@ pub fn sanitize(name: &str) -> String {
 pub fn draw_rows(font: &Font, scores: &Scores, survival: bool, global: bool, alpha: f32) {
     let color = Color::new(1.0, 1.0, 1.0, alpha);
     if global {
-        font.text("GLOBAL SCORES OFFLINE", 240.0, 160.0, 2.0, Align::Centre, color);
+        notice(font, "GLOBAL SCORES OFFLINE", color);
         return;
     }
     let rows = scores.table(survival);
@@ -143,9 +143,18 @@ pub fn draw_rows(font: &Font, scores: &Scores, survival: bool, global: bool, alp
         font.number(entry.score, 440.0, y, 1.0, Align::Right, color);
     }
     if rows.is_empty() {
-        font.text("NO SCORES YET", 240.0, 160.0, 2.0, Align::Centre, color);
+        notice(font, "NO SCORES YET", color);
     }
 }
+
+/// A message in place of the table, as large as fits between the margins.
+fn notice(font: &Font, text: &str, color: Color) {
+    let scale = (NOTICE_WIDTH / font.width(text, 1.0)).min(1.5);
+    font.text(text, 240.0, 160.0, scale, Align::Centre, color);
+}
+
+/// Widest a notice may be: the table's rank and score columns (40-440).
+const NOTICE_WIDTH: f32 = 400.0;
 
 #[cfg(test)]
 mod tests {
