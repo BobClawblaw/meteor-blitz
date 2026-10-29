@@ -596,19 +596,20 @@ impl Pause {
     }
 
     /// PausePopup::draw's gradient: a dark panel from y=40 to the bottom,
-    /// with 1 px gradient rules at y=40 and y=280.
+    /// with 1 px horizontal-gradient rules at y=40 and y=280.
     fn draw_panel(&self, canvas: &Canvas, assets: &PauseAssets) {
         let a = self.alpha * 0.85;
         let top = Color::new(0.2, 0.2, 0.2, a);
         let black = Color::new(0.0, 0.0, 0.0, a);
         gradient(canvas, assets, 0.0, 40.0, CANVAS_W, 120.0, top, black);
         gradient(canvas, assets, 0.0, 160.0, CANVAS_W, 120.0, black, top);
-        let dim = Color::new(0.25, 0.25, 0.25, a);
-        let white = Color::new(1.0, 1.0, 1.0, a);
-        gradient(canvas, assets, 0.0, 40.0, 240.0, 1.0, dim, white);
-        gradient(canvas, assets, 240.0, 40.0, 240.0, 1.0, white, dim);
-        gradient(canvas, assets, 0.0, 280.0, 240.0, 1.0, dim, white);
-        gradient(canvas, assets, 240.0, 280.0, 240.0, 1.0, white, dim);
+        // The rules use the popup alpha, not the panel's 0.85.
+        let dim = Color::new(0.25, 0.25, 0.25, self.alpha);
+        let white = Color::new(1.0, 1.0, 1.0, self.alpha);
+        hgradient(canvas, assets, 0.0, 40.0, 240.0, 1.0, dim, white);
+        hgradient(canvas, assets, 240.0, 40.0, 240.0, 1.0, white, dim);
+        hgradient(canvas, assets, 0.0, 280.0, 240.0, 1.0, dim, white);
+        hgradient(canvas, assets, 240.0, 280.0, 240.0, 1.0, white, dim);
     }
 
     fn draw_main(&self, canvas: &Canvas, assets: &PauseAssets, font: &Font, settings: &Settings) {
@@ -917,7 +918,9 @@ fn fit_scale(font: &Font, text: &str, w: f32, h: f32) -> f32 {
     by_w.min(by_h).clamp(0.35, 0.9)
 }
 
-/// A 26x26 button background drawn as a nine-slice (5 px corners, 4 px edges).
+/// A 26x26 button background drawn as the original `DynamicButton`'s
+/// nine-slice: 5 px corners, 16 px edges, and the 16x16 centre stretched
+/// between them (source edges start at 4 px, not at the corner).
 fn nine_slice(
     _canvas: &Canvas,
     _assets: &PauseAssets,
@@ -944,24 +947,16 @@ fn nine_slice(
     };
     let c = 5.0;
     let e = 4.0;
+    let edge = 16.0;
     piece(0.0, 0.0, c, c, x, y, c, c);
-    piece(c, 0.0, e, c, x + c, y, w - 2.0 * c, c);
     piece(26.0 - c, 0.0, c, c, x + w - c, y, c, c);
-    piece(0.0, c, c, e, x, y + c, c, h - 2.0 * c);
-    piece(
-        c,
-        c,
-        26.0 - 2.0 * c,
-        26.0 - 2.0 * c,
-        x + c,
-        y + c,
-        w - 2.0 * c,
-        h - 2.0 * c,
-    );
-    piece(26.0 - c, c, c, e, x + w - c, y + c, c, h - 2.0 * c);
     piece(0.0, 26.0 - c, c, c, x, y + h - c, c, c);
-    piece(c, 26.0 - c, e, c, x + c, y + h - c, w - 2.0 * c, c);
     piece(26.0 - c, 26.0 - c, c, c, x + w - c, y + h - c, c, c);
+    piece(c, 0.0, edge, c, x + e, y, w - 9.0, c);
+    piece(c, 26.0 - c, edge, c, x + e, y + h - c, w - 9.0, c);
+    piece(0.0, c, c, edge, x, y + e, c, h - 9.0);
+    piece(26.0 - c, c, c, edge, x + w - c, y + e, c, h - 9.0);
+    piece(c, c, edge, edge, x + e, y + e, w - 9.0, h - 9.0);
 }
 
 fn quad(canvas: &Canvas, _assets: &PauseAssets, tex: &Texture2D, x: f32, y: f32, alpha: f32) {
@@ -1002,6 +997,30 @@ fn gradient(
             Vertex::new(x + w, y, 0.0, 1.0, 0.0, top),
             Vertex::new(x + w, y + h, 0.0, 1.0, 1.0, bottom),
             Vertex::new(x, y + h, 0.0, 0.0, 1.0, bottom),
+        ],
+        vec![0, 1, 2, 0, 2, 3],
+        Some(&assets.white),
+        false,
+    );
+}
+
+/// `Primitives::fillHorizontalGradient`, for the panel's 1 px rules.
+fn hgradient(
+    canvas: &Canvas,
+    assets: &PauseAssets,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    left: Color,
+    right: Color,
+) {
+    canvas.draw_triangles(
+        vec![
+            Vertex::new(x, y, 0.0, 0.0, 0.0, left),
+            Vertex::new(x + w, y, 0.0, 1.0, 0.0, right),
+            Vertex::new(x + w, y + h, 0.0, 1.0, 1.0, right),
+            Vertex::new(x, y + h, 0.0, 0.0, 1.0, left),
         ],
         vec![0, 1, 2, 0, 2, 3],
         Some(&assets.white),
