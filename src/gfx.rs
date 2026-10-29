@@ -214,9 +214,29 @@ pub struct Canvas {
     flash: Material,
 }
 
+/// Resolution of the offscreen canvas relative to the original 480x320
+/// framebuffer. The default matches the window's fitted canvas so the blit
+/// is 1:1; MB_RENDER_SCALE pins it (1 keeps emulator comparisons exact).
+fn render_scale() -> f32 {
+    if let Ok(v) = std::env::var("MB_RENDER_SCALE") {
+        if let Ok(s) = v.parse::<f32>() {
+            return s.clamp(1.0, 6.0);
+        }
+    }
+    let fit = (screen_width() / CANVAS_W).min(screen_height() / CANVAS_H);
+    fit.clamp(1.0, 6.0)
+}
+
 impl Canvas {
     pub fn new() -> Canvas {
-        let target = render_target(FB_W as u32, FB_H as u32);
+        // Render at the window's canvas resolution instead of the original
+        // 320x480 framebuffer, so the final blit is 1:1 rather than an
+        // upscale. MB_RENDER_SCALE pins it (1 for pixel-perfect captures).
+        let scale = render_scale();
+        let target = render_target(
+            (FB_W * scale).round() as u32,
+            (FB_H * scale).round() as u32,
+        );
         target.texture.set_filter(FilterMode::Linear);
         let backdrop_material = load_material(
             ShaderSource::Glsl {

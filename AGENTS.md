@@ -37,6 +37,7 @@ Done (faithful to the binary unless noted):
 - Pause, controls, upgrade, clear and game-over popups from `PausePopup`: layouts and gradients match the decompiled draw code; keyboard/mouse navigation; upgrade shop; survival auto-upgrade toggle.
 - Deliberate change from the original: the planet backdrop scrolls at the play plane's screen speed, so rocks stay glued to the ground (`gfx::glued_scroll`). The original's rate let them slide.
 - Performance: the loop is paced at 60 Hz (the original's simulation rate); macOS controller polling no longer posts a LaunchServices KVO notification every frame.
+- Rendering: the offscreen canvas renders at the window's fitted resolution (1:1 blit) instead of upscaling the original 320x480 framebuffer; `MB_RENDER_SCALE` pins it (1 keeps emulator comparisons exact). The bitmap font uses nearest filtering so glyphs stay crisp above 480x320; `MB_FONT_FILTER=linear` opts out.
 - Stage advance keeps the run: `Play::advance_stage` starts the next stage in the same screen, carrying score, rings, upgrade points, upgrades, lives, bombs and multiplier, like the original's `GameScreen::handleEvent` next-stage case; only the stage's world state restarts.
 
 Approximations / not yet faithful:
@@ -63,6 +64,8 @@ Next:
 Test hooks (env):
 - `MB_START=w.s` starts a stage; `MB_WAVE=n` starts at wave n.
 - `MB_SHOT` and `MB_SHOT_FRAME` capture a frame and exit.
+- `MB_RENDER_SCALE=<n>` sets the canvas render scale (default: the window's fitted scale, capped at 6; 1 = the original 480x320 framebuffer).
+- `MB_FONT_FILTER=linear` switches the bitmap font back to linear filtering.
 - `MB_PAUSE=<menu|controls|upgrade|clear|gameover>` opens a pause page for screenshot runs; it starts stage 1.1 when no stage is running, so the popup draws over a game. `original/screenshots/emu/frame_00030.png` is the pause main-page reference.
 - `MB_LABEL_SCALE=<n>` pins the pause button label scale (default 0.4), for comparing label sizes against the emulator.
 - `MB_BG_BASE` / `MB_BG_DECAL_TEX` override the menu backdrop textures (defaults `space4deep`/`fogRed`), for comparing against emulator frames.

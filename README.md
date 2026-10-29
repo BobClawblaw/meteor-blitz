@@ -17,6 +17,7 @@ Playable end to end:
 - Cannon, fire and laser weapons, gravity gun, bombs, boost, rings, multiplier, power-ups and the upgrade shop.
 - Menus and the pause/controls/upgrade/clear/game-over popups, ported from `PausePopup`; settings persist across launches; local high-score tables with name entry; HELP/tutorial captions and in-game hints.
 - Keyboard/mouse and game controller input (Xbox pads on macOS through GameController and on Windows through XInput). The web build has no controller backend yet.
+- Native-resolution rendering: the canvas renders at the window's fitted resolution with a 1:1 blit, and the pixel font uses nearest filtering. The original 480×320 framebuffer stays available via `MB_RENDER_SCALE=1` for emulator comparisons.
 
 Verified against emulator frames: the main-menu buttons are pixel-exact, and the pause panel's bands, rules, button nine-slice and slider knob match the decompiled drawing and the emulator pause frame. `cargo test` covers the boss patterns, gravity gun, ground scroll, settings, scores, tutorial gates and stick menu navigation.
 

@@ -40,6 +40,13 @@ const ONE_NUDGE: f32 = 5.0;
 
 impl Font {
     pub fn new(texture: Texture2D, dat: &[u8]) -> Font {
+        // The glyph atlas is pixel art; nearest keeps it crisp when the
+        // canvas is rendered above 480x320. MB_FONT_FILTER=linear opts out.
+        let filter = match std::env::var("MB_FONT_FILTER").as_deref() {
+            Ok("linear") => FilterMode::Linear,
+            _ => FilterMode::Nearest,
+        };
+        texture.set_filter(filter);
         let count = u16::from_le_bytes([dat[0], dat[1]]) as usize;
         let glyphs = (0..count)
             .map(|i| {
