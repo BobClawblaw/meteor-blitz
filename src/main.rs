@@ -34,7 +34,7 @@ use macroquad::audio::{
 };
 use macroquad::prelude::*;
 
-use gfx::Canvas;
+use gfx::{draw_quad, Canvas, CANVAS_W};
 use hud::{Font, HudAssets};
 use menu::{MenuAssets, MenuBackdrop, MenuButton, MenuScreen};
 use name_entry::NameEntry;
@@ -156,6 +156,7 @@ async fn load_ui_set() -> Ui {
         "labelLocalSurvivalScores",
         "labelGlobalSurvivalScores",
         "labelEnterName",
+        "captions",
     ] {
         names.push(label.to_owned());
     }
@@ -359,8 +360,9 @@ fn build_menu(kind: MenuKind, ui: &Ui, progress: &Progress, fade_backdrop: bool)
             MenuScreen::new(ui["labelSelectStage"].clone(), -9.0, buttons, fade_backdrop)
         }
         // Tutorial page: the original's control diagram (`keyboard.png`, the
-        // full 480-wide sheet), centred vertically, plus the back button.
-        MenuKind::Help => MenuScreen::new(ui["keyboard"].clone(), 69.0, vec![back(6)], fade_backdrop),
+        // full 480-wide sheet) with the caption block (`captions.png`) below
+        // it, plus the back button.
+        MenuKind::Help => MenuScreen::new(ui["keyboard"].clone(), 20.0, vec![back(6)], fade_backdrop),
         // HighScoresSelectScreen: the same two-choice layout as PlayScreen.
         MenuKind::ScoresSelect => MenuScreen::new(
             ui["labelSelectMode"].clone(),
@@ -940,6 +942,17 @@ async fn main() {
         match screen {
             Screen::Menu(kind) => {
                 menu_screen.draw(&canvas, &menu_assets, &backdrop);
+                if kind == MenuKind::Help {
+                    let caption = &ui["captions"];
+                    draw_quad(
+                        caption,
+                        ((CANVAS_W - caption.width()) * 0.5).floor(),
+                        206.0,
+                        1.0,
+                        0.0,
+                        Color::new(1.0, 1.0, 1.0, menu_screen.fx.alpha),
+                    );
+                }
                 if let MenuKind::ScoresTable(mode, global) = kind {
                     scores::draw_rows(
                         &play_assets.hud.font,

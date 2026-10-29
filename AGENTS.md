@@ -42,7 +42,7 @@ Approximations / not yet faithful:
 - Pause buttons use the generic 26x26 nine-slice plus runtime text instead of the original pre-rendered/dynamic button art; sliders are simplified rectangles.
 - `Settings` (music, effects, flip, shake, boost, bomb, auto pause/gravity/upgrade) now persist to `settings.txt`, matching `PausePopup::save/load`; a first launch writes the defaults, and changes are written through as they are made.
 - High-score tables keep local arcade and survival rows in `scores.txt`. A run that makes the table opens `labelEnterName` first (typed letters/digits, up to eight; Escape keeps `PLAYER`), and the Global tab reports that the leaderboard is offline, since the original's Game Center server is gone.
-- The HELP page shows the original control diagram (`keyboard.png`). The in-game tutorial captions (`captions.png`) are not shown yet.
+- The HELP page shows the original control diagram (`keyboard.png`) with the caption block (`captions.png`) below it. The original's in-game tutorial hints (`Tutorial::canShow*`) are still not reproduced.
 - Menu fidelity, measured with `tools/compare_frame.py` against `original/screenshots/emu/main_menu.png`: the four main-menu buttons are pixel-exact (mean abs diff 0.04-0.10). The backdrop still differs (whole frame 7.8, backdrop band 9.6) because the emulator frame was taken at an unknown scroll phase and its 3D background is not reproduced exactly.
 
 Controls:
@@ -57,7 +57,7 @@ Blocked (macOS only; Windows works): the Xbox Series controller (USB, 045e:0b12)
 - First check: System Settings > Game Controllers. If that page reacts, rerun the probes while buttons are pressed.
 
 Next:
-- The in-game tutorial captions (`captions.png`).
+- In-game tutorial hints (`Tutorial::canShow*`).
 - Pixel-diff the pause/results popups against emulator frames; replace the generic button art with the original pre-rendered/dynamic buttons.
 - Resolve controller input on macOS.
 - Windows: press View and Start with `MB_PAD_LOG=1` and confirm they log; then play a full stage on the pad (move, aim, RT fire, LT gravity, A/LB boost, B/RB bomb, X/Y weapon, pause navigation).
