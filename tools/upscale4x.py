@@ -142,8 +142,12 @@ def upscale_textures(esrgan: Path) -> None:
         dst.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory() as tmp:
             detail = Path(tmp) / "detail.png"
-            if esrgan_upscale(p, detail, esrgan, 2):
-                out = blend_seamless(Image.open(detail), seamless_base(p, 2), 24)
+            # realesrgan-x4plus only works at 4x: asked for 2x it returns a
+            # scrambled image. Upscale 4x, then bring it down to 2x.
+            if esrgan_upscale(p, detail, esrgan, 4):
+                w, h = Image.open(p).size
+                half = Image.open(detail).resize((w * 2, h * 2), Image.LANCZOS)
+                out = blend_seamless(half, seamless_base(p, 2), 24)
             else:
                 out = seamless_base(p, 2)
             out.save(dst, optimize=True)
