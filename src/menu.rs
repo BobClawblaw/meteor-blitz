@@ -52,7 +52,7 @@ impl MenuBackdrop {
 
     /// `BasicScreen::draw` up to the screen's own content: the curved
     /// backdrop at (240, 155, 100), then the horizon at the origin, scale 1.25.
-    fn draw(&self, canvas: &Canvas, assets: &MenuAssets, alpha: f32) {
+    pub fn draw(&self, canvas: &Canvas, assets: &MenuAssets, alpha: f32) {
         // MB_BG_Z overrides the backdrop depth while it is being verified.
         let z = self.bg_z.unwrap_or(BACKDROP_Z);
         canvas.draw_backdrop(true, &assets.space, &assets.fog, vec3(BACKDROP_X, BACKDROP_Y, z), self.scroll, alpha);

@@ -67,6 +67,13 @@ impl Scores {
         self.table(survival).first().map_or(0, |e| e.score)
     }
 
+    /// True when `score` would make the table; the original only prompted
+    /// for a name when it did.
+    pub fn qualifies(&self, survival: bool, score: u64) -> bool {
+        let table = self.table(survival);
+        table.len() < MAX_ENTRIES || score > table.last().map_or(0, |e| e.score)
+    }
+
     fn parse(text: &str) -> Scores {
         let mut scores = Scores::default();
         for line in text.lines() {
@@ -154,6 +161,17 @@ mod tests {
         assert_eq!(scores.highest(false), 1200);
         assert_eq!(scores.insert(false, "PLAYER", 50), 0);
         assert_eq!(scores.insert(false, "PLAYER", 5000), 1);
+    }
+
+    #[test]
+    fn qualifies_only_for_a_place() {
+        let mut scores = Scores::default();
+        assert!(scores.qualifies(false, 1));
+        for score in 1..=MAX_ENTRIES as u64 {
+            scores.insert(false, "PLAYER", score * 100);
+        }
+        assert!(!scores.qualifies(false, 50));
+        assert!(scores.qualifies(false, 2000));
     }
 
     #[test]

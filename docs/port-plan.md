@@ -12,6 +12,7 @@
 - **Status:** main menu 2D layout exact (title at ((480-w)/2, 15); PLAY 160,176; HIGH SCORES 16,176; SETTINGS 336,176; HELP 336,246). Menu backdrop is a flat approximation of the 3D `Background`.
 - Pause, controls, upgrade, clear and game-over popups ported from `PausePopup`; layouts and gradients match the decompiled draw code and are verified with `MB_PAUSE` captures. `PausePopup` settings persist to `settings.txt` (`save`/`load`), checked headlessly with `MB_DUMP_SETTINGS`.
 - High-score tables (`LocalScores`) live in `scores.txt`. `HighScoresSelectScreen` picks arcade or survival; `HighScoresScreen` draws the rows under the original labels with Local/Global tabs, and the Global tab reports offline (Game Center is gone).
+- `labelEnterName` opens before the results popup when a run makes the table; the desktop port reads the keyboard directly instead of the original on-screen keyboard.
 - The HELP button opens the tutorial page with the original control diagram (`keyboard.png`).
 - The earlier reimagined gameplay (wrapping 5760x3240 world, drones/turrets/slingers, heat, dash) is not the original's and will be replaced screen by screen.
 
