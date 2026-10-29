@@ -232,6 +232,67 @@ mod backend {
     pub(super) fn with<R>(f: impl FnOnce(&State) -> R) -> R {
         STATE.with(|s| f(&s.borrow()))
     }
+
+    /// Menu navigation from the left stick: a push is one step, and holding
+    /// repeats after a pause, like a D-pad.
+    #[derive(Default)]
+    struct Nav {
+        dir: Option<Button>,
+        held: f32,
+        repeat: f32,
+    }
+
+    thread_local! {
+        static NAV: RefCell<Nav> = RefCell::new(Nav::default());
+    }
+
+    pub fn nav(dt: f32) -> Option<Button> {
+        let v = with(|s| s.left);
+        let dir = if v.length() > 0.6 {
+            Some(if v.x.abs() > v.y.abs() {
+                if v.x < 0.0 {
+                    Button::Left
+                } else {
+                    Button::Right
+                }
+            } else if v.y < 0.0 {
+                Button::Up
+            } else {
+                Button::Down
+            })
+        } else {
+            None
+        };
+        NAV.with(|n| {
+            let mut n = n.borrow_mut();
+            if n.dir != dir {
+                n.dir = dir;
+                n.held = 0.0;
+                n.repeat = 0.0;
+                return dir;
+            }
+            let Some(d) = dir else { return None };
+            n.held += dt;
+            if n.held >= 0.45 {
+                n.repeat += dt;
+                if n.repeat >= 0.12 {
+                    n.repeat = 0.0;
+                    return Some(d);
+                }
+            }
+            None
+        })
+    }
+
+    #[cfg(test)]
+    pub(super) fn set_left_for_test(v: Vec2) {
+        STATE.with(|s| s.borrow_mut().left = v);
+    }
+
+    #[cfg(test)]
+    pub(super) fn reset_nav_for_test() {
+        NAV.with(|n| *n.borrow_mut() = Nav::default());
+    }
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -253,6 +314,18 @@ pub fn left() -> Vec2 {
     backend::with(|s| s.left)
 }
 
+/// Menu navigation from the left stick, edge-triggered and repeating while
+/// held. `None` on the web build, which has no pad backend.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn nav(dt: f32) -> Option<Button> {
+    backend::nav(dt)
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn nav(_dt: f32) -> Option<Button> {
+    None
+}
+
 /// Right stick, y down, length 0-1 (zero inside the dead zone).
 pub fn right() -> Vec2 {
     backend::with(|s| s.right)
@@ -265,4 +338,38 @@ pub fn down(b: Button) -> bool {
 /// Pressed since the last frame.
 pub fn pressed(b: Button) -> bool {
     backend::with(|s| s.pressed.contains(&b))
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stick_navigation_steps_then_repeats_and_resets() {
+        backend::reset_nav_for_test();
+        backend::set_left_for_test(Vec2::ZERO);
+        assert_eq!(nav(1.0 / 60.0), None);
+
+        backend::set_left_for_test(vec2(0.0, -1.0));
+        assert_eq!(nav(1.0 / 60.0), Some(Button::Up), "first push steps once");
+        for _ in 0..20 {
+            backend::set_left_for_test(vec2(0.0, -1.0));
+            assert_eq!(nav(1.0 / 60.0), None, "no repeat before the hold delay");
+        }
+
+        let mut repeat = None;
+        for _ in 0..20 {
+            backend::set_left_for_test(vec2(0.0, -1.0));
+            if let Some(b) = nav(1.0 / 60.0) {
+                repeat = Some(b);
+                break;
+            }
+        }
+        assert_eq!(repeat, Some(Button::Up), "holding repeats");
+
+        backend::set_left_for_test(Vec2::ZERO);
+        assert_eq!(nav(1.0 / 60.0), None);
+        backend::set_left_for_test(vec2(1.0, 0.0));
+        assert_eq!(nav(1.0 / 60.0), Some(Button::Right), "a new push steps again");
+    }
 }

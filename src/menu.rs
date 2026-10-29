@@ -81,8 +81,6 @@ pub struct MenuScreen {
     /// The button a controller has selected (shown pressed). The original
     /// had no such thing: it was touch-only.
     focus: Option<usize>,
-    /// The left stick was pushed last frame (it steps once per push).
-    stick_held: bool,
 }
 
 impl MenuScreen {
@@ -94,7 +92,6 @@ impl MenuScreen {
             fx: ScreenFx::enter(fade_backdrop),
             pressed: None,
             focus: None,
-            stick_held: false,
         }
     }
 
@@ -105,7 +102,7 @@ impl MenuScreen {
         if !self.fx.ready() {
             return None;
         }
-        if let Some(event) = self.pad_update() {
+        if let Some(event) = self.pad_update(dt) {
             return Some(event);
         }
         if !is_mouse_button_pressed(MouseButton::Left) {
@@ -119,14 +116,17 @@ impl MenuScreen {
 
     /// Controller: the D-pad or left stick moves the selection to the
     /// nearest button that way; A presses it.
-    fn pad_update(&mut self) -> Option<u8> {
-        let stick = pad::left();
-        let pushed = stick.length() > 0.6;
+    fn pad_update(&mut self, dt: f32) -> Option<u8> {
         let mut dir = Vec2::ZERO;
-        if pushed && !self.stick_held {
-            dir = if stick.x.abs() > stick.y.abs() { vec2(stick.x.signum(), 0.0) } else { vec2(0.0, stick.y.signum()) };
+        if let Some(b) = pad::nav(dt) {
+            dir = match b {
+                Button::Up => vec2(0.0, -1.0),
+                Button::Down => vec2(0.0, 1.0),
+                Button::Left => vec2(-1.0, 0.0),
+                Button::Right => vec2(1.0, 0.0),
+                _ => Vec2::ZERO,
+            };
         }
-        self.stick_held = pushed;
         for (b, d) in [(Button::Up, vec2(0.0, -1.0)), (Button::Down, vec2(0.0, 1.0)), (Button::Left, vec2(-1.0, 0.0)), (Button::Right, vec2(1.0, 0.0))] {
             if pad::pressed(b) {
                 dir = d;

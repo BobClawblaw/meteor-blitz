@@ -299,30 +299,35 @@ impl Pause {
                 if self.page == Page::Clear && !self.bonus_applied {
                     self.bonus = (self.bonus + dt * 100.0).min(self.bonus_max);
                 }
-                self.handle_input(play, settings);
+                self.handle_input(dt, play, settings);
             }
         }
         None
     }
 
-    fn handle_input(&mut self, play: &mut Play, settings: &mut Settings) {
+    fn handle_input(&mut self, dt: f32, play: &mut Play, settings: &mut Settings) {
         let items = self.items(play, settings);
         if self.selected >= items.len() {
             self.selected = items.len().saturating_sub(1);
         }
 
+        let nav = pad::nav(dt);
+        let nav_up = matches!(nav, Some(pad::Button::Up) | Some(pad::Button::Left));
+        let nav_down = matches!(nav, Some(pad::Button::Down) | Some(pad::Button::Right));
         let up = is_key_pressed(KeyCode::Up)
             || is_key_pressed(KeyCode::W)
             || is_key_pressed(KeyCode::Left)
             || is_key_pressed(KeyCode::A)
             || pad::pressed(pad::Button::Up)
-            || pad::pressed(pad::Button::Left);
+            || pad::pressed(pad::Button::Left)
+            || nav_up;
         let down = is_key_pressed(KeyCode::Down)
             || is_key_pressed(KeyCode::S)
             || is_key_pressed(KeyCode::Right)
             || is_key_pressed(KeyCode::D)
             || pad::pressed(pad::Button::Down)
-            || pad::pressed(pad::Button::Right);
+            || pad::pressed(pad::Button::Right)
+            || nav_down;
         if up {
             self.selected = (self.selected + items.len() - 1) % items.len().max(1);
         }
