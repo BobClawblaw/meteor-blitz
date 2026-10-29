@@ -2148,6 +2148,10 @@ impl Play {
             indices.extend_from_slice(&[n, n + 1, n + 2, n, n + 2, n + 3]);
         }
         if !verts.is_empty() {
+            if !additive {
+                // Laser bolts glow too.
+                canvas.add_glow(verts.clone(), indices.clone(), Some(tex));
+            }
             canvas.draw_triangles(verts, indices, Some(tex), additive);
         }
     }
@@ -2270,6 +2274,7 @@ impl Play {
             self.scroll
         };
         canvas.draw_backdrop(false, base, decal, origin, scroll, 1.0);
+        canvas.set_glowing(true);
         // EnemyManager::sharedDraw: rings first, under everything else.
         let rings = &self.pickups.rings;
         for (i, r) in rings.iter().enumerate().filter(|(_, r)| r.power.is_none()) {
@@ -2345,6 +2350,7 @@ impl Play {
                     })
                     .collect();
                 let indices: Vec<u16> = (1..9).flat_map(|i| [0, i, i + 1]).collect();
+                canvas.add_glow(verts.clone(), indices.clone(), None);
                 canvas.draw_triangles(verts, indices, None, false);
             }
             let a = t.angle.to_radians();
@@ -2535,6 +2541,7 @@ impl Play {
 
     /// GameScreen::draw: the HUD sits at depth 0 whatever the play layer does.
     fn draw_hud(&self, canvas: &Canvas, assets: &PlayAssets) {
+        canvas.set_glowing(false);
         hud::draw(&assets.hud, &self.hud_values());
         if let Some(t) = &self.tutorial {
             t.draw(canvas, &assets.hud.font);

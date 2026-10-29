@@ -1114,6 +1114,8 @@ async fn main() {
 
         gfx::set_widescreen(settings.widescreen);
         canvas.begin();
+        // The glow comes from the world's emitters; a popup hides them.
+        canvas.set_bloom(settings.bloom && pause.is_none());
         match screen {
             Screen::Menu(kind) => {
                 menu_screen.draw(&canvas, &menu_assets, &backdrop);
@@ -1147,7 +1149,6 @@ async fn main() {
                 options.draw(&canvas, &play_assets.hud.font, &settings);
             }
         }
-        canvas.set_bloom(settings.bloom);
         canvas.end();
         let t2 = get_time();
 

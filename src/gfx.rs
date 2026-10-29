@@ -134,23 +134,6 @@ void main() {
     gl_FragColor = vec4(min(t.rgb + color.rgb, vec3(1.0)), t.a * color.a);
 }"#;
 
-/// Bloom's bright pass, downsampling 4x: a 4-tap box over the source
-/// (each tap a bilinear 2x2), keeping what is brighter than Threshold.
-const BRIGHT_FRAGMENT: &str = r#"#version 100
-precision mediump float;
-varying lowp vec2 uv;
-uniform sampler2D Texture;
-uniform vec2 Texel;
-uniform float Threshold;
-void main() {
-    vec3 c = 0.25 * (texture2D(Texture, uv + Texel * vec2(-1.0, -1.0)).rgb
-        + texture2D(Texture, uv + Texel * vec2(1.0, -1.0)).rgb
-        + texture2D(Texture, uv + Texel * vec2(-1.0, 1.0)).rgb
-        + texture2D(Texture, uv + Texel * vec2(1.0, 1.0)).rgb);
-    float l = max(c.r, max(c.g, c.b));
-    gl_FragColor = vec4(c * smoothstep(Threshold, 1.0, l), 1.0);
-}"#;
-
 /// Bloom's separable Gaussian, nine taps along Dir (in texels).
 const BLUR_FRAGMENT: &str = r#"#version 100
 precision mediump float;
@@ -170,10 +153,9 @@ void main() {
     gl_FragColor = vec4(c, 1.0);
 }"#;
 
-/// Bloom: what counts as bright, how strongly the glow is added, and the
-/// glow buffers' size relative to the canvas.
-const BLOOM_THRESHOLD: f32 = 0.8;
-const BLOOM_STRENGTH: f32 = 1.0;
+/// Bloom: how strongly the glow is added, and the glow buffers' size
+/// relative to the canvas.
+const BLOOM_STRENGTH: f32 = 1.25;
 const BLOOM_DOWNSAMPLE: u32 = 4;
 
 /// Draws a full target from texture space: (0,0)-(1,1) to the whole pass.
@@ -209,13 +191,14 @@ fn pass(target: &RenderTarget, tex: &Texture2D, material: &Material) {
     gl_use_default_material();
 }
 
-/// Glow for bright pixels (port addition): a bright pass and a blur at a
-/// quarter of the canvas resolution, added over the frame at the blit.
+/// Glow from emitters (port addition): what the world pass drew additively
+/// (shots, flames, sparks, explosions), plus laser bolts and tower beams,
+/// redrawn at a quarter of the canvas resolution, blurred, and added over
+/// the frame at the blit. Clouds and the HUD never glow, however bright.
 struct Bloom {
     a: RenderTarget,
     b: RenderTarget,
     size: (u32, u32),
-    bright: Material,
     blur: Material,
 }
 
@@ -233,22 +216,19 @@ impl Bloom {
             a: new_target(size),
             b: new_target(size),
             size,
-            bright: material(
-                BRIGHT_FRAGMENT,
-                vec![
-                    UniformDesc::new("Texel", UniformType::Float2),
-                    UniformDesc::new("Threshold", UniformType::Float1),
-                ],
-            ),
             blur: material(BLUR_FRAGMENT, vec![UniformDesc::new("Dir", UniformType::Float2)]),
         }
     }
 
-    /// Renders the glow of `source` (the canvas, `canvas` pixels) into `a`.
-    fn render(&self, source: &Texture2D, canvas: (u32, u32)) {
-        self.bright.set_uniform("Texel", vec2(1.0 / canvas.0 as f32, 1.0 / canvas.1 as f32));
-        self.bright.set_uniform("Threshold", BLOOM_THRESHOLD);
-        pass(&self.a, source, &self.bright);
+    /// Redraws the emitters into `a` through the canvas camera, then blurs.
+    fn render(&self, emitters: &[Mesh], view_w: f32, additive: &Material) {
+        set_camera(&OriginalCamera { render_pass: self.a.render_pass.clone(), view_w });
+        clear_background(BLACK);
+        gl_use_material(additive);
+        for m in emitters {
+            draw_mesh(m);
+        }
+        gl_use_default_material();
         let texel = vec2(1.0 / self.size.0 as f32, 1.0 / self.size.1 as f32);
         // Two blur rounds, the second twice as wide, for a soft falloff.
         for spread in [1.0, 2.0] {
@@ -400,6 +380,9 @@ pub struct Canvas {
     target: RefCell<RenderTarget>,
     target_size: Cell<(u32, u32)>,
     bloom: RefCell<Bloom>,
+    /// The frame's emitters, recorded while `glowing` (the world pass).
+    emitters: RefCell<Vec<Mesh>>,
+    glowing: Cell<bool>,
     /// Whether `end` adds the glow (Settings::bloom; MB_BLOOM=0 forces off).
     bloom_on: Cell<bool>,
     white: Texture2D,
@@ -486,6 +469,8 @@ impl Canvas {
             target: RefCell::new(target),
             target_size: Cell::new(size),
             bloom: RefCell::new(Bloom::new(size)),
+            emitters: RefCell::new(Vec::new()),
+            glowing: Cell::new(false),
             bloom_on: Cell::new(false),
             white,
             menu_backdrop: RefCell::new(backdrop_mesh(true, view_w / CANVAS_W)),
@@ -493,6 +478,20 @@ impl Canvas {
             backdrop_material,
             additive,
             flash,
+        }
+    }
+
+    /// Records additive draws as emitters while on (the world pass).
+    pub fn set_glowing(&self, on: bool) {
+        self.glowing.set(on);
+    }
+
+    /// Adds a non-additive draw to the frame's emitters (laser bolts,
+    /// tower beams), without drawing it.
+    pub fn add_glow(&self, vertices: Vec<Vertex>, indices: Vec<u16>, texture: Option<&Texture2D>) {
+        if self.glowing.get() && self.bloom_on.get() {
+            let texture = Some(texture.unwrap_or(&self.white).clone());
+            self.emitters.borrow_mut().push(Mesh { vertices, indices, texture });
         }
     }
 
@@ -548,6 +547,8 @@ impl Canvas {
             view_w,
         });
         clear_background(BLACK);
+        self.emitters.borrow_mut().clear();
+        self.glowing.set(false);
     }
 
     /// Blit the portrait target as the landscape image. Landscape (x, y) is
@@ -555,7 +556,7 @@ impl Canvas {
     pub fn end(&self) {
         let bloom = self.bloom_on.get();
         if bloom {
-            self.bloom.borrow().render(&self.target.borrow().texture, self.target_size.get());
+            self.bloom.borrow().render(&self.emitters.borrow(), view_w(), &self.additive);
         }
         set_default_camera();
         clear_background(BLACK);
@@ -674,14 +675,14 @@ impl Canvas {
             return;
         }
         let texture = texture.unwrap_or(&self.white).clone();
+        let mesh = Mesh { vertices, indices, texture: Some(texture) };
         if additive {
             gl_use_material(&self.additive);
         }
-        draw_mesh(&Mesh {
-            vertices,
-            indices,
-            texture: Some(texture),
-        });
+        draw_mesh(&mesh);
+        if additive && self.glowing.get() && self.bloom_on.get() {
+            self.emitters.borrow_mut().push(mesh);
+        }
         if additive {
             gl_use_default_material();
         }
@@ -719,13 +720,13 @@ impl Canvas {
             vertices.push(Vertex::new(p.x - h, p.y + h, z, 0.0, 1.0, color));
             indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
         }
+        let mesh = Mesh { vertices, indices, texture: Some(tex.clone()) };
         gl_use_material(&self.additive);
-        draw_mesh(&Mesh {
-            vertices,
-            indices,
-            texture: Some(tex.clone()),
-        });
+        draw_mesh(&mesh);
         gl_use_default_material();
+        if self.glowing.get() && self.bloom_on.get() {
+            self.emitters.borrow_mut().push(mesh);
+        }
     }
 }
 
