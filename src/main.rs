@@ -560,7 +560,13 @@ async fn main() {
     let canvas = Canvas::new();
     let mut backdrop = MenuBackdrop::new();
     let mut progress = Progress::load();
-    let mut settings = Settings::default();
+    let mut settings = Settings::load();
+    // MB_DUMP_SETTINGS prints the loaded settings and exits, for checking
+    // persistence without a GUI.
+    if std::env::var_os("MB_DUMP_SETTINGS").is_some() {
+        eprintln!("settings: {}", settings.to_text().replace('\n', " "));
+        std::process::exit(0);
+    }
 
     let mut screen = Screen::Menu(MenuKind::Main);
     let mut menu_screen = build_menu(MenuKind::Main, &ui, &progress, true);
@@ -691,10 +697,16 @@ async fn main() {
             }
             Screen::Game => {
                 if pause.is_some() {
+                    let before = settings;
                     let action = match (pause.as_mut(), game.as_mut()) {
                         (Some(p), Some(g)) => p.update(dt, g, &mut settings),
                         _ => None,
                     };
+                    // `PausePopup::save`: options are written through as soon
+                    // as they change, not when the popup closes.
+                    if settings != before {
+                        settings.save();
+                    }
                     match action {
                         Some(Action::Resume) => pause = None,
                         Some(Action::Leave) => {

@@ -4,3 +4,5 @@ target/
 save.txt
 touchHLE_log.txt
 shots/
+.cargo-home/
+settings.txt

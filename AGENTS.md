@@ -40,7 +40,7 @@ Done (faithful to the binary unless noted):
 
 Approximations / not yet faithful:
 - Pause buttons use the generic 26x26 nine-slice plus runtime text instead of the original pre-rendered/dynamic button art; sliders are simplified rectangles.
-- `Settings` (music, effects, flip, shake, boost, bomb, auto pause/gravity/upgrade) is session-only; `PausePopup::save/load` is not wired yet.
+- `Settings` (music, effects, flip, shake, boost, bomb, auto pause/gravity/upgrade) now persist to `settings.txt`, matching `PausePopup::save/load`; a first launch writes the defaults, and changes are written through as they are made.
 
 Controls:
 - Keyboard and mouse: WASD moves, left mouse fires toward the cursor, Space boosts, right mouse or B bombs, Q or the wheel switches weapon.
@@ -55,7 +55,6 @@ Blocked (macOS only; Windows works): the Xbox Series controller (USB, 045e:0b12)
 
 Next:
 - Tutorial and high-score screens.
-- Wire `PausePopup` settings save/load.
 - Pixel-diff the pause/results popups against emulator frames; replace the generic button art with the original pre-rendered/dynamic buttons.
 - Resolve controller input on macOS.
 - Windows: press View and Start with `MB_PAD_LOG=1` and confirm they log; then play a full stage on the pad (move, aim, RT fire, LT gravity, A/LB boost, B/RB bomb, X/Y weapon, pause navigation).
@@ -67,5 +66,6 @@ Test hooks (env):
 - `MB_AUTOFIRE`, `MB_GUN`, `MB_BOMB_AT`, `MB_WEAPON` and `MB_DRIFT` drive play unattended.
 - `MB_FPS=<n>` overrides the 60 Hz frame cap (`0` = uncapped). `MB_PROF=1` prints update/draw CPU per 120 frames; `MB_PROF_FRAMES=n` exits after n frames for benchmarks. Screenshot runs are uncapped unless `MB_FPS` is given, so `MB_SHOT_FRAME` still selects the same state.
 - `MB_PAD_LOG` prints controller input. To tell a game bug from a driver one on Windows, run an XInput reader (`XInputGetState` on xinput1_4.dll) alongside and compare.
+- `MB_DUMP_SETTINGS=1` prints the settings loaded from `settings.txt` and exits, for checking persistence without a GUI.
 - `cargo test` covers the boss patterns, the gravity gun and the ground scroll.
 

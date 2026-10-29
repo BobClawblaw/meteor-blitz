@@ -52,6 +52,7 @@ enum Phase {
 }
 
 /// NSUserDefaults settings exposed by the pause popup.
+#[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Settings {
     pub music: f32,
     pub effects: f32,
@@ -81,6 +82,82 @@ impl Default for Settings {
             auto_upgrade: false,
             flip: false,
         }
+    }
+}
+
+/// Where `PausePopup::save`/`load` keep the settings (the original used
+/// NSUserDefaults, which survives relaunches).
+const SETTINGS_PATH: &str = "settings.txt";
+
+impl Settings {
+    /// Reads the persisted settings; anything missing or malformed keeps the
+    /// default. Mirrors `PausePopup::load`.
+    pub fn load() -> Settings {
+        match std::fs::read_to_string(SETTINGS_PATH) {
+            Ok(text) => Settings::parse(&text),
+            // First launch: NSUserDefaults starts from the defaults and keeps
+            // them, so persist them once here.
+            Err(_) => {
+                let settings = Settings::default();
+                settings.save();
+                settings
+            }
+        }
+    }
+
+    /// Mirrors `PausePopup::save`. On the web build there is no filesystem,
+    /// so this silently does nothing and settings last for the session only.
+    pub fn save(&self) {
+        let _ = std::fs::write(SETTINGS_PATH, self.to_text());
+    }
+
+    /// Key=value lines, the same shape as `save.txt`.
+    fn parse(text: &str) -> Settings {
+        let mut s = Settings::default();
+        for line in text.lines() {
+            let Some((key, value)) = line.split_once('=') else {
+                continue;
+            };
+            let value = value.trim();
+            match key.trim() {
+                "music" => s.music = value.parse().map_or(s.music, |v: f32| v.clamp(0.0, 1.0)),
+                "effects" => s.effects = value.parse().map_or(s.effects, |v: f32| v.clamp(0.0, 1.0)),
+                "shake" => s.shake = value.parse().map_or(s.shake, |v: f32| v.clamp(0.0, 1.0)),
+                "shake_control" => s.shake_control = value.parse().unwrap_or(s.shake_control).min(2),
+                "boost_control" => s.boost_control = value.parse().unwrap_or(s.boost_control).min(2),
+                "bomb_button" => s.bomb_button = parse_bool(value, s.bomb_button),
+                "auto_pause" => s.auto_pause = parse_bool(value, s.auto_pause),
+                "auto_gravity" => s.auto_gravity = parse_bool(value, s.auto_gravity),
+                "auto_upgrade" => s.auto_upgrade = parse_bool(value, s.auto_upgrade),
+                "flip" => s.flip = parse_bool(value, s.flip),
+                _ => {}
+            }
+        }
+        s
+    }
+
+    pub fn to_text(&self) -> String {
+        format!(
+            "music={}\neffects={}\nshake={}\nshake_control={}\nboost_control={}\nbomb_button={}\nauto_pause={}\nauto_gravity={}\nauto_upgrade={}\nflip={}\n",
+            self.music,
+            self.effects,
+            self.shake,
+            self.shake_control,
+            self.boost_control,
+            self.bomb_button as u8,
+            self.auto_pause as u8,
+            self.auto_gravity as u8,
+            self.auto_upgrade as u8,
+            self.flip as u8,
+        )
+    }
+}
+
+fn parse_bool(value: &str, fallback: bool) -> bool {
+    match value {
+        "1" | "true" => true,
+        "0" | "false" => false,
+        _ => fallback,
     }
 }
 
@@ -925,4 +1002,36 @@ fn gradient(
         Some(&assets.white),
         false,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn settings_round_trip() {
+        let s = Settings {
+            music: 0.25,
+            effects: 0.75,
+            shake: 1.0,
+            shake_control: 2,
+            boost_control: 1,
+            bomb_button: false,
+            auto_pause: false,
+            auto_gravity: true,
+            auto_upgrade: true,
+            flip: true,
+        };
+        assert_eq!(Settings::parse(&s.to_text()), s);
+    }
+
+    #[test]
+    fn settings_clamp_and_keep_defaults() {
+        let s = Settings::parse("music=5\neffects=-2\nshake=0.3\nbogus=1\n");
+        assert_eq!(s.music, 1.0);
+        assert_eq!(s.effects, 0.0);
+        assert_eq!(s.shake, 0.3);
+        assert_eq!(s.auto_pause, Settings::default().auto_pause);
+        assert_eq!(Settings::parse(""), Settings::default());
+    }
 }
