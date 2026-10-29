@@ -36,6 +36,14 @@ pub fn view_w() -> f32 {
     f32::from_bits(VIEW_W.load(Ordering::Relaxed))
 }
 
+/// Target pixels per canvas unit, set by `Canvas::begin`: text rasterised
+/// at this size stays sharp.
+static PIXEL_SCALE: AtomicU32 = AtomicU32::new(0x3F80_0000); // 1.0
+
+pub fn pixel_scale() -> f32 {
+    f32::from_bits(PIXEL_SCALE.load(Ordering::Relaxed))
+}
+
 /// How far the view reaches past the 480-unit canvas on each side.
 pub fn edge() -> f32 {
     (view_w() - CANVAS_W) * 0.5
@@ -763,6 +771,7 @@ impl Canvas {
         let view_w = window_view_w();
         VIEW_W.store(view_w.to_bits(), Ordering::Relaxed);
         let size = target_size(view_w);
+        PIXEL_SCALE.store((size.0 as f32 / FB_W).to_bits(), Ordering::Relaxed);
         if size != self.target_size.get() {
             *self.target.borrow_mut() = new_target(size);
             self.target_size.set(size);

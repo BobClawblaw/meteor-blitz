@@ -456,31 +456,33 @@ fn build_menu(kind: MenuKind, ui: &Ui, progress: &Progress, fade_backdrop: bool)
 
 /// The project page, linked from the main menu (port addition).
 const PROJECT_URL: &str = "https://github.com/BobClawblaw/meteor-blitz";
-/// The link's hit area: the 16-unit mark and the address to its right,
-/// centred under the main-menu buttons.
-const PROJECT_LINK: Rect = Rect { x: 153.0, y: 304.0, w: 176.0, h: 16.0 };
+/// The link's hit area: the 16-unit mark and the address to its right
+/// (194 units wide at size 12, measured), centred under the buttons.
+const PROJECT_LINK: Rect = Rect { x: 133.0, y: 304.0, w: 215.0, h: 16.0 };
 const PROJECT_LINK_EVENT: u8 = 4;
+/// The address's font size, in canvas units.
+const PROJECT_LINK_TEXT: f32 = 12.0;
 
-/// The address beside the GitHub mark, in macroquad's built-in font (the
-/// game's bitmap font has no '/', '.' or '-').
-fn draw_project_link(alpha: f32) {
+/// The address beside the GitHub mark, in Rajdhani Bold (SIL OFL,
+/// `assets/fonts/`; the game's bitmap font has no '/', '.' or '-'). It is
+/// rasterised at the target's pixel size, so it stays sharp at any window
+/// size.
+fn draw_project_link(font: &macroquad::text::Font, alpha: f32) {
     let text = PROJECT_URL.trim_start_matches("https://");
     let r = PROJECT_LINK;
-    // The built-in font has one thin weight: overdrawing it a fraction of
-    // a unit apart thickens the strokes.
-    for (dx, dy) in [(0.0, 0.0), (0.35, 0.0), (0.0, 0.3), (0.35, 0.3)] {
-        draw_text_ex(
-            text,
-            r.x + 19.0 + dx,
-            r.y + 11.5 + dy,
-            TextParams {
-                font_size: 40,
-                font_scale: 0.25,
-                color: Color::new(0.9, 0.9, 1.0, alpha),
-                ..Default::default()
-            },
-        );
-    }
+    let k = gfx::pixel_scale().max(1.0);
+    draw_text_ex(
+        text,
+        r.x + 20.0,
+        r.y + 12.0,
+        TextParams {
+            font: Some(font),
+            font_size: (PROJECT_LINK_TEXT * k).round() as u16,
+            font_scale: 1.0 / k,
+            color: Color::new(0.9, 0.9, 1.0, alpha),
+            ..Default::default()
+        },
+    );
 }
 
 /// Opens the project page in the default browser (not on the web build).
@@ -743,6 +745,8 @@ async fn main() {
     let menu_assets = load_menu_assets().await;
     let play_assets = load_play_assets().await;
     let pause_assets = load_pause_assets().await;
+    let link_font = load_ttf_font_from_bytes(include_bytes!("../assets/fonts/Rajdhani-Bold.ttf"))
+        .expect("Rajdhani-Bold.ttf");
     let music = load_sound("original/audio/music.wav").await.unwrap();
     let mut sounds: Vec<Option<Sound>> = vec![None];
     for id in 1..=SOUND_COUNT {
@@ -1209,7 +1213,7 @@ async fn main() {
             Screen::Menu(kind) => {
                 menu_screen.draw(&canvas, &menu_assets, &backdrop);
                 if kind == MenuKind::Main {
-                    draw_project_link(menu_screen.fx.alpha);
+                    draw_project_link(&link_font, menu_screen.fx.alpha);
                 }
                 if let MenuKind::ScoresTable(mode, global) = kind {
                     scores::draw_rows(
