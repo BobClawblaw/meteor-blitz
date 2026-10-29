@@ -1115,7 +1115,8 @@ async fn main() {
         match screen {
             Screen::Menu(kind) => {
                 backdrop.update(dt);
-                // A controller's B goes back, like each menu's back button.
+                // Esc or a controller's B goes back one level, like each
+                // menu's back button.
                 let back = match kind {
                     MenuKind::Mode => Some(2),
                     MenuKind::World => Some(7),
@@ -1125,7 +1126,9 @@ async fn main() {
                     MenuKind::Main => None,
                 };
                 let pad_back = back.filter(|_| {
-                    menu_screen.fx.ready() && menu_next.is_none() && pad::pressed(pad::Button::B)
+                    menu_screen.fx.ready()
+                        && menu_next.is_none()
+                        && (is_key_pressed(KeyCode::Escape) || pad::pressed(pad::Button::B))
                 });
                 if let Some(event) = menu_screen.update(dt).or(pad_back) {
                     play_effect(SOUND_BUTTON, settings.effects);
@@ -1218,6 +1221,8 @@ async fn main() {
                         Some(Action::Resume) => pause = None,
                         Some(Action::Leave) => {
                             let kind = match game.as_ref() {
+                                // HELP's tutorial came from the main menu.
+                                Some(g) if g.is_tutorial() && after_tutorial.is_none() => MenuKind::Main,
                                 Some(g) if g.world < SURVIVAL => MenuKind::Stage(g.world),
                                 _ => MenuKind::Mode,
                             };

@@ -139,6 +139,17 @@ try {
     }
     await sleep(2500);
   }
+  // KEYS=Enter,Escape,... presses those keys in order, 2.5 s apart, after
+  // the clicks (key names as in KeyboardEvent.key).
+  const codes = { Enter: ["Enter", 13], Escape: ["Escape", 27], ArrowUp: ["ArrowUp", 38],
+    ArrowDown: ["ArrowDown", 40], ArrowLeft: ["ArrowLeft", 37], ArrowRight: ["ArrowRight", 39] };
+  for (const key of (process.env.KEYS ?? "").split(",").filter(Boolean)) {
+    const [code, vk] = codes[key] ?? [key, 0];
+    for (const type of ["keyDown", "keyUp"]) {
+      await send("Input.dispatchKeyEvent", { type, key, code, windowsVirtualKeyCode: vk });
+    }
+    await sleep(2500);
+  }
 
   const r = await send("Runtime.evaluate", {
     expression: `(() => {

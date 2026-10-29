@@ -1039,6 +1039,10 @@ impl Play {
     }
 
     /// The tutorial ran to its end, or its Quit button was pressed.
+    pub fn is_tutorial(&self) -> bool {
+        self.tutorial.is_some()
+    }
+
     pub fn tutorial_complete(&self) -> bool {
         self.tutorial.as_ref().is_some_and(Tutorial::is_complete)
     }
