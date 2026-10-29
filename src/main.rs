@@ -65,6 +65,15 @@ fn window_conf() -> Conf {
         high_dpi,
         window_resizable: true,
         sample_count: 4,
+        // macOS: miniquad paces frames with a CVDisplayLink on the main
+        // display (60 Hz here, wherever the window is), which would cap the
+        // 120/144 options. In blocking mode it drops that pacer and draws
+        // whenever an update is scheduled; the loop schedules one every
+        // frame and paces itself to the Options cap.
+        platform: macroquad::miniquad::conf::Platform {
+            blocking_event_loop: cfg!(target_os = "macos"),
+            ..Default::default()
+        },
         ..Default::default()
     }
 }
@@ -1240,6 +1249,8 @@ async fn main() {
             }
             std::process::exit(0);
         }
+        // Blocking event loop (macOS): ask for the next frame now.
+        macroquad::miniquad::window::schedule_update();
         next_frame().await;
         #[cfg(not(target_arch = "wasm32"))]
         {
