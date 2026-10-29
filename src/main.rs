@@ -10,16 +10,19 @@ mod gravity;
 mod hud;
 mod lobber;
 mod menu;
+mod name_entry;
 mod mine;
 mod pad;
 mod particles;
 mod pause;
 mod play;
 mod progress;
+mod scores;
 mod seeker;
 mod shyguy;
 mod snake;
 mod tower;
+mod tutorial;
 mod waves;
 mod weapons;
 
@@ -32,12 +35,15 @@ use macroquad::audio::{
 };
 use macroquad::prelude::*;
 
-use gfx::Canvas;
+use gfx::{draw_quad, Canvas, CANVAS_W};
 use hud::{Font, HudAssets};
 use menu::{MenuAssets, MenuBackdrop, MenuButton, MenuScreen};
+use name_entry::NameEntry;
 use pause::{Action, Page, Pause, PauseAssets, Settings};
 use play::{Play, PlayAssets, RockArt};
 use progress::Progress;
+use tutorial::Tutorial;
+use scores::Scores;
 
 fn window_conf() -> Conf {
     // MB_WINDOW=480x320 gives a 1:1 window for pixel comparisons with the
@@ -70,6 +76,13 @@ enum MenuKind {
     World,
     /// StageSelectScreen (14): stage of `world`
     Stage(usize),
+    /// The HELP button's tutorial page: the original's control diagram.
+    Help,
+    /// HighScoresSelectScreen: arcade or survival scores.
+    ScoresSelect,
+    /// HighScoresScreen: the table for `mode` (0 arcade, 1 survival), local
+    /// or global.
+    ScoresTable(usize, bool),
 }
 
 /// sounds.raw holds effects 1-17 (music.raw is id 0).
@@ -83,6 +96,20 @@ const SURVIVAL: usize = 6;
 enum Screen {
     Menu(MenuKind),
     Game,
+    /// `labelEnterName`: asked once a run qualifies for the local table.
+    NameEntry(NameEntry),
+}
+
+/// A finished run waiting on the name step before its results popup.
+struct PendingRun {
+    cleared: bool,
+    world: usize,
+    stage: usize,
+    score: u64,
+    multiplier: u32,
+    time: f32,
+    bonus: f32,
+    survival: bool,
 }
 
 /// Where a menu goes once its fade-out finishes.
@@ -114,6 +141,8 @@ async fn load_ui_set() -> Ui {
         "Arcade",
         "Survival",
         "Back",
+        "Local",
+        "Global",
     ] {
         names.push(format!("button{}", b));
         names.push(format!("button{}Down", b));
@@ -123,6 +152,13 @@ async fn load_ui_set() -> Ui {
         "labelSelectMode",
         "labelSelectWorld",
         "labelSelectStage",
+        "keyboard",
+        "labelLocalArcadeScores",
+        "labelGlobalArcadeScores",
+        "labelLocalSurvivalScores",
+        "labelGlobalSurvivalScores",
+        "labelEnterName",
+        "captions",
     ] {
         names.push(label.to_owned());
     }
@@ -325,6 +361,41 @@ fn build_menu(kind: MenuKind, ui: &Ui, progress: &Progress, fade_backdrop: bool)
             }
             MenuScreen::new(ui["labelSelectStage"].clone(), -9.0, buttons, fade_backdrop)
         }
+        // Tutorial page: the original's control diagram (`keyboard.png`, the
+        // full 480-wide sheet) with the caption block (`captions.png`) below
+        // it, plus the back button.
+        MenuKind::Help => MenuScreen::new(ui["keyboard"].clone(), 20.0, vec![back(6)], fade_backdrop),
+        // HighScoresSelectScreen: the same two-choice layout as PlayScreen.
+        MenuKind::ScoresSelect => MenuScreen::new(
+            ui["labelSelectMode"].clone(),
+            0.0,
+            vec![
+                back(2),
+                button(ui, "buttonArcade", "buttonArcadeDown", 47.0, 118.0, 175.0, 128.0, 0),
+                button(ui, "buttonSurvival", "buttonSurvivalDown", 258.0, 118.0, 175.0, 128.0, 1),
+            ],
+            fade_backdrop,
+        ),
+        // HighScoresScreen: the mode's label, the rows (drawn by `scores`),
+        // and the Local/Global tabs.
+        MenuKind::ScoresTable(mode, global) => {
+            let label = match (mode, global) {
+                (0, false) => "labelLocalArcadeScores",
+                (0, true) => "labelGlobalArcadeScores",
+                (1, false) => "labelLocalSurvivalScores",
+                _ => "labelGlobalSurvivalScores",
+            };
+            MenuScreen::new(
+                ui[label].clone(),
+                0.0,
+                vec![
+                    back(6),
+                    button(ui, "buttonLocal", "buttonLocalDown", 16.0, 258.0, 126.0, 54.0, 1),
+                    button(ui, "buttonGlobal", "buttonGlobalDown", 338.0, 258.0, 126.0, 54.0, 2),
+                ],
+                fade_backdrop,
+            )
+        }
     }
 }
 
@@ -332,6 +403,15 @@ fn build_menu(kind: MenuKind, ui: &Ui, progress: &Progress, fade_backdrop: bool)
 fn menu_event(kind: MenuKind, event: u8) -> Option<Next> {
     match (kind, event) {
         (MenuKind::Main, 0) => Some(Next::Menu(MenuKind::Mode)),
+        (MenuKind::Main, 3) => Some(Next::Menu(MenuKind::Help)),
+        (MenuKind::Help, 6) => Some(Next::Menu(MenuKind::Main)),
+        (MenuKind::Main, 1) => Some(Next::Menu(MenuKind::ScoresSelect)),
+        (MenuKind::ScoresSelect, 0) => Some(Next::Menu(MenuKind::ScoresTable(0, false))),
+        (MenuKind::ScoresSelect, 1) => Some(Next::Menu(MenuKind::ScoresTable(1, false))),
+        (MenuKind::ScoresSelect, 2) => Some(Next::Menu(MenuKind::Main)),
+        (MenuKind::ScoresTable(mode, _), 1) => Some(Next::Menu(MenuKind::ScoresTable(mode, false))),
+        (MenuKind::ScoresTable(mode, _), 2) => Some(Next::Menu(MenuKind::ScoresTable(mode, true))),
+        (MenuKind::ScoresTable(..), 6) => Some(Next::Menu(MenuKind::ScoresSelect)),
         (MenuKind::Mode, 0) => Some(Next::Menu(MenuKind::World)),
         (MenuKind::Mode, 1) => Some(Next::Game(SURVIVAL, 1)),
         (MenuKind::Mode, 2) => Some(Next::Menu(MenuKind::Main)),
@@ -560,13 +640,25 @@ async fn main() {
     let canvas = Canvas::new();
     let mut backdrop = MenuBackdrop::new();
     let mut progress = Progress::load();
-    let mut settings = Settings::default();
+    let mut scores = Scores::load();
+    let mut settings = Settings::load();
+    // MB_DUMP_SETTINGS prints the loaded settings and exits, for checking
+    // persistence without a GUI.
+    if std::env::var_os("MB_DUMP_SETTINGS").is_some() {
+        eprintln!("settings: {}", settings.to_text().replace('\n', " "));
+        std::process::exit(0);
+    }
 
     let mut screen = Screen::Menu(MenuKind::Main);
     let mut menu_screen = build_menu(MenuKind::Main, &ui, &progress, true);
     let mut menu_next: Option<Next> = None;
     let mut game: Option<Play> = None;
     let mut pause: Option<Pause> = None;
+    let mut pending: Option<PendingRun> = None;
+    let mut tutorial = Tutorial::new();
+    if std::env::var_os("MB_TUTORIAL").is_some() {
+        tutorial.force();
+    }
     let mut music_on = false;
     let mut frame_count: u32 = 0;
     // MB_START=<world>.<stage> (1-based, world 7 = survival) boots straight
@@ -582,6 +674,26 @@ async fn main() {
             &play_assets,
         ));
         screen = Screen::Game;
+    }
+    // MB_MENU=<main|mode|help|scores|scores-*|name> opens a screen directly.
+    if let Ok(name) = std::env::var("MB_MENU") {
+        game = None;
+        if name == "name" {
+            screen = Screen::NameEntry(NameEntry::new(22410));
+        } else {
+            let kind = match name.as_str() {
+                "help" => MenuKind::Help,
+                "mode" => MenuKind::Mode,
+                "scores" => MenuKind::ScoresSelect,
+                "scores-arcade" => MenuKind::ScoresTable(0, false),
+                "scores-survival" => MenuKind::ScoresTable(1, false),
+                "scores-global" => MenuKind::ScoresTable(0, true),
+                "main" => MenuKind::Main,
+                _ => MenuKind::Main,
+            };
+            screen = Screen::Menu(kind);
+            menu_screen = build_menu(kind, &ui, &progress, true);
+        }
     }
     // MB_PAUSE opens a popup for screenshot runs.
     if let Ok(kind) = std::env::var("MB_PAUSE") {
@@ -613,6 +725,7 @@ async fn main() {
         .and_then(|v| v.parse().ok())
         .unwrap_or(20);
     let shot_path = std::env::var("MB_SHOT").ok();
+    let auto_name = std::env::var("MB_NAME").ok();
     // The original runs its simulation at 60 Hz. miniquad's display-link
     // pacing is not reliable (an occluded or unfocused window can run the
     // loop uncapped and peg a core), so pace it here. MB_FPS=0 disables the
@@ -638,6 +751,36 @@ async fn main() {
             set_sound_volume(&music, settings.music);
         }
 
+        // `labelEnterName`: Enter files the run and opens its results popup;
+        // Escape skips and the table keeps the default name.
+        let mut confirmed: Option<String> = None;
+        if let Screen::NameEntry(ref mut entry) = screen {
+            if let Some(name) = &auto_name {
+                // MB_NAME=<name> confirms the field for scripted runs.
+                entry.name = name.clone();
+                confirmed = Some(entry.name.clone());
+            } else if entry.update() {
+                confirmed = Some(entry.name.clone());
+            }
+        }
+        if let Some(name) = confirmed {
+            eprintln!("name entry confirmed: {:?}", name);
+            if let Some(run) = pending.take() {
+                scores.insert(run.survival, &scores::sanitize(&name), run.score);
+                scores.save();
+                pause = Some(Pause::results(
+                    run.cleared,
+                    run.world,
+                    run.stage,
+                    run.score,
+                    run.multiplier,
+                    run.time,
+                    run.bonus,
+                ));
+            }
+            screen = Screen::Game;
+        }
+
         match screen {
             Screen::Menu(kind) => {
                 backdrop.update(dt);
@@ -646,6 +789,9 @@ async fn main() {
                     MenuKind::Mode => Some(2),
                     MenuKind::World => Some(7),
                     MenuKind::Stage(_) => Some(6),
+                    MenuKind::Help => Some(6),
+                    MenuKind::ScoresSelect => Some(2),
+                    MenuKind::ScoresTable(..) => Some(6),
                     MenuKind::Main => None,
                 };
                 let pad_back = back.filter(|_| {
@@ -691,10 +837,16 @@ async fn main() {
             }
             Screen::Game => {
                 if pause.is_some() {
+                    let before = settings;
                     let action = match (pause.as_mut(), game.as_mut()) {
                         (Some(p), Some(g)) => p.update(dt, g, &mut settings),
                         _ => None,
                     };
+                    // `PausePopup::save`: options are written through as soon
+                    // as they change, not when the popup closes.
+                    if settings != before {
+                        settings.save();
+                    }
                     match action {
                         Some(Action::Resume) => pause = None,
                         Some(Action::Leave) => {
@@ -740,24 +892,50 @@ async fn main() {
                 } else if let Some(g) = game.as_mut() {
                     g.set_shake_scale(settings.shake);
                     g.update(dt);
+                    tutorial.update(
+                        dt,
+                        g.score,
+                        g.multiplier,
+                        g.bombs,
+                        g.lives,
+                        g.initial_lives(),
+                        g.initial_bombs(),
+                    );
                     for id in g.sounds.drain(..) {
                         play_effect(id, settings.effects);
                     }
                     if let Some(cleared) = g.result() {
+                        let run = PendingRun {
+                            cleared,
+                            world: g.world,
+                            stage: g.stage,
+                            score: g.score,
+                            multiplier: g.multiplier,
+                            time: g.stage_time(),
+                            bonus: g.time_bonus(),
+                            survival: g.world == SURVIVAL,
+                        };
                         if g.world < SURVIVAL {
                             progress.unlocked = progress.unlocked.max(g.world * 5 + g.stage);
                             progress.best = progress.best.max(g.score);
                             progress.save();
                         }
-                        pause = Some(Pause::results(
-                            cleared,
-                            g.world,
-                            g.stage,
-                            g.score,
-                            g.multiplier,
-                            g.stage_time(),
-                            g.time_bonus(),
-                        ));
+                        // `LocalScores::saveAndLoad` only asks for a name when
+                        // the run makes the table; the results popup follows.
+                        if scores.qualifies(run.survival, run.score) {
+                            screen = Screen::NameEntry(NameEntry::new(run.score));
+                            pending = Some(run);
+                        } else {
+                            pause = Some(Pause::results(
+                                run.cleared,
+                                run.world,
+                                run.stage,
+                                run.score,
+                                run.multiplier,
+                                run.time,
+                                run.bonus,
+                            ));
+                        }
                     } else {
                         let pad_pause =
                             pad::pressed(pad::Button::Start) || pad::pressed(pad::Button::View);
@@ -770,21 +948,52 @@ async fn main() {
                     }
                 }
             }
+            Screen::NameEntry(_) => {}
         }
 
         let t1 = get_time();
 
         canvas.begin();
         match screen {
-            Screen::Menu(_) => menu_screen.draw(&canvas, &menu_assets, &backdrop),
+            Screen::Menu(kind) => {
+                menu_screen.draw(&canvas, &menu_assets, &backdrop);
+                if kind == MenuKind::Help {
+                    let caption = &ui["captions"];
+                    draw_quad(
+                        caption,
+                        ((CANVAS_W - caption.width()) * 0.5).floor(),
+                        206.0,
+                        1.0,
+                        0.0,
+                        Color::new(1.0, 1.0, 1.0, menu_screen.fx.alpha),
+                    );
+                }
+                if let MenuKind::ScoresTable(mode, global) = kind {
+                    scores::draw_rows(
+                        &play_assets.hud.font,
+                        &scores,
+                        mode == 1,
+                        global,
+                        menu_screen.fx.alpha,
+                    );
+                }
+            }
             Screen::Game => {
                 if let Some(g) = game.as_ref() {
                     g.draw(&canvas, &play_assets);
+                    tutorial.draw(&canvas, &ui["captions"]);
                     if let Some(p) = pause.as_ref() {
                         p.draw(&canvas, &pause_assets, &play_assets.hud.font, g, &settings);
                     }
                 }
             }
+            Screen::NameEntry(ref entry) => entry.draw(
+                &canvas,
+                &menu_assets,
+                &backdrop,
+                &ui["labelEnterName"],
+                &play_assets.hud.font,
+            ),
         }
         canvas.end();
         let t2 = get_time();
@@ -824,7 +1033,15 @@ async fn main() {
         let auto_shot = shot_path.as_deref().filter(|_| frame_count == shot_frame);
         if auto_shot.is_some() {
             if let Some(g) = game.as_ref() {
-                eprintln!("shot: ship at {:?}", g.ship_pos());
+                eprintln!("shot: ship at {:?} score {} mult {} bombs {} lives {}", g.ship_pos(), g.score, g.multiplier, g.bombs, g.lives);
+            }
+            eprintln!(
+                "shot: pause {} name entry {}",
+                pause.is_some(),
+                matches!(screen, Screen::NameEntry(_))
+            );
+            if let Screen::NameEntry(ref entry) = screen {
+                eprintln!("shot: name buffer {:?}", entry.name);
             }
         }
         if is_key_pressed(KeyCode::F12) || auto_shot.is_some() {

@@ -767,6 +767,20 @@ impl Play {
         }
     }
 
+    /// Lives the run started with, for `Tutorial::canShowNumLives`.
+    pub fn initial_lives(&self) -> u32 {
+        if self.world == SURVIVAL {
+            SURVIVAL_LIVES
+        } else {
+            LIVES
+        }
+    }
+
+    /// Bombs the run started with, for `Tutorial::canShowNumBombs`.
+    pub fn initial_bombs(&self) -> u32 {
+        BOMBS
+    }
+
     /// The stage is over: `Some(true)` cleared, `Some(false)` out of lives.
     pub fn result(&self) -> Option<bool> {
         match self.state {
