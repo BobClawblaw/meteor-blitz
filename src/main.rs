@@ -157,13 +157,14 @@ mod frame_timer {
     }
 }
 
-/// A sound's file: the original WAV on desktop; on the web the MP3 from
-/// tools/web_audio.py (11.6 MB of WAV is 1.6 MB of MP3 to download).
+/// A sound's file: on desktop the cleaned WAV from tools/clean_audio.py; on
+/// the web the MP3 from tools/web_audio.py (11.5 MB of WAV is 1.6 MB of MP3
+/// to download).
 fn sound_path(name: &str) -> String {
     if cfg!(target_arch = "wasm32") {
         format!("assets/web-audio/{name}.mp3")
     } else {
-        format!("original/audio/{name}.wav")
+        format!("assets/audio/{name}.wav")
     }
 }
 

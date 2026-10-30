@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Compressed audio for the web build (desktop builds keep the WAVs).
 
-Encodes original/audio/*.wav to MP3 (LAME VBR, which every browser's
+Encodes assets/audio/*.wav (tools/clean_audio.py) to MP3 (LAME VBR, which every browser's
 decodeAudioData reads, Safari included; the LAME header carries the encoder
 delay and padding so the looping music decodes without a gap) into
 assets/web-audio/. The web build loads these instead of the 11 MB of WAVs
@@ -14,7 +14,7 @@ import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-SRC = ROOT / "original/audio"
+SRC = ROOT / "assets/audio"
 OUT = ROOT / "assets/web-audio"
 # LAME VBR quality: 2 (~190 kbps) for the music, 4 (~165 kbps) for effects.
 MUSIC_QUALITY = "2"

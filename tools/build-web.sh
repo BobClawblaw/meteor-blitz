@@ -4,7 +4,7 @@ cd "$(dirname "$0")/.."
 cargo build --target wasm32-unknown-unknown --release
 mkdir -p web
 cp target/wasm32-unknown-unknown/release/meteor-blitz.wasm web/meteor-blitz.wasm
-# The web build's MP3s, then the data pack the page loads in one request.
+# The web build's MP3s (from the cleaned WAVs), then the data pack the page loads in one request.
 python3 tools/web_audio.py
 python3 tools/web_pack.py
 if [ ! -f web/mq_js_bundle.js ]; then
