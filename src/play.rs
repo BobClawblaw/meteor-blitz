@@ -50,6 +50,13 @@ const INDICATOR_MAX_ACTIVE: usize = 12;
 /// indicator is drawn at it.
 const BOSS_INDICATOR_SCALE: f32 = 2.0;
 
+/// Port change: shot impacts (the spark and streak where a shot lands, the
+/// sprays off a hit rock or mine) and a broken rock's debris (burst, sprays
+/// and shards thrown away from the ship) draw a quarter of the original's
+/// particles; the full sprays read as too much. Enemy explosions and the
+/// rock's ring are unchanged.
+const HIT_SPARK_STRIDE: usize = 4;
+
 // GameScreen::updateLeftWheel: wheel deflection is capped at 64 units and
 // scaled by the ship's speed (5 at start), so 320 units/s at full stick.
 const WHEEL_MAX: f32 = 64.0;
@@ -1546,10 +1553,11 @@ impl Play {
             if hit {
                 // standard/fire/laserBulletCollision: a spark, and a streak
                 // back along the shot for the cannon (line 0) and laser (1).
-                effects.start(Kind::Sprite, 0, b.pos, 0.0, false);
+                let back = heading(-b.vel);
+                effects.start_thinned(Kind::Sprite, 0, b.pos, 0.0, false, HIT_SPARK_STRIDE);
                 match b.weapon {
-                    Weapon::Cannon => effects.start(Kind::Line, 0, b.pos, heading(-b.vel), false),
-                    Weapon::Laser => effects.start(Kind::Line, 1, b.pos, heading(-b.vel), false),
+                    Weapon::Cannon => effects.start_thinned(Kind::Line, 0, b.pos, back, false, HIT_SPARK_STRIDE),
+                    Weapon::Laser => effects.start_thinned(Kind::Line, 1, b.pos, back, false, HIT_SPARK_STRIDE),
                     Weapon::Fire => 0,
                 };
             }
@@ -1915,9 +1923,10 @@ impl Play {
                         Element::Fire => (12, 2),
                     };
                     self.effects.start(Kind::Ring, 0, pos, 0.0, false);
-                    self.effects.start(Kind::Sprite, 1, pos, 0.0, false);
-                    self.effects.start(Kind::Point, point, pos, away, false);
-                    self.effects.start(Kind::Diamond, diamond, pos, away, false);
+                    let stride = HIT_SPARK_STRIDE;
+                    self.effects.start_thinned(Kind::Sprite, 1, pos, 0.0, false, stride);
+                    self.effects.start_thinned(Kind::Point, point, pos, away, false, stride);
+                    self.effects.start_thinned(Kind::Diamond, diamond, pos, away, false, stride);
                 }
                 Event::RockSplit { pos, angle } => {
                     for k in 0..3 {
@@ -1933,9 +1942,8 @@ impl Play {
                         Element::Ice => (11, 13),
                         Element::Fire => (12, 14),
                     };
-                    self.effects
-                        .start(Kind::Point, back, pos, towards + 180.0, false);
-                    self.effects.start(Kind::Point, front, pos, towards, false);
+                    self.effects.start_thinned(Kind::Point, back, pos, towards + 180.0, false, HIT_SPARK_STRIDE);
+                    self.effects.start_thinned(Kind::Point, front, pos, towards, false, HIT_SPARK_STRIDE);
                 }
                 Event::WaveIncoming => self.sounds.push(SOUND_WAVE),
                 Event::DepotHit | Event::BossHit => self.sounds.push(SOUND_DEPOT_HIT),
@@ -1949,7 +1957,7 @@ impl Play {
                     }
                     if sparks {
                         let away = self.towards_ship(pos) + 180.0;
-                        self.effects.start(Kind::Point, 3, pos, away, false);
+                        self.effects.start_thinned(Kind::Point, 3, pos, away, false, HIT_SPARK_STRIDE);
                     }
                 }
                 Event::LobberDestroyed {
