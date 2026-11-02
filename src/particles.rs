@@ -202,9 +202,6 @@ struct Running {
     frame: usize,
     /// Handle for effects that follow something (LineSystem pointers).
     id: u64,
-    /// Port addition: a colour the effect's vertex colours are multiplied
-    /// by (the Formation particle style's embers).
-    tint: Option<Color>,
 }
 
 pub struct Effects {
@@ -261,19 +258,6 @@ impl Effects {
     /// `<Kind>SystemManager::start(set, x, y, angle, reverse)`. Returns a
     /// handle for `follow` and `is_running`, or 0 when nothing started.
     pub fn start(&mut self, kind: Kind, set: usize, pos: Vec2, angle: f32, reverse: bool) -> u64 {
-        self.start_tinted(kind, set, pos, angle, reverse, None)
-    }
-
-    /// `start` with the effect's colours multiplied by `tint` (port addition).
-    pub fn start_tinted(
-        &mut self,
-        kind: Kind,
-        set: usize,
-        pos: Vec2,
-        angle: f32,
-        reverse: bool,
-        tint: Option<Color>,
-    ) -> u64 {
         let m = Effects::manager(kind);
         let Some(info) = self.sets[m].1.get(set) else {
             return 0;
@@ -294,7 +278,6 @@ impl Effects {
             reverse,
             frame: 0,
             id,
-            tint,
         };
         if running.len() < info.pool {
             running.push(effect);
@@ -399,13 +382,6 @@ impl Effects {
                     one_verts.clear();
                     one_indices.clear();
                     emit(anim, frame, &place, z, smooth, &mut one_verts, &mut one_indices);
-                    if let Some(t) = e.tint {
-                        for v in &mut one_verts {
-                            for (c, k) in v.color.iter_mut().zip([t.r, t.g, t.b, t.a]) {
-                                *c = (*c as f32 * k) as u8;
-                            }
-                        }
-                    }
                     if verts.len() + one_verts.len() > MAX_BATCH_VERTICES
                         || indices.len() + one_indices.len() > MAX_BATCH_INDICES
                     {
