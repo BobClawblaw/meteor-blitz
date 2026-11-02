@@ -67,8 +67,10 @@ const LABEL_X: f32 = 40.0;
 const VALUE_X: f32 = 440.0;
 const SLIDER_X: f32 = 240.0;
 const SLIDER_W: f32 = 200.0;
-const KEY_COL_X: f32 = 250.0;
-const PAD_COL_X: f32 = 385.0;
+// The binding columns fit the 480-wide canvas, so the 3:2 view shows them
+// whole: the widest cells are "Q or mouse wheel" and "Start or View".
+const KEY_COL_X: f32 = 218.0;
+const PAD_COL_X: f32 = 360.0;
 const COL_W: f32 = 130.0;
 const STEP: f32 = 0.05;
 
