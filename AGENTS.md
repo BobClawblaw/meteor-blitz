@@ -93,7 +93,7 @@ Test hooks (env):
 - `MB_RESOLUTION=<WxH|window>` overrides the saved resolution for a run; a preset also resizes the window. `MB_WINDOW` still wins unless `MB_RESOLUTION` is set.
 - `MB_HD=0` loads the original art instead of the default `assets/8x/` (1 loads the 4x set; 8 forces the 8x set); emulator-frame comparisons use 0. The web build always loads the originals.
 - `MB_FONT_FILTER=linear` switches the bitmap font back to linear filtering.
-- `MB_PAUSE=<menu|controls|upgrade|clear|gameover>` opens a pause page for screenshot runs; it starts stage 1.1 when no stage is running, so the popup draws over a game. `original/screenshots/emu/frame_00030.png` is the pause main-page reference.
+- `MB_PAUSE=<menu|controls|upgrade|clear|gameover>` opens a pause page for screenshot runs; it starts stage 1.1 when no stage is running, so the popup draws over a game. `original/screenshots/emu/frame_00030.png` is the pause main-page reference. `MB_PAUSE_FRAME=<n>` holds the popup back until frame n, so it draws over a game that has flown in (README `pause.png`: `MB_START=1.1 MB_PAUSE=menu MB_PAUSE_FRAME=420 MB_SHOT_FRAME=480 MB_FPS=60`).
 - `MB_LABEL_SCALE=<n>` pins the pause button label scale (default 0.54), for comparing label sizes against the emulator.
 - `MB_LABEL_DY=<n>` nudges the pause labels vertically (default 1.0), for matching the emulator's label placement.
 - `MB_BG_BASE` / `MB_BG_DECAL_TEX` override the menu backdrop textures (defaults `space4deep`/`fogRed`), for comparing against emulator frames.

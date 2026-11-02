@@ -8,11 +8,21 @@ A love letter to Alley Labs' *Meteor Blitz* (iOS, 2009), given away freely and r
 
 | | |
 |---|---|
-| ![Laser fight in world 3](screenshots/gameplay-laser.png) | ![The lava world](screenshots/gameplay-lava.png) |
-| ![Main menu](screenshots/menu.png) | ![Pause menu](screenshots/pause.png) |
+| ![Laser fight in world 6](screenshots/gameplay-laser.png) | ![The lava world](screenshots/gameplay-lava.png) |
+| ![Rocks and enemies on the crater world](screenshots/gameplay-craters.png) | ![High scores](screenshots/scores.png) |
 | ![Options](screenshots/options.png) | ![Rebindable controls](screenshots/controls.png) |
 
-![Ultrawide](screenshots/ultrawide.png)
+All screenshots are taken at the original's 480x320 with lighting and effects on; the window can be any size up to 4K, from 3:2 to 21:9.
+
+### Original and port
+
+The original 1.4 release in an iPhone emulator, next to the same screen in the port.
+
+| Original (iPhone, 2009) | This port |
+|---|---|
+| ![Original main menu](screenshots/original/menu.png) | ![Port main menu](screenshots/menu.png) |
+| ![Original World 1 Stage 1](screenshots/original/gameplay.png) | ![Port World 1 Stage 1](screenshots/gameplay-stage1.png) |
+| ![Original pause menu](screenshots/original/pause.png) | ![Port pause menu](screenshots/pause.png) |
 
 ## What's new
 

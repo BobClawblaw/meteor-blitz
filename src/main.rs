@@ -1140,6 +1140,10 @@ async fn main() {
         game = Some(Play::new(0, 1, progress.best, &play_assets));
         screen = Screen::Game;
     }
+    // MB_PAUSE_FRAME=<n> holds that popup back until frame n, so the game
+    // behind it has flown in and drawn the planet.
+    let pause_frame: u32 = std::env::var("MB_PAUSE_FRAME").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
+    let mut held_pause = if pause_frame > 0 { pause.take() } else { None };
 
     // MB_PROF prints update and draw CPU time per window; MB_PROF_FRAMES=N
     // exits after N frames, for unattended benchmarks.
@@ -1573,6 +1577,9 @@ async fn main() {
         // F12 saves the frame for pixel comparison against emulator frames;
         // MB_SHOT=<file> saves frame MB_SHOT_FRAME (default 20) there and exits.
         frame_count += 1;
+        if frame_count == pause_frame {
+            pause = held_pause.take();
+        }
         let auto_shot = shot_path.as_deref().filter(|_| frame_count == shot_frame);
         if auto_shot.is_some() {
             if let Some(g) = game.as_ref() {
