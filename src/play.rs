@@ -63,6 +63,9 @@ pub fn fit_zoom(zoom: f32) -> f32 {
 /// largest sprite's half size, so nothing pops in at the view's edge.
 const COPY_MARGIN: f32 = 64.0;
 
+/// Options > Reduce flashes: full-screen flashes at this strength.
+const REDUCED_FLASH: f32 = 0.25;
+
 
 // GameScreen::updateLeftWheel: wheel deflection is capped at 64 units and
 // scaled by the ship's speed (5 at start), so 320 units/s at full stick.
@@ -824,6 +827,10 @@ pub struct Play {
     pub zoom: f32,
     /// Options > HUD size (port addition).
     pub hud_scale: f32,
+    /// Options > Reduce flashes (port addition).
+    pub reduce_flashes: bool,
+    /// Options > Colour assist (port addition).
+    pub colour_assist: bool,
     /// Lights from explosions and hits, fading out.
     glows: Vec<Glow>,
     /// Shockwave rings from big explosions.
@@ -1055,6 +1062,8 @@ impl Play {
             fx: true,
             zoom: 1.0,
             hud_scale: 1.0,
+            reduce_flashes: false,
+            colour_assist: false,
             glows: Vec::new(),
             shocks: Vec::new(),
             scorches: Vec::new(),
@@ -2450,6 +2459,34 @@ impl Play {
             })
     }
 
+    /// Colour assist (port addition): a shape on each ice rock (a pale blue
+    /// diamond) and fire rock (an amber triangle), outlined in black, at
+    /// the rock's upper right, so the element (and the weapon it is weak
+    /// to) reads from the shape alone; the light fills stand out on the
+    /// rocks' own colours.
+    fn draw_element_marks(&self, canvas: &Canvas) {
+        const SIZE: f32 = 7.0;
+        const OUTLINE: f32 = 2.5;
+        let n = self.field.rocks.len();
+        for (i, rock) in self.field.rocks.iter().enumerate() {
+            let (shape, rgb): (&[Vec2], Vec3) = match rock.element {
+                Element::Normal => continue,
+                Element::Ice => (&[vec2(0.0, -1.0), vec2(1.0, 0.0), vec2(0.0, 1.0), vec2(-1.0, 0.0)], vec3(0.75, 0.93, 1.0)),
+                Element::Fire => (&[vec2(0.0, -1.0), vec2(0.95, 0.75), vec2(-0.95, 0.75)], vec3(1.0, 0.72, 0.1)),
+            };
+            let p = self.at(&self.prev.rocks, n, i, rock.pos) + Vec2::splat(rock.radius() * 0.55) * vec2(1.0, -1.0);
+            let z = self.z + rock.z;
+            for (size, color) in [
+                (SIZE + OUTLINE, Color::new(0.0, 0.0, 0.0, 0.8 * rock.alpha)),
+                (SIZE, Color::new(rgb.x, rgb.y, rgb.z, rock.alpha)),
+            ] {
+                let verts: Vec<Vertex> = shape.iter().map(|v| Vertex::new(p.x + v.x * size, p.y + v.y * size, z, 0.0, 0.0, color)).collect();
+                let indices: Vec<u16> = (1..shape.len() as u16 - 1).flat_map(|k| [0, k, k + 1]).collect();
+                canvas.draw_triangles(verts, indices, None, false);
+            }
+        }
+    }
+
     fn draw_rocks(&self, assets: &PlayAssets) {
         // EnemyManager::sharedDraw: per element, small to extra large.
         for (e, element) in [Element::Normal, Element::Ice, Element::Fire]
@@ -2767,7 +2804,8 @@ impl Play {
         canvas.set_ground_lighting(normal.filter(|_| self.fx), &lights);
         *self.frame_lights.borrow_mut() = lights;
         if self.fx {
-            canvas.set_post(&self.waves(), world_grade(self.world));
+            let waves = if self.reduce_flashes { Vec::new() } else { self.waves() };
+            canvas.set_post(&waves, world_grade(self.world));
         }
         canvas.draw_backdrop(false, base, decal, origin, scroll, 1.0);
         for shift in self.world_copies() {
@@ -2777,7 +2815,7 @@ impl Play {
         canvas.set_shift(Vec2::ZERO);
         self.draw_indicators(assets);
         canvas.screen_space();
-        self.effects.draw_flashes(canvas);
+        self.effects.draw_flashes(canvas, if self.reduce_flashes { REDUCED_FLASH } else { 1.0 });
         self.draw_hud(canvas, assets);
     }
 
@@ -3008,6 +3046,9 @@ impl Play {
         }
         self.draw_boss(canvas, assets);
         canvas.lighting(false);
+        if self.colour_assist {
+            self.draw_element_marks(canvas);
+        }
 
         // Cannon fire: green additive point sprites trailing each bullet.
         let mut points = Vec::new();

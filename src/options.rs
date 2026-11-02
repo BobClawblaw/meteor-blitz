@@ -35,6 +35,8 @@ enum Row {
     Effects,
     Shake,
     Tutorial,
+    ReduceFlashes,
+    ColourAssist,
     Controls,
     Back,
     /// A bindings row: the action, and which column (false keyboard/mouse,
@@ -43,7 +45,7 @@ enum Row {
     Reset,
 }
 
-const MAIN_ROWS: [Row; 14] = [
+const MAIN_ROWS: [Row; 16] = [
     Row::Fullscreen,
     Row::Resolution,
     Row::Widescreen,
@@ -56,6 +58,8 @@ const MAIN_ROWS: [Row; 14] = [
     Row::Effects,
     Row::Shake,
     Row::Tutorial,
+    Row::ReduceFlashes,
+    Row::ColourAssist,
     Row::Controls,
     Row::Back,
 ];
@@ -262,6 +266,8 @@ impl Options {
             Row::FrameRate => settings.fps = cycle(&FPS_CAPS, settings.fps, true),
             Row::Resolution => settings.resolution = cycle_resolution(settings.resolution, true),
             Row::Tutorial => settings.tutorial = !settings.tutorial,
+            Row::ReduceFlashes => settings.reduce_flashes = !settings.reduce_flashes,
+            Row::ColourAssist => settings.colour_assist = !settings.colour_assist,
             Row::Music | Row::Effects | Row::Shake | Row::Zoom | Row::HudScale => return None,
             Row::Controls => {
                 self.page = Page::Controls;
@@ -335,6 +341,8 @@ impl Options {
                 Row::Effects => "Sound effects",
                 Row::Shake => "Screen shake",
                 Row::Tutorial => "Tutorial before first game",
+                Row::ReduceFlashes => "Reduce flashes",
+                Row::ColourAssist => "Colour assist",
                 Row::Controls => "Controls",
                 Row::Back => "Back",
                 Row::Bind(action) => action.label(),
@@ -352,6 +360,8 @@ impl Options {
                     font.text(&fps, VALUE_X, y, ROW_SCALE, Align::Right, white)
                 }
                 Row::Tutorial => on_off(font, settings.tutorial, y, white),
+                Row::ReduceFlashes => on_off(font, settings.reduce_flashes, y, white),
+                Row::ColourAssist => on_off(font, settings.colour_assist, y, white),
                 Row::Music | Row::Effects | Row::Shake | Row::Zoom | Row::HudScale => {
                     let v = slider(row, settings);
                     let mid = y + 4.0;

@@ -403,9 +403,11 @@ impl Effects {
 
     /// FlashManager::draw: full-screen colour at depth 0, drawn after the
     /// world (outside the playfield zoom).
-    pub fn draw_flashes(&self, canvas: &crate::gfx::Canvas) {
+    /// `strength` scales their opacity (Options > Reduce flashes).
+    pub fn draw_flashes(&self, canvas: &crate::gfx::Canvas, strength: f32) {
         let (x0, x1) = (-crate::gfx::edge(), crate::gfx::CANVAS_W + crate::gfx::edge());
-        for (color, _, _) in &self.flashes {
+        for (c, _, _) in &self.flashes {
+            let color = &Color::new(c.r, c.g, c.b, c.a * strength);
             canvas.draw_triangles(
                 vec![
                     Vertex::new(x0, 0.0, 0.0, 0.0, 0.0, *color),

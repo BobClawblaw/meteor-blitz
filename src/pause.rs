@@ -97,6 +97,12 @@ pub struct Settings {
     pub zoom: f32,
     /// Port addition: Options > HUD size, 1 (the original) to MAX_HUD_SCALE.
     pub hud_scale: f32,
+    /// Port addition: Options > Reduce flashes: full-screen flashes at a
+    /// quarter strength and no shockwave distortion.
+    pub reduce_flashes: bool,
+    /// Port addition: Options > Colour assist: shape marks on ice (diamond)
+    /// and fire (triangle) rocks, so their element reads without colour.
+    pub colour_assist: bool,
 }
 
 impl Default for Settings {
@@ -121,6 +127,8 @@ impl Default for Settings {
             visual_fx: true,
             zoom: 1.0,
             hud_scale: 1.0,
+            reduce_flashes: false,
+            colour_assist: false,
         }
     }
 }
@@ -178,6 +186,8 @@ impl Settings {
                 "fps" => s.fps = value.parse().ok().filter(|f| FPS_CAPS.contains(f)).unwrap_or(s.fps),
                 "zoom" => s.zoom = value.parse().unwrap_or(s.zoom).clamp(1.0, MAX_ZOOM),
                 "hud_scale" => s.hud_scale = value.parse().unwrap_or(s.hud_scale).clamp(1.0, MAX_HUD_SCALE),
+                "reduce_flashes" => s.reduce_flashes = parse_bool(value, s.reduce_flashes),
+                "colour_assist" => s.colour_assist = parse_bool(value, s.colour_assist),
                 "resolution" => {
                     s.resolution = if value.eq_ignore_ascii_case("window") || value.eq_ignore_ascii_case("auto") {
                         None
@@ -193,7 +203,7 @@ impl Settings {
 
     pub fn to_text(&self) -> String {
         format!(
-            "music={}\neffects={}\nshake={}\nshake_control={}\nboost_control={}\nbomb_button={}\nauto_pause={}\nauto_gravity={}\nauto_upgrade={}\nflip={}\ntutorial={}\nfullscreen={}\nbloom={}\nwidescreen={}\nfps={}\nresolution={}\nvisual_fx={}\nzoom={}\nhud_scale={}\n",
+            "music={}\neffects={}\nshake={}\nshake_control={}\nboost_control={}\nbomb_button={}\nauto_pause={}\nauto_gravity={}\nauto_upgrade={}\nflip={}\ntutorial={}\nfullscreen={}\nbloom={}\nwidescreen={}\nfps={}\nresolution={}\nvisual_fx={}\nzoom={}\nhud_scale={}\nreduce_flashes={}\ncolour_assist={}\n",
             self.music,
             self.effects,
             self.shake,
@@ -213,6 +223,8 @@ impl Settings {
             self.visual_fx as u8,
             self.zoom,
             self.hud_scale,
+            self.reduce_flashes as u8,
+            self.colour_assist as u8,
         )
     }
 }
@@ -1222,6 +1234,8 @@ mod tests {
             visual_fx: false,
             zoom: 1.5,
             hud_scale: 1.25,
+            reduce_flashes: true,
+            colour_assist: true,
         };
         assert_eq!(Settings::parse(&s.to_text()), s);
     }

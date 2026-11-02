@@ -1416,6 +1416,8 @@ async fn main() {
                     g.fx = settings.visual_fx && std::env::var_os("MB_FX_OFF").is_none();
                     g.zoom = play::fit_zoom(zoom_override.unwrap_or(settings.zoom));
                     g.hud_scale = settings.hud_scale;
+                    g.reduce_flashes = settings.reduce_flashes;
+                    g.colour_assist = settings.colour_assist;
                     g.update(dt);
                     for id in g.sounds.drain(..) {
                         play_effect(id, settings.effects);
