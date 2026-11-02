@@ -54,11 +54,6 @@ const BOSS_INDICATOR_SCALE: f32 = 2.0;
 /// largest sprite's half size, so nothing pops in at the view's edge.
 const COPY_MARGIN: f32 = 64.0;
 
-/// Port change: a broken rock's debris (burst, sprays and shards thrown away
-/// from the ship) draws a quarter of the original's particles; the full
-/// blowback read as too much. Shot impacts, enemy explosions and the rock's
-/// ring are as in the original.
-const DEBRIS_STRIDE: usize = 4;
 
 // GameScreen::updateLeftWheel: wheel deflection is capped at 64 units and
 // scaled by the ship's speed (5 at start), so 320 units/s at full stick.
@@ -1932,10 +1927,9 @@ impl Play {
                         Element::Fire => (12, 2),
                     };
                     self.effects.start(Kind::Ring, 0, pos, 0.0, false);
-                    let stride = DEBRIS_STRIDE;
-                    self.effects.start_thinned(Kind::Sprite, 1, pos, 0.0, false, stride);
-                    self.effects.start_thinned(Kind::Point, point, pos, away, false, stride);
-                    self.effects.start_thinned(Kind::Diamond, diamond, pos, away, false, stride);
+                    self.effects.start(Kind::Sprite, 1, pos, 0.0, false);
+                    self.effects.start(Kind::Point, point, pos, away, false);
+                    self.effects.start(Kind::Diamond, diamond, pos, away, false);
                 }
                 Event::RockSplit { pos, angle } => {
                     for k in 0..3 {

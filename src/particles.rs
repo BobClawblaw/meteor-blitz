@@ -202,9 +202,6 @@ struct Running {
     frame: usize,
     /// Handle for effects that follow something (LineSystem pointers).
     id: u64,
-    /// Every `stride`th point, line or diamond is drawn (1 = all; see
-    /// `start_thinned`).
-    stride: usize,
 }
 
 pub struct Effects {
@@ -261,21 +258,6 @@ impl Effects {
     /// `<Kind>SystemManager::start(set, x, y, angle, reverse)`. Returns a
     /// handle for `follow` and `is_running`, or 0 when nothing started.
     pub fn start(&mut self, kind: Kind, set: usize, pos: Vec2, angle: f32, reverse: bool) -> u64 {
-        self.start_thinned(kind, set, pos, angle, reverse, 1)
-    }
-
-    /// `start`, drawing only every `stride`th point, line or diamond
-    /// (port addition, for lighter hit sparks). A particle keeps its index
-    /// through the baked frames, so the kept ones move smoothly.
-    pub fn start_thinned(
-        &mut self,
-        kind: Kind,
-        set: usize,
-        pos: Vec2,
-        angle: f32,
-        reverse: bool,
-        stride: usize,
-    ) -> u64 {
         let m = Effects::manager(kind);
         let Some(info) = self.sets[m].1.get(set) else {
             return 0;
@@ -296,7 +278,6 @@ impl Effects {
             reverse,
             frame: 0,
             id,
-            stride: stride.max(1),
         };
         if running.len() < info.pool {
             running.push(effect);
@@ -400,7 +381,7 @@ impl Effects {
                     };
                     one_verts.clear();
                     one_indices.clear();
-                    emit(anim, frame, e.stride, &place, z, smooth, &mut one_verts, &mut one_indices);
+                    emit(anim, frame, &place, z, smooth, &mut one_verts, &mut one_indices);
                     if verts.len() + one_verts.len() > MAX_BATCH_VERTICES
                         || indices.len() + one_indices.len() > MAX_BATCH_INDICES
                     {
@@ -455,7 +436,6 @@ const SOFT_LINE: f32 = 2.5;
 fn emit(
     anim: &Anim,
     frame: usize,
-    stride: usize,
     place: &dyn Fn(Vec2) -> Vec2,
     z: f32,
     smooth: bool,
@@ -487,7 +467,7 @@ fn emit(
             colors,
         } => {
             let start = offsets[frame] as usize;
-            for i in (start..start + counts[frame] as usize).step_by(stride) {
+            for i in start..start + counts[frame] as usize {
                 let (p, size) = points[i];
                 let centre = place(p);
                 let square = |h: f32| {
@@ -517,7 +497,7 @@ fn emit(
             colors,
         } => {
             let start = offsets[frame] as usize;
-            for l in (0..counts[frame] as usize).step_by(stride) {
+            for l in 0..counts[frame] as usize {
                 let (i, j) = (start + l * 2, start + l * 2 + 1);
                 let (a, b) = (place(line_verts[i]), place(line_verts[j]));
                 // A quad standing in for GL_LINES: one unit wide, or a soft
@@ -550,10 +530,7 @@ fn emit(
                 let p = place(d_verts[start + k]);
                 verts.push(Vertex::new(p.x, p.y, z, 0.0, 0.0, color(colors[start + k])));
             }
-            // Each diamond is four triangles (12 indices) around its centre.
-            for (_, tris) in frame_indices[frame].chunks(12).enumerate().filter(|(d, _)| d % stride == 0) {
-                indices.extend(tris.iter().map(|&k| base + k));
-            }
+            indices.extend(frame_indices[frame].iter().map(|&k| base + k));
         }
         Anim::Rings {
             verts: r_verts,
@@ -573,5 +550,3 @@ fn emit(
         }
     }
 }
-
-
