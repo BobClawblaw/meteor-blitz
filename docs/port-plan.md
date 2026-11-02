@@ -40,7 +40,7 @@ In order, one commit each (signing/notarization and an online leaderboard are ou
 2. HUD scale option.
 3. Accessibility: reduce flashes (full-screen flashes, shockwaves), colourblind-safe tints for fire/ice and indicators.
 4. Quick restart from the pause menu; replay any cleared stage from stage select.
-5. Controller button icons (Xbox and PlayStation) in prompts and on the Controls page.
+5. Controller button icons (Xbox and PlayStation) in prompts and on the Controls page. Done: Xbox, PlayStation and Nintendo styles, Auto by the connected pad.
 6. Rumble on bombs, hits, deaths and boss kills.
 7. Local stats page and achievements.
 8. Touch controls for the web build (twin sticks, bomb, boost).

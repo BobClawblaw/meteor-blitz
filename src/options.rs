@@ -12,6 +12,7 @@ use macroquad::prelude::*;
 use crate::bindings::{self, Action, Bindings, ACTIONS};
 use crate::gfx::{edge, Canvas, CANVAS_H, CANVAS_W};
 use crate::hud::{Align, Font};
+use crate::icons;
 use crate::pad::{self, Button};
 use crate::pause::{Settings, FPS_CAPS, MAX_HUD_SCALE, MAX_ZOOM, RESOLUTIONS};
 
@@ -38,6 +39,7 @@ enum Row {
     Tutorial,
     ReduceFlashes,
     ColourAssist,
+    ButtonIcons,
     Controls,
     Back,
     /// A bindings row: the action, and which column (false keyboard/mouse,
@@ -46,7 +48,7 @@ enum Row {
     Reset,
 }
 
-const MAIN_ROWS: [Row; 17] = [
+const MAIN_ROWS: [Row; 18] = [
     Row::Fullscreen,
     Row::Resolution,
     Row::Widescreen,
@@ -62,6 +64,7 @@ const MAIN_ROWS: [Row; 17] = [
     Row::Tutorial,
     Row::ReduceFlashes,
     Row::ColourAssist,
+    Row::ButtonIcons,
     Row::Controls,
     Row::Back,
 ];
@@ -202,6 +205,7 @@ impl Options {
                 Row::FrameRate => settings.fps = cycle(&FPS_CAPS, settings.fps, right),
                 Row::Resolution => settings.resolution = cycle_resolution(settings.resolution, right),
                 Row::Particles => settings.formation = !settings.formation,
+                Row::ButtonIcons => settings.button_icons = cycle_icons(settings.button_icons, right),
                 _ => {}
             }
         }
@@ -272,6 +276,7 @@ impl Options {
             Row::Tutorial => settings.tutorial = !settings.tutorial,
             Row::ReduceFlashes => settings.reduce_flashes = !settings.reduce_flashes,
             Row::ColourAssist => settings.colour_assist = !settings.colour_assist,
+            Row::ButtonIcons => settings.button_icons = cycle_icons(settings.button_icons, true),
             Row::Music | Row::Effects | Row::Shake | Row::Zoom | Row::HudScale => return None,
             Row::Controls => {
                 self.page = Page::Controls;
@@ -348,6 +353,7 @@ impl Options {
                 Row::Tutorial => "Tutorial before first game",
                 Row::ReduceFlashes => "Reduce flashes",
                 Row::ColourAssist => "Colour assist",
+                Row::ButtonIcons => "Button icons",
                 Row::Controls => "Controls",
                 Row::Back => "Back",
                 Row::Bind(action) => action.label(),
@@ -375,6 +381,13 @@ impl Options {
                 Row::Tutorial => on_off(font, settings.tutorial, y, white),
                 Row::ReduceFlashes => on_off(font, settings.reduce_flashes, y, white),
                 Row::ColourAssist => on_off(font, settings.colour_assist, y, white),
+                Row::ButtonIcons => {
+                    let style = match settings.button_icons {
+                        icons::AUTO => format!("Auto {}", icons::detected_style().name()),
+                        v => icons::STYLES[v as usize - 1].name().to_owned(),
+                    };
+                    font.text(&style, VALUE_X, y, ROW_SCALE, Align::Right, white)
+                }
                 Row::Music | Row::Effects | Row::Shake | Row::Zoom | Row::HudScale => {
                     let v = slider(row, settings);
                     let mid = y + 4.0;
@@ -433,12 +446,14 @@ impl Options {
         if self.scroll + VISIBLE_ROWS < rows.len() {
             more(self.rect(self.scroll + VISIBLE_ROWS - 1).y + 6.0, false);
         }
+        let icon = |b| icons::char_of(b);
+        let (a, x, back) = (icon(Button::A), icon(Button::X), icon(Button::B));
         let help = match (self.page, self.capturing.is_some()) {
-            (_, true) => "Esc cancels",
-            (Page::Controls, false) => "Enter or A rebinds   Delete or X clears   Esc or B back",
-            (Page::Main, false) => "Enter or A selects   Left and Right adjust   Esc or B back",
+            (_, true) => "Esc cancels".to_owned(),
+            (Page::Controls, false) => format!("Enter or {a} rebinds   Delete or {x} clears   Esc or {back} back"),
+            (Page::Main, false) => format!("Enter or {a} selects   Left and Right adjust   Esc or {back} back"),
         };
-        font.text(help, 240.0, CANVAS_H - 12.0, 0.4, Align::Centre, dim);
+        font.text(&help, 240.0, CANVAS_H - 12.0, 0.4, Align::Centre, dim);
     }
 }
 
@@ -464,6 +479,12 @@ fn cycle(list: &[u32], value: u32, up: bool) -> u32 {
     let i = list.iter().position(|&v| v == value).unwrap_or(0);
     let n = list.len();
     list[if up { (i + 1) % n } else { (i + n - 1) % n }]
+}
+
+/// Options > Button icons: Auto, then each style, wrapping.
+fn cycle_icons(value: u8, up: bool) -> u8 {
+    let n = icons::STYLES.len() as u8 + 1;
+    if up { (value + 1) % n } else { (value + n - 1) % n }
 }
 
 fn on_off(font: &Font, on: bool, y: f32, color: Color) {

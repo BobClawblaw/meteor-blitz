@@ -58,6 +58,11 @@
             const out = new Float32Array(wasm_memory.buffer, ptr, 21);
             for (let i = 0; i < 4; i++) out[i] = pad.axes[i] || 0;
             for (let i = 0; i < 17; i++) out[4 + i] = pad.buttons[i] ? pad.buttons[i].value : 0;
+            // 1 + the button-icon style: Sony (054c) and Nintendo (057e)
+            // pads by id, anything else Xbox.
+            const id = pad.id.toLowerCase();
+            if (/054c|dualsense|dualshock|playstation/.test(id)) return 2;
+            if (/057e|nintendo|pro controller|joy-con/.test(id)) return 3;
             return 1;
           };
         },

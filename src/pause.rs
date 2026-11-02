@@ -108,6 +108,9 @@ pub struct Settings {
     /// Port addition: Options > Particle style: Formation (gas clouds in the
     /// look of BlockYard's Formation sky) instead of the original's sprites.
     pub formation: bool,
+    /// Options > Button icons: 0 follows the connected pad, 1 Xbox,
+    /// 2 PlayStation, 3 Nintendo (`icons`).
+    pub button_icons: u8,
 }
 
 impl Default for Settings {
@@ -135,6 +138,7 @@ impl Default for Settings {
             reduce_flashes: false,
             colour_assist: false,
             formation: false,
+            button_icons: crate::icons::AUTO,
         }
     }
 }
@@ -195,6 +199,7 @@ impl Settings {
                 "reduce_flashes" => s.reduce_flashes = parse_bool(value, s.reduce_flashes),
                 "colour_assist" => s.colour_assist = parse_bool(value, s.colour_assist),
                 "formation" => s.formation = parse_bool(value, s.formation),
+                "button_icons" => s.button_icons = value.parse().unwrap_or(s.button_icons).min(3),
                 "resolution" => {
                     s.resolution = if value.eq_ignore_ascii_case("window") || value.eq_ignore_ascii_case("auto") {
                         None
@@ -210,7 +215,7 @@ impl Settings {
 
     pub fn to_text(&self) -> String {
         format!(
-            "music={}\neffects={}\nshake={}\nshake_control={}\nboost_control={}\nbomb_button={}\nauto_pause={}\nauto_gravity={}\nauto_upgrade={}\nflip={}\ntutorial={}\nfullscreen={}\nbloom={}\nwidescreen={}\nfps={}\nresolution={}\nvisual_fx={}\nzoom={}\nhud_scale={}\nreduce_flashes={}\ncolour_assist={}\nformation={}\n",
+            "music={}\neffects={}\nshake={}\nshake_control={}\nboost_control={}\nbomb_button={}\nauto_pause={}\nauto_gravity={}\nauto_upgrade={}\nflip={}\ntutorial={}\nfullscreen={}\nbloom={}\nwidescreen={}\nfps={}\nresolution={}\nvisual_fx={}\nzoom={}\nhud_scale={}\nreduce_flashes={}\ncolour_assist={}\nformation={}\nbutton_icons={}\n",
             self.music,
             self.effects,
             self.shake,
@@ -233,6 +238,7 @@ impl Settings {
             self.reduce_flashes as u8,
             self.colour_assist as u8,
             self.formation as u8,
+            self.button_icons,
         )
     }
 }
@@ -1268,6 +1274,7 @@ mod tests {
             reduce_flashes: true,
             colour_assist: true,
             formation: true,
+            button_icons: 2,
         };
         assert_eq!(Settings::parse(&s.to_text()), s);
     }

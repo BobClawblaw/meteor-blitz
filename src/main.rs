@@ -13,6 +13,7 @@ mod formation;
 mod gfx;
 mod gravity;
 mod hud;
+mod icons;
 mod lobber;
 mod menu;
 mod name_entry;
@@ -1173,11 +1174,12 @@ async fn main() {
     let pause_frame: u32 = std::env::var("MB_PAUSE_FRAME").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
     let mut held_pause = if pause_frame > 0 { pause.take() } else { None };
 
-    // MB_ZOOM=<1.0-2.0> overrides Options > Playfield zoom for a run.
+    // MB_ZOOM=<1.0-1.5> overrides Options > Playfield zoom for a run.
     let zoom_override: Option<f32> = std::env::var("MB_ZOOM")
         .ok()
         .and_then(|v| v.parse::<f32>().ok())
         .map(|z| z.clamp(1.0, pause::MAX_ZOOM));
+    let icons_override: Option<u8> = std::env::var("MB_ICONS").ok().and_then(|v| v.parse::<u8>().ok()).map(|v| v.min(3));
     // MB_PROF prints update and draw CPU time per window; MB_PROF_FRAMES=N
     // exits after N frames, for unattended benchmarks.
     let prof = std::env::var_os("MB_PROF").is_some();
@@ -1218,6 +1220,8 @@ async fn main() {
         let dt = get_frame_time().min(0.05);
         let t0 = get_time();
         pad::poll();
+        // MB_ICONS=<0-3> overrides Options > Button icons for captures.
+        icons::set_setting(icons_override.unwrap_or(settings.button_icons));
         // F11 or Alt+Enter toggles fullscreen, remembered across launches.
         let alt = is_key_down(KeyCode::LeftAlt) || is_key_down(KeyCode::RightAlt);
         if is_key_pressed(KeyCode::F11) || (alt && is_key_pressed(KeyCode::Enter)) {

@@ -137,7 +137,9 @@ mod raw {
 
     pub fn read() -> Option<Raw> {
         let mut v = [0f32; AXES + 17];
-        if unsafe { mb_gamepad_read(v.as_mut_ptr()) } == 0 {
+        // 0: no pad; else 1 + the pad's style (index.html reads its id).
+        let kind = unsafe { mb_gamepad_read(v.as_mut_ptr()) };
+        if kind == 0 {
             return None;
         }
         let button = |i: usize| v[AXES + i];
@@ -158,7 +160,12 @@ mod raw {
             (Button::Right, button(15) > 0.5),
         ];
         Some(Raw {
-            name: "gamepad".to_owned(),
+            name: match kind {
+                2 => "PlayStation gamepad",
+                3 => "Nintendo gamepad",
+                _ => "gamepad",
+            }
+            .to_owned(),
             // The Gamepad API has y down; `stick` takes y up.
             left: stick(v[0], -v[1]),
             right: stick(v[2], -v[3]),
@@ -235,6 +242,7 @@ mod backend {
             let Some(raw) = raw::read() else { return };
             if !was_connected {
                 eprintln!("controller: {}", raw.name);
+                crate::icons::detected(&raw.name);
             }
             s.connected = true;
             s.left = raw.left;

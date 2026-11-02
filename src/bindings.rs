@@ -110,7 +110,8 @@ impl Input {
     }
 
     /// The name shown on the Controls page and in tutorial hints (the game
-    /// font has letters, digits and spaces).
+    /// font has letters, digits and spaces); a pad button is the character
+    /// the font draws as its icon (`icons`).
     pub fn name(self) -> String {
         match self {
             Input::Key(k) => key_name(k),
@@ -118,23 +119,7 @@ impl Input {
             Input::MouseRight => "Right mouse".to_owned(),
             Input::MouseMiddle => "Middle mouse".to_owned(),
             Input::Wheel => "Mouse wheel".to_owned(),
-            Input::Pad(b) => match b {
-                Button::LeftBumper => "LB",
-                Button::RightBumper => "RB",
-                Button::LeftTrigger => "LT",
-                Button::RightTrigger => "RT",
-                Button::Up => "Dpad up",
-                Button::Down => "Dpad down",
-                Button::Left => "Dpad left",
-                Button::Right => "Dpad right",
-                Button::A => "A",
-                Button::B => "B",
-                Button::X => "X",
-                Button::Y => "Y",
-                Button::Start => "Start",
-                Button::View => "View",
-            }
-            .to_owned(),
+            Input::Pad(b) => crate::icons::char_of(b).to_string(),
         }
     }
 
@@ -321,7 +306,7 @@ impl Bindings {
         }
     }
 
-    /// "Space or A or LB": every input for `action`, for hints.
+    /// "Space or (A) or (LB)": every input for `action`, for hints.
     pub fn describe(&self, action: Action) -> String {
         let names: Vec<String> = self.keys(action).iter().chain(self.pads(action)).map(|x| x.name()).collect();
         if names.is_empty() {
@@ -433,7 +418,11 @@ mod tests {
 
     #[test]
     fn describes_every_input() {
-        assert_eq!(Bindings::default().describe(Action::Boost), "Space or A or LB");
+        let icon = |b| crate::icons::char_of(b);
+        assert_eq!(
+            Bindings::default().describe(Action::Boost),
+            format!("Space or {} or {}", icon(Button::A), icon(Button::LeftBumper))
+        );
         assert_eq!(key_name(KeyCode::Key7), "7");
     }
 }

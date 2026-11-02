@@ -44,6 +44,8 @@ const ONE_NUDGE: f32 = 5.0;
 /// Inked rows of the letters and digits in ngage.png; their 15-row glyph
 /// rectangles end in two rows of soft shadow.
 const CAP_HEIGHT: f32 = 13.0;
+/// Space each side of a controller button icon (`icons`).
+const ICON_GAP: f32 = 2.0;
 
 impl Font {
     pub fn new(texture: Texture2D, dat: &[u8], atlas_scale: f32) -> Font {
@@ -100,6 +102,9 @@ impl Font {
 
     fn advance(&self, c: char, scale: f32) -> f32 {
         let logical = 1.0 / self.atlas_scale;
+        if let Some(b) = crate::icons::button_of(c) {
+            return crate::icons::width(self, b, scale) + scale * ICON_GAP * 2.0;
+        }
         match glyph_index(c) {
             Some(i) => scale + scale * self.glyphs[i][2] * logical,
             None => scale + scale * SPACE_WIDTH,
@@ -128,6 +133,8 @@ impl Font {
         for c in text.chars() {
             if let Some(i) = glyph_index(c) {
                 self.glyph(i, x, y, scale, color);
+            } else if let Some(b) = crate::icons::button_of(c) {
+                crate::icons::draw(self, b, x + scale * ICON_GAP, y, scale, color);
             }
             x += self.advance(c, scale);
         }
