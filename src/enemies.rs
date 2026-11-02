@@ -96,7 +96,7 @@ const TICK: f32 = 0.01;
 /// The next wave waits until at most this many units remain, at least 8.
 const MIN_THRESHOLD: i32 = 8;
 
-/// What a shot hit, for the Formation gas's look (port addition).
+/// What a shot hit, for the look of its physics particles (port addition).
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Surface {
     Rock(Element),

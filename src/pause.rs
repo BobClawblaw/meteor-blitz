@@ -105,9 +105,10 @@ pub struct Settings {
     /// Port addition: Options > Colour assist: shape marks on ice (diamond)
     /// and fire (triangle) rocks, so their element reads without colour.
     pub colour_assist: bool,
-    /// Port addition: Options > Particle style: Formation (gas clouds in the
-    /// look of BlockYard's Formation sky) instead of the original's sprites.
-    pub formation: bool,
+    /// Port addition: Options > Particle style: Physics (layered fire,
+    /// sparks, debris and smoke carrying the shot's momentum) instead of the
+    /// original's sprite systems (Classic).
+    pub physics_particles: bool,
     /// Options > Button icons: 0 follows the connected pad, 1 Xbox,
     /// 2 PlayStation, 3 Nintendo (`icons`).
     pub button_icons: u8,
@@ -140,7 +141,7 @@ impl Default for Settings {
             hud_scale: 1.0,
             reduce_flashes: false,
             colour_assist: false,
-            formation: false,
+            physics_particles: false,
             button_icons: crate::icons::AUTO,
             rumble: true,
         }
@@ -202,7 +203,9 @@ impl Settings {
                 "hud_scale" => s.hud_scale = value.parse().unwrap_or(s.hud_scale).clamp(1.0, MAX_HUD_SCALE),
                 "reduce_flashes" => s.reduce_flashes = parse_bool(value, s.reduce_flashes),
                 "colour_assist" => s.colour_assist = parse_bool(value, s.colour_assist),
-                "formation" => s.formation = parse_bool(value, s.formation),
+                "particles" => s.physics_particles = value.eq_ignore_ascii_case("physics"),
+                // The key before the style was renamed.
+                "formation" => s.physics_particles = parse_bool(value, s.physics_particles),
                 "button_icons" => s.button_icons = value.parse().unwrap_or(s.button_icons).min(3),
                 "rumble" => s.rumble = parse_bool(value, s.rumble),
                 "resolution" => {
@@ -220,7 +223,7 @@ impl Settings {
 
     pub fn to_text(&self) -> String {
         format!(
-            "music={}\neffects={}\nshake={}\nshake_control={}\nboost_control={}\nbomb_button={}\nauto_pause={}\nauto_gravity={}\nauto_upgrade={}\nflip={}\ntutorial={}\nfullscreen={}\nbloom={}\nwidescreen={}\nfps={}\nresolution={}\nvisual_fx={}\nzoom={}\nhud_scale={}\nreduce_flashes={}\ncolour_assist={}\nformation={}\nbutton_icons={}\nrumble={}\n",
+            "music={}\neffects={}\nshake={}\nshake_control={}\nboost_control={}\nbomb_button={}\nauto_pause={}\nauto_gravity={}\nauto_upgrade={}\nflip={}\ntutorial={}\nfullscreen={}\nbloom={}\nwidescreen={}\nfps={}\nresolution={}\nvisual_fx={}\nzoom={}\nhud_scale={}\nreduce_flashes={}\ncolour_assist={}\nparticles={}\nbutton_icons={}\nrumble={}\n",
             self.music,
             self.effects,
             self.shake,
@@ -242,7 +245,7 @@ impl Settings {
             self.hud_scale,
             self.reduce_flashes as u8,
             self.colour_assist as u8,
-            self.formation as u8,
+            if self.physics_particles { "physics" } else { "classic" },
             self.button_icons,
             self.rumble as u8,
         )
@@ -1279,7 +1282,7 @@ mod tests {
             hud_scale: 1.25,
             reduce_flashes: true,
             colour_assist: true,
-            formation: true,
+            physics_particles: true,
             button_icons: 2,
             rumble: false,
         };

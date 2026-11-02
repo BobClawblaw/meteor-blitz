@@ -7,9 +7,9 @@ mod arrow;
 mod bindings;
 mod bonus;
 mod boss;
+mod bursts;
 mod depot;
 mod enemies;
-mod formation;
 mod gfx;
 mod gravity;
 mod hud;
@@ -1100,7 +1100,7 @@ async fn main() {
     let mut music_on = false;
     let mut frame_count: u32 = 0;
     let restart_at: Option<u32> = std::env::var("MB_RESTART_AT").ok().and_then(|v| v.parse().ok());
-    let gas_test: Option<u32> = std::env::var("MB_GAS_TEST").ok().and_then(|v| v.parse().ok());
+    let burst_test: Option<u32> = std::env::var("MB_BURST_TEST").ok().and_then(|v| v.parse().ok());
     // MB_START=<world>.<stage> (1-based, world 7 = survival) boots straight
     // into a stage, for scripted frame comparisons.
     if let Some((w, s)) = std::env::var("MB_START").ok().and_then(|v| {
@@ -1433,7 +1433,7 @@ async fn main() {
                     g.hud_scale = settings.hud_scale;
                     g.reduce_flashes = settings.reduce_flashes;
                     g.colour_assist = settings.colour_assist;
-                    g.formation = settings.formation || std::env::var_os("MB_FORMATION").is_some();
+                    g.physics_particles = settings.physics_particles || std::env::var_os("MB_PHYSICS").is_some();
                     g.update(dt);
                     for id in g.sounds.drain(..) {
                         play_effect(id, settings.effects);
@@ -1636,10 +1636,10 @@ async fn main() {
         if frame_count == pause_frame {
             pause = held_pause.take();
         }
-        // MB_GAS_TEST=<frame>: Formation test clouds beside the ship.
-        if gas_test == Some(frame_count) {
+        // MB_BURST_TEST=<frame>: test explosions and impacts beside the ship.
+        if burst_test == Some(frame_count) {
             if let Some(g) = game.as_mut() {
-                g.gas_test();
+                g.burst_test();
             }
         }
         // MB_RESTART_AT=<frame>: Pause > Restart at that frame, printing the

@@ -18,7 +18,7 @@ use crate::bindings::{self, Action};
 use crate::boss::{self, BossState, Piece};
 use crate::depot::{self, Depot};
 use crate::enemies::{wrap_near, Element, Event, Field, Rock, Script, Surface, Weapon};
-use crate::formation::{Smoke, Wind};
+use crate::bursts::{Bursts, Look};
 use crate::gfx::{draw_atlas_sprite, draw_quad, draw_sprite, tex_size, Canvas, Grade, Light, Wave, CANVAS_H, CANVAS_W, MAX_LIGHTS};
 use crate::gravity;
 use crate::hud::{self, HudAssets, HudValues, Show};
@@ -874,10 +874,10 @@ pub struct Play {
     pub reduce_flashes: bool,
     /// Options > Colour assist (port addition).
     pub colour_assist: bool,
-    /// Options > Particle style: Formation (port addition).
-    pub formation: bool,
-    /// Formation gas clouds.
-    gas: Wind,
+    /// Options > Particle style: Physics (port addition).
+    pub physics_particles: bool,
+    /// Physics-style explosions and impacts.
+    gas: Bursts,
     /// This step's shot hits (where, the shot's velocity), for the gas.
     hits: Vec<(Vec2, Vec2, Weapon)>,
     /// Lights from explosions and hits, fading out.
@@ -942,7 +942,7 @@ const SCORCH_LIFE: f32 = 15.0;
 const SCORCH_FADE: f32 = 5.0;
 const MAX_SCORCHES: usize = 96;
 
-/// What blew up, for the look of its Formation gas.
+/// What blew up, for the look of its physics particles.
 fn event_surface(event: &Event) -> Surface {
     match event {
         Event::RockDestroyed { element, .. } => Surface::Rock(*element),
@@ -951,15 +951,20 @@ fn event_surface(event: &Event) -> Surface {
     }
 }
 
-/// Formation gas looks (port addition), in the game's own colours: the
-/// rocks' dust, soot and frost, grey smoke for craft, and the glow of the
-/// lights the game already uses for fire, ice, rocks and the ship.
+/// Physics-particle looks (port addition), in the game's own colours: the rocks'
+/// dust, soot and frost, grey smoke for craft, and the lights the game
+/// already uses for fire, ice, rocks and the ship.
 const DUST: Vec3 = vec3(0.55, 0.47, 0.38);
 const SOOT: Vec3 = vec3(0.24, 0.2, 0.18);
 const FROST: Vec3 = vec3(0.8, 0.88, 0.96);
 const STEAM: Vec3 = vec3(0.92, 0.94, 0.97);
 const CRAFT_SMOKE: Vec3 = vec3(0.4, 0.4, 0.43);
 const BOSS_SMOKE: Vec3 = vec3(0.3, 0.27, 0.32);
+/// Debris: rock, fire rock, ice and metal chips.
+const ROCK_CHIPS: Vec3 = vec3(0.58, 0.48, 0.38);
+const FIRE_CHIPS: Vec3 = vec3(0.5, 0.18, 0.08);
+const ICE_CHIPS: Vec3 = vec3(0.65, 0.85, 1.0);
+const METAL_CHIPS: Vec3 = vec3(0.55, 0.56, 0.6);
 
 /// The colour a weapon's shots glow (their lights').
 fn weapon_glow(weapon: Weapon) -> Vec3 {
@@ -970,40 +975,45 @@ fn weapon_glow(weapon: Weapon) -> Vec3 {
     }
 }
 
-/// A surface blown apart: its own smoke, hot with its own heat.
-fn surface_smoke(surface: Surface) -> Smoke {
-    let smoke = |colour, opacity, glow, heat| Smoke { colour, opacity, glow, heat };
+const fn look(smoke: Vec3, opacity: f32, debris: Option<Vec3>, tint: Vec3, tint_amount: f32, heat: f32) -> Look {
+    Look { smoke, opacity, debris, tint, tint_amount, heat }
+}
+
+/// A surface blown apart: its own smoke, chips and heat.
+fn surface_look(surface: Surface) -> Look {
     match surface {
-        Surface::Rock(Element::Normal) => smoke(DUST, 0.55, ROCK_LIGHT, 0.6),
-        Surface::Rock(Element::Fire) => smoke(SOOT, 0.6, FIRE_LIGHT, 1.0),
-        Surface::Rock(Element::Ice) => smoke(FROST, 0.45, ICE_LIGHT, 0.5),
-        Surface::Craft => smoke(CRAFT_SMOKE, 0.5, WHITE_LIGHT, 0.8),
-        Surface::Boss => smoke(BOSS_SMOKE, 0.55, WHITE_LIGHT, 1.0),
+        Surface::Rock(Element::Normal) => look(DUST, 0.55, Some(ROCK_CHIPS), ROCK_LIGHT, 0.0, 0.55),
+        Surface::Rock(Element::Fire) => look(SOOT, 0.65, Some(FIRE_CHIPS), FIRE_LIGHT, 0.2, 1.0),
+        Surface::Rock(Element::Ice) => look(FROST, 0.45, Some(ICE_CHIPS), ICE_LIGHT, 0.6, 0.45),
+        Surface::Craft => look(CRAFT_SMOKE, 0.6, Some(METAL_CHIPS), WHITE_LIGHT, 0.0, 1.0),
+        Surface::Boss => look(BOSS_SMOKE, 0.65, Some(METAL_CHIPS), WHITE_LIGHT, 0.0, 1.0),
     }
 }
 
-/// A weapon striking a surface: the surface's smoke lit by the weapon,
-/// with the combinations that make something else of it.
-fn impact_smoke(weapon: Weapon, surface: Surface) -> Smoke {
-    let mut s = surface_smoke(surface);
-    s.glow = weapon_glow(weapon);
-    s.heat = 0.7;
+/// A weapon striking a surface: the surface's smoke and chips, sparks in
+/// the weapon's colour, with the combinations that make something else
+/// of it.
+fn impact_look(weapon: Weapon, surface: Surface) -> Look {
+    let mut s = surface_look(surface);
+    s.tint = weapon_glow(weapon);
+    s.tint_amount = 0.55;
+    s.heat = 0.6;
     match (weapon, surface) {
         // Fire on ice boils it off as steam.
         (Weapon::Fire, Surface::Rock(Element::Ice)) => {
-            s.colour = STEAM;
+            s.smoke = STEAM;
             s.opacity = 0.6;
             s.heat = 0.3;
         }
         // Fire on fire: thick soot.
-        (Weapon::Fire, Surface::Rock(Element::Fire)) => s.opacity = 0.7,
+        (Weapon::Fire, Surface::Rock(Element::Fire)) => s.opacity = 0.75,
         // The laser glints off ice and melts metal white-hot.
         (Weapon::Laser, Surface::Rock(Element::Ice)) => s.heat = 0.9,
         (Weapon::Laser, Surface::Craft | Surface::Boss) => {
-            s.glow = ICE_LIGHT.lerp(WHITE_LIGHT, 0.5);
-            s.heat = 0.9;
+            s.tint = ICE_LIGHT.lerp(WHITE_LIGHT, 0.5);
+            s.heat = 1.0;
         }
-        // The cannon chips rock: more dust, little heat.
+        // The cannon chips rock: more dust, fewer sparks.
         (Weapon::Cannon, Surface::Rock(_)) => {
             s.opacity += 0.1;
             s.heat = 0.45;
@@ -1013,36 +1023,34 @@ fn impact_smoke(weapon: Weapon, surface: Surface) -> Smoke {
     s
 }
 
-/// A blast: the surface's smoke; when a shot did it, the combination's
-/// smoke, glowing mostly with the blast's own heat (a quarter the
-/// weapon's).
-fn blast_smoke(surface: Surface, weapon: Option<Weapon>) -> Smoke {
-    let own = surface_smoke(surface);
+/// An explosion: the surface's own; when a shot did it, the
+/// combination's smoke, with fire a little tinted by the weapon.
+fn blast_look(surface: Surface, weapon: Option<Weapon>) -> Look {
+    let own = surface_look(surface);
     let Some(weapon) = weapon else { return own };
-    let mut s = impact_smoke(weapon, surface);
-    s.glow = own.glow.lerp(s.glow, 0.25);
-    s.heat = own.heat;
-    s
+    let combo = impact_look(weapon, surface);
+    Look {
+        smoke: combo.smoke,
+        opacity: combo.opacity,
+        tint: own.tint.lerp(combo.tint, 0.25),
+        tint_amount: own.tint_amount.max(0.15),
+        ..own
+    }
 }
 
-/// The gas a shot sheds in flight: a faint glow in the shot's colour, and
-/// smoke behind the flamethrower.
-fn trail_smoke(weapon: Weapon) -> Smoke {
-    let (colour, opacity, heat) = match weapon {
-        Weapon::Cannon => (CRAFT_SMOKE, 0.0, 0.35),
-        Weapon::Laser => (CRAFT_SMOKE, 0.0, 0.4),
-        Weapon::Fire => (vec3(0.35, 0.3, 0.28), 0.35, 0.7),
-    };
-    Smoke { colour, opacity, glow: weapon_glow(weapon), heat }
+/// What a shot sheds in flight: the flamethrower's stream leaves fire and
+/// smoke; the cannon and laser draw their own streaks.
+fn trail_look(weapon: Weapon) -> Option<Look> {
+    (weapon == Weapon::Fire).then_some(look(vec3(0.35, 0.3, 0.28), 0.35, None, FIRE_LIGHT, 0.0, 0.7))
 }
 
-/// The ship's own blasts: its death and broken shield (its green light)
-/// and a bomb (white).
-const SHIP_SMOKE: Smoke = Smoke { colour: CRAFT_SMOKE, opacity: 0.45, glow: SHIP_LIGHT, heat: 1.0 };
-const BOMB_SMOKE: Smoke = Smoke { colour: vec3(0.7, 0.7, 0.72), opacity: 0.25, glow: WHITE_LIGHT, heat: 0.8 };
-const SHIELD_SMOKE: Smoke = Smoke { colour: CRAFT_SMOKE, opacity: 0.0, glow: SHIP_LIGHT, heat: 0.9 };
+/// The ship's own blasts: its death (green-lit, with its hull in pieces),
+/// a bomb (white) and a broken shield (green, clean).
+const SHIP_LOOK: Look = look(CRAFT_SMOKE, 0.5, Some(vec3(0.42, 0.56, 0.46)), SHIP_LIGHT, 0.5, 1.0);
+const BOMB_LOOK: Look = look(vec3(0.7, 0.7, 0.72), 0.3, None, WHITE_LIGHT, 0.3, 1.0);
+const SHIELD_LOOK: Look = look(CRAFT_SMOKE, 0.0, None, SHIP_LIGHT, 0.8, 0.6);
 
-/// Formation gas for a destruction (port addition): where, its radius in
+/// Physics particles for a destruction (port addition): where, its radius in
 /// world units, and its life in seconds, by what blew up.
 fn event_gas(event: &Event) -> Option<(Vec2, f32, f32)> {
     Some(match event {
@@ -1089,12 +1097,7 @@ fn event_gas(event: &Event) -> Option<(Vec2, f32, f32)> {
     })
 }
 
-/// How much of a shot's speed its gas carries on: an impact's puff, and a
-/// blast's cloud (heavier, it carries less), at most GAS_MAX_SPEED.
-const IMPACT_CARRY: f32 = 0.3;
-const BLAST_CARRY: f32 = 0.18;
-const GAS_MAX_SPEED: f32 = 280.0;
-/// Formation gas for the ship's own blasts (radius, life): its death, a
+/// Explosion sizes for the ship's own blasts (radius, life): its death, a
 /// bomb and a broken shield.
 const SHIP_GAS: (f32, f32) = (70.0, 1.3);
 const BOMB_GAS: (f32, f32) = (150.0, 1.4);
@@ -1106,11 +1109,6 @@ const BLAST_HIT_REACH: f32 = 80.0;
 /// Distance from `a` to `b` across the world's wrap.
 fn wrap_dist(a: Vec2, b: Vec2) -> f32 {
     vec2(wrap_near(a.x, b.x), wrap_near(a.y, b.y)).distance(b)
-}
-
-/// The gas velocity a shot's momentum gives: `carry` of its speed, capped.
-fn gas_velocity(shot: Vec2, carry: f32) -> Vec2 {
-    (shot * carry).clamp_length_max(GAS_MAX_SPEED)
 }
 
 /// The burn mark an event leaves (port addition): its size, if any.
@@ -1285,8 +1283,8 @@ impl Play {
             hud_scale: 1.0,
             reduce_flashes: false,
             colour_assist: false,
-            formation: false,
-            gas: Wind::new(),
+            physics_particles: false,
+            gas: Bursts::new(),
             hits: Vec::new(),
             glows: Vec::new(),
             shocks: Vec::new(),
@@ -1680,21 +1678,21 @@ impl Play {
     /// effects and flashes, lights, shockwaves and scorch marks run out
     /// behind the popup instead of freezing at their peak (a boss's white
     /// death flash and shockwave stayed on the results screen).
-    /// MB_GAS_TEST (tuning hook): a plain rock blown up by the cannon,
+    /// MB_BURST_TEST (tuning hook): a plain rock blown up by the cannon,
     /// carrying the shot's momentum upward, a still fire-rock blast, and
     /// two impacts (cannon on rock going up, laser on ice going right)
-    /// beside the ship, for judging the Formation gas.
-    pub fn gas_test(&mut self) {
+    /// beside the ship, for judging the physics particles.
+    pub fn burst_test(&mut self) {
         let c = self.ship.pos;
         let shot = vec2(0.0, -CANNON_SPEED);
         let laser = vec2(weapons::LASER_SPEED, 0.0);
         let rock = Surface::Rock(Element::Normal);
         let fire = Surface::Rock(Element::Fire);
         let ice = Surface::Rock(Element::Ice);
-        self.gas.blast(c + vec2(-130.0, 40.0), gas_velocity(shot, BLAST_CARRY), 86.0, 1.2, blast_smoke(rock, Some(Weapon::Cannon)));
-        self.gas.blast(c + vec2(130.0, 40.0), Vec2::ZERO, 86.0, 1.2, blast_smoke(fire, None));
-        self.gas.impact(c + vec2(-40.0, 100.0), gas_velocity(shot, IMPACT_CARRY), impact_smoke(Weapon::Cannon, rock));
-        self.gas.impact(c + vec2(40.0, 100.0), gas_velocity(laser, IMPACT_CARRY), impact_smoke(Weapon::Laser, ice));
+        self.gas.blast(c + vec2(-130.0, 40.0), shot, 62.0, 1.0, blast_look(rock, Some(Weapon::Cannon)));
+        self.gas.blast(c + vec2(130.0, 40.0), shot, 49.0, 0.9, blast_look(Surface::Craft, Some(Weapon::Cannon)));
+        self.gas.impact(c + vec2(-40.0, 100.0), shot, impact_look(Weapon::Cannon, fire));
+        self.gas.impact(c + vec2(40.0, 100.0), laser, impact_look(Weapon::Laser, ice));
     }
 
     pub fn update_visuals(&mut self, dt: f32) {
@@ -1861,7 +1859,7 @@ impl Play {
         let field = &mut self.field;
         let effects = &mut self.effects;
         let gas = &mut self.gas;
-        let formation = self.formation;
+        let physics = self.physics_particles;
         let hits = &mut self.hits;
         hits.clear();
         let fire_damage = weapons::FIRE_DAMAGE[self.ship.fire_gun.level];
@@ -1877,16 +1875,20 @@ impl Play {
             };
             let surface = field.bullet(b.prev, b.pos, radius, b.weapon, damage, mass, b.vel);
             let hit = surface.is_some();
-            if formation {
-                // Formation style: shots trail gas and spray it where they
+            if physics {
+                // Physics style: shots trail gas and spray it where they
                 // hit, carried on with their momentum, looking like what
                 // they hit and what they are.
                 match surface {
                     Some(surface) => {
-                        gas.impact(b.pos, gas_velocity(b.vel, IMPACT_CARRY), impact_smoke(b.weapon, surface));
+                        gas.impact(b.pos, b.vel, impact_look(b.weapon, surface));
                         hits.push((b.pos, b.vel, b.weapon));
                     }
-                    None => gas.trail(b.prev, b.pos, b.vel, trail_smoke(b.weapon)),
+                    None => {
+                        if let Some(look) = trail_look(b.weapon) {
+                            gas.trail(b.prev, b.pos, b.vel, look);
+                        }
+                    }
                 }
             } else if hit {
                 // standard/fire/laserBulletCollision: a spark, and a streak
@@ -2055,8 +2057,8 @@ impl Play {
         self.multiplier_base = self.score;
         let p = self.ship.pos;
         self.effects.flash(Color::new(0.8, 0.8, 0.8, 1.0));
-        if self.formation {
-            self.gas.blast(p, Vec2::ZERO, SHIP_GAS.0, SHIP_GAS.1, SHIP_SMOKE);
+        if self.physics_particles {
+            self.gas.blast(p, Vec2::ZERO, SHIP_GAS.0, SHIP_GAS.1, SHIP_LOOK);
             return;
         }
         self.effects.start(Kind::Ring, 1, p, 0.0, false);
@@ -2189,8 +2191,8 @@ impl Play {
         self.effects.flash(Color::new(0.8, 0.8, 0.8, 1.0));
         self.camera.shake(0.75, 7.5);
         let p = self.ship.pos;
-        if self.formation {
-            self.gas.blast(p, Vec2::ZERO, BOMB_GAS.0, BOMB_GAS.1, BOMB_SMOKE);
+        if self.physics_particles {
+            self.gas.blast(p, Vec2::ZERO, BOMB_GAS.0, BOMB_GAS.1, BOMB_LOOK);
         } else {
             self.effects.start(Kind::Ring, 5, p, 0.0, false);
             self.effects.start(Kind::Sprite, 8, p, 0.0, false);
@@ -2205,8 +2207,8 @@ impl Play {
         self.ship.grace = SHIELD_GRACE;
         self.camera.shake(0.75, 7.5);
         let p = self.ship.pos;
-        if self.formation {
-            self.gas.blast(p, Vec2::ZERO, SHIELD_GAS.0, SHIELD_GAS.1, SHIELD_SMOKE);
+        if self.physics_particles {
+            self.gas.blast(p, Vec2::ZERO, SHIELD_GAS.0, SHIELD_GAS.1, SHIELD_LOOK);
         } else {
             self.effects.start(Kind::Ring, 8, p, 0.0, false);
             for _ in 0..3 {
@@ -2232,11 +2234,11 @@ impl Play {
         heading(ship - from)
     }
 
-    /// An event's particle effect; none with the Formation particle style
+    /// An event's particle effect; none with the Physics particle style
     /// (port addition), where the gas `handle_events` starts stands in for
     /// all of them.
     fn fx(&mut self, kind: Kind, set: usize, pos: Vec2, angle: f32, reverse: bool) -> u64 {
-        if self.formation {
+        if self.physics_particles {
             return 0;
         }
         self.effects.start(kind, set, pos, angle, reverse)
@@ -2251,7 +2253,7 @@ impl Play {
             if let Some((pos, radius, strength, seconds)) = event_shock(&event) {
                 self.shock(pos, radius, strength, seconds);
             }
-            if self.formation {
+            if self.physics_particles {
                 if let Some((pos, radius, life)) = event_gas(&event) {
                     // The shot that did it, if one hit near here this step,
                     // lends the cloud its momentum and its colour (bombs and
@@ -2261,9 +2263,9 @@ impl Play {
                         .iter()
                         .filter(|(p, _, _)| wrap_dist(*p, pos) < BLAST_HIT_REACH)
                         .min_by(|a, b| wrap_dist(a.0, pos).total_cmp(&wrap_dist(b.0, pos)));
-                    let drift = shot.map_or(Vec2::ZERO, |&(_, v, _)| gas_velocity(v, BLAST_CARRY));
-                    let smoke = blast_smoke(event_surface(&event), shot.map(|&(_, _, w)| w));
-                    self.gas.blast(pos, drift, radius, life, smoke);
+                    let vel = shot.map_or(Vec2::ZERO, |&(_, v, _)| v);
+                    let look = blast_look(event_surface(&event), shot.map(|&(_, _, w)| w));
+                    self.gas.blast(pos, vel, radius, life, look);
                 }
             }
             if let Some((pos, size)) = event_scorch(&event) {
@@ -3437,8 +3439,8 @@ impl Play {
                 self.draw_shield_rim(canvas, assets);
             }
         }
-        if self.formation {
-            self.gas.draw(self.z, |p| self.to_screen(p), &assets.soft_dot);
+        if self.physics_particles {
+            self.gas.draw(canvas, self.z, |p| self.to_screen(p), &assets.soft_dot);
         }
         let soft = self.fx.then_some(&assets.soft_dot);
         self.effects
