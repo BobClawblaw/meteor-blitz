@@ -1444,6 +1444,7 @@ impl Play {
             State::Ready => self.step_ready(dt),
             State::Over { .. } => {
                 self.time.update(dt);
+                self.field.view_scale = self.zoom;
                 self.field.update(dt * self.time.factor, self.ship.pos);
                 self.update_rings(dt);
                 self.camera.update(dt, Vec2::ZERO);
@@ -1491,6 +1492,7 @@ impl Play {
         self.time.update(dt);
         self.field.time_factor = self.time.factor;
         self.field.aim = self.ship.aim_dir;
+        self.field.view_scale = self.zoom;
         self.field.update(dt * self.time.factor, self.ship.pos);
         self.follow_boss_death();
         self.update_rings(dt);

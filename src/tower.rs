@@ -102,8 +102,11 @@ impl Tower {
         }
     }
 
-    /// Tower::update / updateSubstate.
-    pub fn update(&mut self, dt: f32, ship: Vec2, centre: Vec2) {
+    /// Tower::update / updateSubstate. `view_scale`: Field::view_scale;
+    /// the range grows with it up to the beam's length, so a shot can
+    /// still reach.
+    pub fn update(&mut self, dt: f32, ship: Vec2, centre: Vec2, view_scale: f32) {
+        let range = (ACTIVATE_RANGE * view_scale).min(BEAM_LENGTH.max(ACTIVATE_RANGE));
         self.flash = false;
         let ship = vec2(wrap_near(ship.x, self.pos.x), wrap_near(ship.y, self.pos.y));
         if self.active {
@@ -111,7 +114,7 @@ impl Tower {
             match self.substate {
                 Substate::Aim => {
                     self.rotate_towards(ship, dt);
-                    if self.timer >= RELOAD && ship.distance(self.pos) < ACTIVATE_RANGE {
+                    if self.timer >= RELOAD && ship.distance(self.pos) < range {
                         self.set_substate(Substate::Charge, ship);
                     }
                 }

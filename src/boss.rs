@@ -258,7 +258,8 @@ impl Piece {
     }
 
     /// BossOutside::update. Returns true when a free piece runs out of time.
-    pub fn update(&mut self, dt: f32, centre: Vec2) -> bool {
+    /// `view_scale`: Field::view_scale.
+    pub fn update(&mut self, dt: f32, centre: Vec2, view_scale: f32) -> bool {
         self.flash = false;
         if self.grav.is_some() {
             return false;
@@ -277,7 +278,8 @@ impl Piece {
                 match &mut self.carrier {
                     None => {
                         let d = near(self.pos, centre) - centre;
-                        if !(d.x.abs() < NEAR_X && d.y.abs() < NEAR_Y) && self.vel.length() > FREE_SPEED_LIMIT {
+                        let near = d.x.abs() < NEAR_X * view_scale && d.y.abs() < NEAR_Y * view_scale;
+                        if !near && self.vel.length() > FREE_SPEED_LIMIT {
                             self.vel = self.vel.normalize() * FREE_SPEED_LIMIT;
                         }
                     }
@@ -654,7 +656,7 @@ mod tests {
             created += pieces.len() - len_before;
             let mut i = 0;
             while i < pieces.len() {
-                if pieces[i].update(dt, Vec2::ZERO) {
+                if pieces[i].update(dt, Vec2::ZERO, 1.0) {
                     let len = pieces.len();
                     pieces.swap_remove(i);
                     boss.renumber(i, len);

@@ -64,15 +64,16 @@ impl Mine {
         self.active && self.grav.is_none()
     }
 
-    /// Mine::update.
-    pub fn update(&mut self, dt: f32, ship: Vec2, centre: Vec2) {
+    /// Mine::update. `view_scale`: Field::view_scale.
+    pub fn update(&mut self, dt: f32, ship: Vec2, centre: Vec2, view_scale: f32) {
         if self.grav.is_some() {
             return;
         }
         self.flash = false;
         if self.active {
             let to = vec2(wrap_near(ship.x, self.pos.x), wrap_near(ship.y, self.pos.y)) - self.pos;
-            if !self.chasing && to.length_squared() < CHASING_RADIUS * CHASING_RADIUS {
+            let radius = CHASING_RADIUS * view_scale;
+            if !self.chasing && to.length_squared() < radius * radius {
                 self.chasing = true;
                 self.spin = CHASE_SPIN;
             }

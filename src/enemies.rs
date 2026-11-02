@@ -223,8 +223,8 @@ impl Rock {
         };
     }
 
-    /// Rock::update after Enemy::update.
-    fn update(&mut self, dt: f32, centre: Vec2) {
+    /// Rock::update after Enemy::update. `view_scale`: Field::view_scale.
+    fn update(&mut self, dt: f32, centre: Vec2, view_scale: f32) {
         if self.grav.is_some() {
             return;
         }
@@ -244,7 +244,9 @@ impl Rock {
                     wrap_near(self.pos.x, centre.x) - centre.x,
                     wrap_near(self.pos.y, centre.y) - centre.y,
                 );
-                if d.x.abs() < NEAR_X && d.y.abs() < NEAR_Y && self.vel.length() > NEAR_SPEED_LIMIT
+                if d.x.abs() < NEAR_X * view_scale
+                    && d.y.abs() < NEAR_Y * view_scale
+                    && self.vel.length() > NEAR_SPEED_LIMIT
                 {
                     self.vel = self.vel.normalize() * NEAR_SPEED_LIMIT;
                 }
@@ -534,6 +536,11 @@ pub struct Field {
     pub aim: Vec2,
     /// TimeManager::multiplier this update: gripped enemies ignore it.
     pub time_factor: f32,
+    /// The playfield zoom (port addition): trigger ranges sized to the
+    /// original's view (rocks and free pieces slowing near it, mines
+    /// chasing, towers firing) grow with the view, so what is on screen
+    /// acts as it would at 1x.
+    pub view_scale: f32,
 }
 
 impl Field {
@@ -559,6 +566,7 @@ impl Field {
             sparks: Sparks::default(),
             aim: vec2(0.0, -1.0),
             time_factor: 1.0,
+            view_scale: 1.0,
         }
     }
 
@@ -1596,7 +1604,7 @@ impl Field {
         );
         self.centre = centre;
         for rock in &mut self.rocks {
-            rock.update(dt, centre);
+            rock.update(dt, centre, self.view_scale);
         }
         if let Some(mut b) = self.boss.take() {
             let mut requests = Vec::new();
@@ -1606,7 +1614,7 @@ impl Field {
         }
         let mut i = 0;
         while i < self.pieces.len() {
-            if self.pieces[i].update(dt, centre) {
+            if self.pieces[i].update(dt, centre, self.view_scale) {
                 // A thrown piece ran out of time: no whoosh, but it bursts.
                 self.destroy_piece(i, false, true);
             } else {
@@ -1617,7 +1625,7 @@ impl Field {
         self.update_gravity(dt / self.time_factor.max(0.01), centre);
         let ship = centre;
         for m in &mut self.mines {
-            m.update(dt, ship, centre);
+            m.update(dt, ship, centre, self.view_scale);
         }
         self.mine_collisions();
         for g in &mut self.shy_guys {
@@ -1631,7 +1639,7 @@ impl Field {
             a.update(dt, centre);
         }
         for t in &mut self.towers {
-            t.update(dt, ship, centre);
+            t.update(dt, ship, centre, self.view_scale);
         }
         for k in &mut self.seekers {
             k.update(dt, ship, centre);
@@ -2491,6 +2499,23 @@ mod gravity_tests {
         assert!(field.events.iter().any(|e| matches!(e, Event::MineDestroyed { points: 20, .. })));
     }
 
+    /// A mine 300 units off waits at 1x (it chases inside 185) and wakes
+    /// when the zoomed-out view shows it.
+    #[test]
+    fn mines_wake_at_the_zoomed_view() {
+        for (scale, wakes) in [(1.0, false), (2.0, true)] {
+            let mut mine = Mine::new(vec2(0.0, 300.0));
+            for _ in 0..120 {
+                mine.update(1.0 / 60.0, Vec2::ZERO, Vec2::ZERO, scale);
+            }
+            let before = mine.pos;
+            for _ in 0..30 {
+                mine.update(1.0 / 60.0, Vec2::ZERO, Vec2::ZERO, scale);
+            }
+            assert_eq!(mine.pos.y < before.y - 1.0, wakes, "scale {}", scale);
+        }
+    }
+
     #[test]
     fn a_thrown_mine_bursts_on_another_and_takes_it_out_for_double() {
         let mut field = Field::new([16, 1, 1, 1]);
@@ -2507,7 +2532,7 @@ mod gravity_tests {
             if field.mines[i].active() {
                 break;
             }
-            field.mines[i].update(1.0 / 60.0, vec2(0.0, 500.0), Vec2::ZERO);
+            field.mines[i].update(1.0 / 60.0, vec2(0.0, 500.0), Vec2::ZERO, 1.0);
         }
         field.gun_release();
         field.events.clear();
