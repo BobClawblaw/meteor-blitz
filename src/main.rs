@@ -1170,11 +1170,11 @@ async fn main() {
     let pause_frame: u32 = std::env::var("MB_PAUSE_FRAME").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
     let mut held_pause = if pause_frame > 0 { pause.take() } else { None };
 
-    // MB_ZOOM=<1|2> overrides Options > Playfield zoom for a run.
-    let zoom_override: Option<u32> = std::env::var("MB_ZOOM")
+    // MB_ZOOM=<1.0-2.0> overrides Options > Playfield zoom for a run.
+    let zoom_override: Option<f32> = std::env::var("MB_ZOOM")
         .ok()
-        .and_then(|v| v.parse().ok())
-        .filter(|z| pause::ZOOMS.contains(z));
+        .and_then(|v| v.parse::<f32>().ok())
+        .map(|z| z.clamp(1.0, pause::MAX_ZOOM));
     // MB_PROF prints update and draw CPU time per window; MB_PROF_FRAMES=N
     // exits after N frames, for unattended benchmarks.
     let prof = std::env::var_os("MB_PROF").is_some();
@@ -1414,7 +1414,7 @@ async fn main() {
                 } else if let Some(g) = game.as_mut() {
                     g.set_shake_scale(settings.shake);
                     g.fx = settings.visual_fx && std::env::var_os("MB_FX_OFF").is_none();
-                    g.zoom = zoom_override.unwrap_or(settings.zoom) as f32;
+                    g.zoom = zoom_override.unwrap_or(settings.zoom);
                     g.update(dt);
                     for id in g.sounds.drain(..) {
                         play_effect(id, settings.effects);

@@ -13,7 +13,7 @@ use crate::bindings::{self, Action, Bindings, ACTIONS};
 use crate::gfx::{edge, Canvas, CANVAS_H, CANVAS_W};
 use crate::hud::{Align, Font};
 use crate::pad::{self, Button};
-use crate::pause::{Settings, FPS_CAPS, RESOLUTIONS, ZOOMS};
+use crate::pause::{Settings, FPS_CAPS, MAX_ZOOM, RESOLUTIONS};
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Page {
@@ -156,13 +156,12 @@ impl Options {
         if left || right {
             let step = if right { STEP } else { -STEP };
             match row {
-                Row::Music | Row::Effects | Row::Shake => {
+                Row::Music | Row::Effects | Row::Shake | Row::Zoom => {
                     let v = slider(row, settings);
                     set_slider(row, settings, (v + step).clamp(0.0, 1.0));
                 }
                 Row::Bind(_) => self.pad_column = right,
                 Row::FrameRate => settings.fps = cycle(&FPS_CAPS, settings.fps, right),
-                Row::Zoom => settings.zoom = cycle(&ZOOMS, settings.zoom, right),
                 Row::Resolution => settings.resolution = cycle_resolution(settings.resolution, right),
                 _ => {}
             }
@@ -181,7 +180,7 @@ impl Options {
         }
         let click = is_mouse_button_pressed(MouseButton::Left) && hovered.is_some();
         if is_mouse_button_pressed(MouseButton::Left) {
-            self.dragging = hovered.is_some_and(|i| matches!(rows[i], Row::Music | Row::Effects | Row::Shake));
+            self.dragging = hovered.is_some_and(|i| matches!(rows[i], Row::Music | Row::Effects | Row::Shake | Row::Zoom));
         }
         if !is_mouse_button_down(MouseButton::Left) {
             self.dragging = false;
@@ -228,10 +227,9 @@ impl Options {
             Row::Bloom => settings.bloom = !settings.bloom,
             Row::VisualFx => settings.visual_fx = !settings.visual_fx,
             Row::FrameRate => settings.fps = cycle(&FPS_CAPS, settings.fps, true),
-            Row::Zoom => settings.zoom = cycle(&ZOOMS, settings.zoom, true),
             Row::Resolution => settings.resolution = cycle_resolution(settings.resolution, true),
             Row::Tutorial => settings.tutorial = !settings.tutorial,
-            Row::Music | Row::Effects | Row::Shake => return None,
+            Row::Music | Row::Effects | Row::Shake | Row::Zoom => return None,
             Row::Controls => {
                 self.page = Page::Controls;
                 self.selected = 0;
@@ -314,9 +312,8 @@ impl Options {
                 Row::Bloom => on_off(font, settings.bloom, y, white),
                 Row::VisualFx => on_off(font, settings.visual_fx, y, white),
                 Row::FrameRate => font.text(&settings.fps.to_string(), VALUE_X, y, ROW_SCALE, Align::Right, white),
-                Row::Zoom => font.text(&format!("{}x", settings.zoom), VALUE_X, y, ROW_SCALE, Align::Right, white),
                 Row::Tutorial => on_off(font, settings.tutorial, y, white),
-                Row::Music | Row::Effects | Row::Shake => {
+                Row::Music | Row::Effects | Row::Shake | Row::Zoom => {
                     let v = slider(row, settings);
                     let mid = y + 4.0;
                     canvas.fill_rect(SLIDER_X, mid - 1.0, SLIDER_W, 2.0, dim);
@@ -380,7 +377,7 @@ fn resolution_name(res: Option<(u32, u32)>) -> String {
     }
 }
 
-/// The next (or previous) choice in `list` (frame-rate caps, zooms), wrapping.
+/// The next (or previous) choice in `list` (frame-rate caps), wrapping.
 fn cycle(list: &[u32], value: u32, up: bool) -> u32 {
     let i = list.iter().position(|&v| v == value).unwrap_or(0);
     let n = list.len();
@@ -402,6 +399,8 @@ fn slider(row: Row, s: &Settings) -> f32 {
     match row {
         Row::Music => s.music,
         Row::Effects => s.effects,
+        // The zoom slider runs from 1x at the left to MAX_ZOOM at the right.
+        Row::Zoom => (s.zoom - 1.0) / (MAX_ZOOM - 1.0),
         _ => s.shake,
     }
 }
@@ -410,6 +409,7 @@ fn set_slider(row: Row, s: &mut Settings, v: f32) {
     match row {
         Row::Music => s.music = v,
         Row::Effects => s.effects = v,
+        Row::Zoom => s.zoom = 1.0 + v * (MAX_ZOOM - 1.0),
         _ => s.shake = v,
     }
 }

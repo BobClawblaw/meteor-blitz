@@ -811,7 +811,7 @@ pub struct Play {
     /// sprites, shockwaves, scorch marks, grading, ship effects.
     pub fx: bool,
     /// Options > Playfield zoom: the camera sees this many times more of
-    /// the play plane across (1 or 2; port addition).
+    /// the play plane across (1 to 2; port addition).
     pub zoom: f32,
     /// Lights from explosions and hits, fading out.
     glows: Vec<Glow>,
