@@ -1414,7 +1414,7 @@ async fn main() {
                 } else if let Some(g) = game.as_mut() {
                     g.set_shake_scale(settings.shake);
                     g.fx = settings.visual_fx && std::env::var_os("MB_FX_OFF").is_none();
-                    g.zoom = zoom_override.unwrap_or(settings.zoom);
+                    g.zoom = play::fit_zoom(zoom_override.unwrap_or(settings.zoom));
                     g.update(dt);
                     for id in g.sounds.drain(..) {
                         play_effect(id, settings.effects);

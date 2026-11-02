@@ -216,7 +216,7 @@ impl Settings {
 pub const FPS_CAPS: [u32; 3] = [60, 120, 144];
 
 /// The widest playfield zoom the Options slider reaches.
-pub const MAX_ZOOM: f32 = 2.0;
+pub const MAX_ZOOM: f32 = 1.5;
 
 /// The window/render resolutions the Options screen offers, low to 4K.
 pub const RESOLUTIONS: [(u32, u32); 5] = [

@@ -50,6 +50,15 @@ const INDICATOR_MAX_ACTIVE: usize = 12;
 /// indicator is drawn at it.
 const BOSS_INDICATOR_SCALE: f32 = 2.0;
 
+/// The playfield zoom this window's view can take: at most what keeps the
+/// view (plus the largest sprite at each edge) inside one 1024-unit world,
+/// so nothing shows twice. At 16:9 that allows the full 1.5x; at 21:9 it
+/// stops near 1.17x.
+pub fn fit_zoom(zoom: f32) -> f32 {
+    let width = CANVAS_W + 2.0 * crate::gfx::edge();
+    zoom.min((WORLD - 2.0 * COPY_MARGIN) / width).max(1.0)
+}
+
 /// How far past the view a copy of the wrapping world is still drawn: the
 /// largest sprite's half size, so nothing pops in at the view's edge.
 const COPY_MARGIN: f32 = 64.0;
