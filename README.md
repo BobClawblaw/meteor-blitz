@@ -22,7 +22,7 @@ A love letter to Alley Labs' *Meteor Blitz* (iOS, 2009), given away freely and r
 - **Lighting.** Explosions, shots and the ship light the planet. The terrain has relief from generated normal maps, and nearby rocks and enemies pick up the light.
 - **Glow, shockwaves and colour.** Bloom comes from what emits light (flames, lasers, sparks, explosions), never from bright clouds or the HUD. Bombs, boss deaths and big explosions send out shockwaves that bend the screen, and each world has its own colour grade.
 - **Effects.** Round, glowing particles replace the original square points. Explosions leave scorch marks that fade. The ship has an engine trail, boost speed lines and a shield glow, and fast shots and enemies thrown by the gravity gun leave streaks.
-- **HD art.** 4x sprites, UI and font, and 2x terrain, generated from the originals (`tools/upscale4x.py`).
+- **HD art.** 4x sprites, UI and font, and 2x terrain, generated from the originals (`tools/upscale4x.py`). An experimental macOS 8x build (8x sprites/UI/font, 2x terrain) is attached to the 1.0.7 release; `MB_HD=8` selects it.
 - **Options screen** (the SETTINGS button): fullscreen, resolution up to 4K, widescreen, bloom, lighting and effects, frame-rate cap, audio, screen shake, and the tutorial.
 - **Rebindable controls** (Options > Controls): every action has a keyboard/mouse binding and a controller binding, saved to `controls.txt`.
 - **Tutorial.** The original's 27-step tutorial is ported: HELP on the main menu plays it, and "Tutorial before first game" in Options runs it before your first game.

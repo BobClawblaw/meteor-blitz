@@ -5,6 +5,8 @@
 
 The web version (https://bobclawblaw.github.io/meteor-blitz/) keeps the original-resolution art; the desktop HD art has the seamless wrap.
 
+An experimental macOS 8x build (`MeteorBlitz-1.0.7-macos-8x.dmg`) is attached: 8x sprites, UI and font with the proven 2x terrain. It runs with `MB_HD=8`; the normal build stays 4x.
+
 ## Downloads
 
 - **macOS** (`MeteorBlitz-1.0.7-macos.dmg`): universal app for Apple Silicon and Intel, macOS 11 or later. Open the DMG and drag Meteor Blitz to Applications. The app is not notarised, so on first launch macOS asks for permission: right-click the app and choose Open, or allow it under System Settings > Privacy & Security.
