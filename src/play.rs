@@ -1302,17 +1302,8 @@ impl Play {
     /// then shots and the ship.
     fn collect_lights(&self) -> Vec<Light> {
         let mut lights: Vec<Light> = Vec::new();
-        let half = self.view_half();
-        let copies = self.world_copies();
         let mut add = |pos: Vec2, radius: f32, color: Vec3| {
-            // The ground is drawn once, so a light shows on each copy of
-            // the world in view.
-            for shift in &copies {
-                let d = pos + *shift - SCREEN_CENTRE;
-                if d.x.abs() < half.x + radius && d.y.abs() < half.y + radius {
-                    lights.push(Light { pos: pos + *shift, radius, color });
-                }
-            }
+            lights.push(Light { pos, radius, color });
         };
         for g in &self.glows {
             let t = g.life / g.max;
@@ -1334,8 +1325,21 @@ impl Play {
             add(self.to_screen(self.view_ship()), 60.0 * boost, SHIP_LIGHT * 0.3 * boost);
         }
         lights.sort_by(|a, b| (b.color.length() * b.radius).total_cmp(&(a.color.length() * a.radius)));
-        lights.truncate(MAX_LIGHTS);
+        // The ground is drawn once, so a light shows on each copy of the
+        // world in view. Lights are ranked before they are copied: copies
+        // of shots and the ship would otherwise fill the slots and leave
+        // out the fainter hit glows.
+        let half = self.view_half();
+        let copies = self.world_copies();
         lights
+            .iter()
+            .flat_map(|l| copies.iter().map(move |shift| Light { pos: l.pos + *shift, ..*l }))
+            .filter(|l| {
+                let d = l.pos - SCREEN_CENTRE;
+                d.x.abs() < half.x + l.radius && d.y.abs() < half.y + l.radius
+            })
+            .take(MAX_LIGHTS)
+            .collect()
     }
 
     /// A sprite's vertex colour: lit by the frame's lights when effects
