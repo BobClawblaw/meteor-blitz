@@ -755,7 +755,7 @@ async fn load_play_assets() -> PlayAssets {
         ("blue", "clouds"),
         ("fire", "crust"),
         ("green", "clouds"),
-        ("sprawl", "fogBlackRed"),
+        ("craters", "fogBlackRed"),
         ("craters", "fogGreen"),
         ("space4deep", "fogRed"),
         ("space4deep", "fogRed"),
