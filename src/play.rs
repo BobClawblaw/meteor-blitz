@@ -765,6 +765,37 @@ enum State {
     },
 }
 
+/// The run carried from stage to stage (`Play::advance_stage`), kept as
+/// the stage began so Restart can put it back.
+#[derive(Clone, Copy)]
+struct Carry {
+    score: u64,
+    multiplier: u32,
+    /// Play::multiplier_base: the multiplier counts the score since it.
+    multiplier_base: u64,
+    lives: u32,
+    bombs: u32,
+    rings: u32,
+    upgrade_points: u32,
+    upgrades: [usize; 6],
+    weapon: Weapon,
+}
+
+impl Carry {
+    /// A placeholder until `Play::new` records the real start.
+    const EMPTY: Carry = Carry {
+        score: 0,
+        multiplier: 1,
+        multiplier_base: 0,
+        lives: 0,
+        bombs: 0,
+        rings: 0,
+        upgrade_points: 0,
+        upgrades: [0; 6],
+        weapon: Weapon::Cannon,
+    };
+}
+
 pub struct Play {
     pub world: usize,
     pub stage: usize,
@@ -792,6 +823,8 @@ pub struct Play {
     pub upgrade_points: u32,
     /// Cannon, fire, laser, speed, boost and gravity levels.
     upgrades: [usize; 6],
+    /// The run as it entered this stage, for Pause > Restart.
+    stage_start: Carry,
     /// Global::multiplierBaseScore: the score at the last death.
     multiplier_base: u64,
     pickups: Rings,
@@ -1006,7 +1039,7 @@ impl Play {
         });
         let auto_bomb = std::env::var("MB_BOMB_AT").ok().and_then(|v| v.parse().ok());
         let bg_z = std::env::var("MB_BG_Z").ok().and_then(|v| v.parse().ok());
-        Play {
+        let mut play = Play {
             world,
             stage,
             state: State::Entering,
@@ -1069,7 +1102,10 @@ impl Play {
             scorches: Vec::new(),
             trail: VecDeque::new(),
             frame_lights: std::cell::RefCell::new(Vec::new()),
-        }
+            stage_start: Carry::EMPTY,
+        };
+        play.stage_start = play.carry();
+        play
     }
 
     /// GameScreen with gameScreenType 0: level 7 is world 1's backdrop with
@@ -1147,6 +1183,51 @@ impl Play {
         let Some((world, stage)) = self.next_stage() else {
             return false;
         };
+        self.enter_stage(world, stage, assets);
+        self.stage_start = self.carry();
+        true
+    }
+
+    /// Pause > Restart (port addition): the stage again, with the run's
+    /// score, lives, bombs, rings, multiplier, upgrades and weapon as they
+    /// were when it began. False for survival and the tutorial, which the
+    /// caller starts afresh.
+    pub fn restart_stage(&mut self, assets: &PlayAssets) -> bool {
+        if self.world >= SURVIVAL || self.is_tutorial() {
+            return false;
+        }
+        let c = self.stage_start;
+        self.score = c.score;
+        self.multiplier = c.multiplier;
+        self.multiplier_base = c.multiplier_base;
+        self.lives = c.lives;
+        self.bombs = c.bombs;
+        self.rings = c.rings;
+        self.upgrade_points = c.upgrade_points;
+        self.upgrades = c.upgrades;
+        self.ship.weapon = c.weapon;
+        self.enter_stage(self.world, self.stage, assets);
+        true
+    }
+
+    /// The run as it stands, for Restart.
+    fn carry(&self) -> Carry {
+        Carry {
+            score: self.score,
+            multiplier: self.multiplier,
+            multiplier_base: self.multiplier_base,
+            lives: self.lives,
+            bombs: self.bombs,
+            rings: self.rings,
+            upgrade_points: self.upgrade_points,
+            upgrades: self.upgrades,
+            weapon: self.ship.weapon,
+        }
+    }
+
+    /// Starts `world`.`stage` in this screen, keeping the run (score,
+    /// rings, upgrades, lives, bombs, multiplier and weapon).
+    fn enter_stage(&mut self, world: usize, stage: usize, assets: &PlayAssets) {
         let weapon = self.ship.weapon;
         self.world = world;
         self.stage = stage;
@@ -1186,7 +1267,6 @@ impl Play {
         ship.boost_charge = ship.boost_recharge();
         self.field.gun.level = self.upgrades[Upgrade::Gravity as usize] as u32;
         self.ship = ship;
-        true
     }
 
     pub fn set_shake_scale(&mut self, scale: f32) {

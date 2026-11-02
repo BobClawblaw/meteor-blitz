@@ -1097,6 +1097,7 @@ async fn main() {
     let mut after_tutorial: Option<Next> = None;
     let mut music_on = false;
     let mut frame_count: u32 = 0;
+    let restart_at: Option<u32> = std::env::var("MB_RESTART_AT").ok().and_then(|v| v.parse().ok());
     // MB_START=<world>.<stage> (1-based, world 7 = survival) boots straight
     // into a stage, for scripted frame comparisons.
     if let Some((w, s)) = std::env::var("MB_START").ok().and_then(|v| {
@@ -1383,6 +1384,14 @@ async fn main() {
                             menu_screen = build_menu(kind, &ui, &progress, true);
                             screen = Screen::Menu(kind);
                         }
+                        Some(Action::Restart) => {
+                            pause = None;
+                            if let Some(g) = game.as_mut() {
+                                if !g.restart_stage(&play_assets) {
+                                    *g = Play::new(g.world, g.stage, progress.best, &play_assets);
+                                }
+                            }
+                        }
                         Some(Action::NextStage) => {
                             pause = None;
                             // `GameScreen::handleEvent` starts the next stage
@@ -1614,6 +1623,21 @@ async fn main() {
         frame_count += 1;
         if frame_count == pause_frame {
             pause = held_pause.take();
+        }
+        // MB_RESTART_AT=<frame>: Pause > Restart at that frame, printing the
+        // run before and after, for checking what Restart puts back.
+        if restart_at == Some(frame_count) {
+            if let Some(g) = game.as_mut() {
+                let line = |g: &Play| {
+                    format!(
+                        "{}.{} score {} lives {} bombs {} rings {} points {} upgrades {:?}",
+                        g.world, g.stage, g.score, g.lives, g.bombs, g.rings, g.upgrade_points, g.upgrade_levels()
+                    )
+                };
+                let before = line(g);
+                let kept = g.restart_stage(&play_assets);
+                eprintln!("restart: kept run {} before {} after {}", kept, before, line(g));
+            }
         }
         let auto_shot = shot_path.as_deref().filter(|_| frame_count == shot_frame);
         if auto_shot.is_some() {

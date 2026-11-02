@@ -47,6 +47,8 @@ pub enum Action {
     Resume,
     Leave,
     NextStage,
+    /// Port addition: start the stage again with the run as it entered it.
+    Restart,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -232,6 +234,12 @@ impl Settings {
 /// The frame-rate caps the Options screen offers; 0 is unlimited (no cap
 /// and no vsync: about 800 fps on an M5 Ultra).
 pub const FPS_CAPS: [u32; 6] = [60, 120, 144, 165, 240, 0];
+
+/// The main page's bottom row with Restart (port addition): Resume,
+/// Restart and Quit, 20 units apart, centred.
+const RESUME_X: f32 = 100.0;
+const RESTART_X: f32 = 200.0;
+const QUIT_X: f32 = 300.0;
 
 /// The largest HUD size the Options slider reaches.
 pub const MAX_HUD_SCALE: f32 = 1.5;
@@ -595,15 +603,26 @@ impl Pause {
             enabled: true,
         };
         match self.page {
-            Page::Main => vec![
-                button(30.0, 99.0, 129.0, 41.0, ItemAction::Flip),
-                slider(170.0, 116.0, 240.0, SliderKind::Music),
-                button(30.0, 155.0, 129.0, 41.0, ItemAction::Page(Page::Controls)),
-                slider(170.0, 173.0, 240.0, SliderKind::Effects),
-                button(150.0, 230.0, 80.0, 40.0, ItemAction::Resume),
-                button(250.0, 230.0, 80.0, 40.0, ItemAction::Page(Page::Quit)),
-                button(370.0, 50.0, 100.0, 30.0, ItemAction::Page(Page::Upgrade)),
-            ],
+            Page::Main => {
+                // Port addition: Restart sits between Resume and Quit (the
+                // tutorial has none); the pair keep their places without it.
+                let mut items = vec![
+                    button(30.0, 99.0, 129.0, 41.0, ItemAction::Flip),
+                    slider(170.0, 116.0, 240.0, SliderKind::Music),
+                    button(30.0, 155.0, 129.0, 41.0, ItemAction::Page(Page::Controls)),
+                    slider(170.0, 173.0, 240.0, SliderKind::Effects),
+                ];
+                if play.is_tutorial() {
+                    items.push(button(150.0, 230.0, 80.0, 40.0, ItemAction::Resume));
+                    items.push(button(250.0, 230.0, 80.0, 40.0, ItemAction::Page(Page::Quit)));
+                } else {
+                    items.push(button(RESUME_X, 230.0, 80.0, 40.0, ItemAction::Resume));
+                    items.push(button(RESTART_X, 230.0, 80.0, 40.0, ItemAction::Close(Action::Restart)));
+                    items.push(button(QUIT_X, 230.0, 80.0, 40.0, ItemAction::Page(Page::Quit)));
+                }
+                items.push(button(370.0, 50.0, 100.0, 30.0, ItemAction::Page(Page::Upgrade)));
+                items
+            }
             Page::Controls => vec![
                 button(30.0, 89.0, 129.0, 41.0, ItemAction::ToggleShake),
                 slider(189.0, 104.0, 167.0, SliderKind::Shake),
@@ -691,7 +710,7 @@ impl Pause {
         let font = &assets.label_font;
         self.draw_panel(canvas, assets);
         match self.page {
-            Page::Main => self.draw_main(canvas, assets, font, settings),
+            Page::Main => self.draw_main(canvas, assets, font, settings, play.is_tutorial()),
             Page::Controls => self.draw_controls(canvas, assets, font, settings),
             Page::Upgrade => self.draw_upgrade(canvas, assets, font, play, settings),
             Page::Quit => self.draw_quit(canvas, assets, font),
@@ -763,12 +782,18 @@ impl Pause {
         hgradient(canvas, assets, 240.0, 280.0, half, 1.0, white, dim);
     }
 
-    fn draw_main(&self, canvas: &Canvas, assets: &PauseAssets, font: &Font, settings: &Settings) {
+    fn draw_main(&self, canvas: &Canvas, assets: &PauseAssets, font: &Font, settings: &Settings, tutorial: bool) {
         let white = Color::new(1.0, 1.0, 1.0, self.alpha);
         font.text("Paused", 240.0, 57.0, 1.0, Align::Centre, white);
         self.label(canvas, assets, font, "Flip Screen", 30.0, 99.0, 129.0, 41.0);
-        self.label(canvas, assets, font, "Resume", 150.0, 230.0, 80.0, 40.0);
-        self.label(canvas, assets, font, "Quit", 250.0, 230.0, 80.0, 40.0);
+        if tutorial {
+            self.label(canvas, assets, font, "Resume", 150.0, 230.0, 80.0, 40.0);
+            self.label(canvas, assets, font, "Quit", 250.0, 230.0, 80.0, 40.0);
+        } else {
+            self.label(canvas, assets, font, "Resume", RESUME_X, 230.0, 80.0, 40.0);
+            self.label(canvas, assets, font, "Restart", RESTART_X, 230.0, 80.0, 40.0);
+            self.label(canvas, assets, font, "Quit", QUIT_X, 230.0, 80.0, 40.0);
+        }
         self.label(canvas, assets, font, "Upgrade", 370.0, 50.0, 100.0, 30.0);
         self.label(canvas, assets, font, "Controls", 30.0, 155.0, 129.0, 41.0);
         self.slider(canvas, assets, 170.0, 116.0, 240.0, settings.music);
