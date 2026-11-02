@@ -17,7 +17,7 @@
 
 Outputs mirror the source layout under assets/4x/ and are regenerable.
 Usage:
-  tools/upscale4x.py [--esrgan DIR] [--only textures|seam|ui|sprites|font|all]
+  tools/upscale4x.py [--esrgan BINARY] [--only textures|ui|sprites|font|all]
 """
 
 import argparse
@@ -41,6 +41,10 @@ DEFAULT_ESRGAN = Path.home() / "tools/realesrgan/realesrgan-ncnn-vulkan"
 def xbr4(src: Path, dst: Path) -> None:
     """xBR 4x, preserving alpha by scaling it as a separate mask."""
     im = Image.open(src)
+    # oxipng stores many of these as palette or grey+alpha PNGs; their
+    # transparency must take the alpha path too.
+    if im.mode in ("LA", "PA") or "transparency" in im.info:
+        im = im.convert("RGBA")
     dst.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
@@ -112,68 +116,103 @@ def tiled3(im: Image.Image) -> Image.Image:
     return tiled
 
 
-def seamless_base(src: Path, scale: int) -> Image.Image:
-    im = Image.open(src)
-    w, h = im.size
-    big = tiled3(im).resize((w * 3 * scale, h * 3 * scale), Image.LANCZOS)
-    return big.crop((w * scale, h * scale, w * 2 * scale, h * 2 * scale))
+# Wrapped context around each terrain texture before upscaling, in original
+# pixels; more than Real-ESRGAN's reach, so the cropped centre tiles exactly.
+PAD = 128
+# The margin kept for the second Real-ESRGAN pass of an 8x texture, in
+# original pixels (128 px of its 4x input).
+PAD2 = 32
+# Upscaled with Lanczos, not Real-ESRGAN: the fogs are soft overlays with
+# faint brush smears near their edges, which Real-ESRGAN sharpens into hard
+# streaks.
+SOFT = {"fogBlackRed", "fogGreen", "fogRed"}
+# The planet bases (tools/normalmaps.py's BASES) are opaque, but craters (and
+# a few fire pixels) were exported with alpha down to 216 on their 1-2 px
+# border. The backdrop multiplies by base alpha, so upscaled, that border drew
+# a dark cross at every wrap; the bases are written fully opaque.
+OPAQUE = {"blue", "fire", "green", "sprawl", "craters", "space4deep"}
 
 
-def blend_seamless(detail: Image.Image, base: Image.Image, band: int) -> Image.Image:
-    """Keeps the ESRGAN detail inside, and the periodic base at the edges."""
-    a = np.asarray(detail.convert("RGBA"), dtype=np.float32)
-    b = np.asarray(base.convert("RGBA"), dtype=np.float32)
-    h, w = a.shape[:2]
-    y = np.arange(h, dtype=np.float32)
-    x = np.arange(w, dtype=np.float32)
-    dx = np.minimum(x, w - 1 - x) / band
-    dy = np.minimum(y, h - 1 - y) / band
-    m = np.clip(np.minimum(dx[None, :], dy[:, None]), 0.0, 1.0)
-    m = (m * m * (3.0 - 2.0 * m))[..., None]
-    out = np.clip(a * m + b * (1.0 - m), 0.0, 255.0).astype(np.uint8)
-    return Image.fromarray(out, "RGBA")
+def esrgan4(im: Image.Image, esrgan: Path) -> Image.Image:
+    with tempfile.TemporaryDirectory() as tmp:
+        src = Path(tmp) / "in.png"
+        dst = Path(tmp) / "out.png"
+        im.save(src)
+        esrgan_upscale(src, dst, esrgan, 4)
+        out = Image.open(dst).convert("RGB")
+        out.load()
+    return out
 
 
-def best_shift(a: np.ndarray, axis: int) -> float:
-    """The wrap offset that leaves the smallest edge step on one axis."""
-    h, w = a.shape[:2]
-    best = (0.0, float("inf"))
-    for frac in (1 / 8, 1 / 4, 3 / 8, 1 / 2, 5 / 8, 3 / 4, 7 / 8):
-        shift = int((h if axis == 0 else w) * frac)
-        rolled = np.roll(a, shift, axis=axis)
-        if axis == 0:
-            diff = np.abs(rolled[0, :, :3] - rolled[-1, :, :3]).mean()
-        else:
-            diff = np.abs(rolled[:, 0, :3] - rolled[:, -1, :3]).mean()
-        if diff < best[1]:
-            best = (frac, float(diff))
-    return best[0]
+def periodic_upscale(im: Image.Image, esrgan: Path | None, scale: int) -> Image.Image:
+    """A tiling RGB image at `scale` (2, 4 or 8) that still tiles.
 
-
-def tileable(im: Image.Image, band: int) -> Image.Image:
-    """Crossfade the edges with a rolled copy so the texture wraps cleanly.
-
-    The current pipeline's periodic base is continuous across the tiled
-    pattern's boundaries but not at the crop's own edges, which is what
-    showed as a line where the backdrop wraps. The roll puts the source's
-    worst edge step at a better offset; the smooth mask keeps the centre
-    detail and makes the two edges the same rolled content.
+    Real-ESRGAN only looks at a pixel's neighbourhood, so upscaling the
+    original wrapped by PAD pixels on every side and cropping the centre
+    gives an output whose edges continue into each other: the wrap is as
+    smooth as any other step, and the detail is the same everywhere.
+    realesrgan-x4plus only works at 4x (asked for 2x it returns a scrambled
+    image): 2x is its 4x output brought down with Lanczos, and 8x is a
+    second 4x pass (on a PAD2 margin, to keep the 16x image small) brought
+    down to 8x, which drew crisper edges than Lanczos or the anime 2x model
+    from the 4x pass. Lanczos alone is used when `esrgan` is None.
     """
-    mode = im.mode
-    a = np.asarray(im.convert("RGBA"), dtype=np.float32)
-    h, w = a.shape[:2]
-    sy = int(h * best_shift(a, 0))
-    sx = int(w * best_shift(a, 1))
-    rolled = np.roll(a, (sy, sx), axis=(0, 1))
-    y = np.arange(h, dtype=np.float32)
-    x = np.arange(w, dtype=np.float32)
-    dx = np.minimum(x, w - 1 - x) / band
-    dy = np.minimum(y, h - 1 - y) / band
-    m = np.clip(np.minimum(dx[None, :], dy[:, None]), 0.0, 1.0)
-    m = (m * m * (3.0 - 2.0 * m))[..., None]
-    out = np.clip(a * m + rolled * (1.0 - m), 0.0, 255.0).astype(np.uint8)
-    result = Image.fromarray(out, "RGBA")
-    return result if mode == "RGBA" else result.convert(mode)
+    w, h = im.size
+    big = tiled3(im).crop((w - PAD, h - PAD, 2 * w + PAD, 2 * h + PAD))
+    margin = PAD
+    if esrgan is not None:
+        big = esrgan4(big, esrgan)
+        if scale > 4:
+            k = (PAD - PAD2) * 4
+            big = esrgan4(big.crop((k, k, big.width - k, big.height - k)), esrgan)
+            margin = PAD2
+    big = big.resize(((w + 2 * margin) * scale, (h + 2 * margin) * scale), Image.LANCZOS)
+    return big.crop((margin * scale, margin * scale, (margin + w) * scale, (margin + h) * scale))
+
+
+def close_seam(a: np.ndarray, axis: int) -> np.ndarray:
+    """Remove the step where the texture wraps on one axis.
+
+    Some originals do not tile: the fogs jump by 1.5-1.8 times a typical
+    step at their edges. The jump, smoothed along the edge (1/512 of the
+    size; wider smoothing left the fogs' and clouds' wrap 1.4-1.5 times a
+    typical step), is split between the two sides and faded out over 1/16 of the
+    size, so the edges meet without blending in other content or losing
+    detail. (The crossfade with a rolled copy this replaced left the outer
+    1/8 of each texture with 56-70% of the centre's detail, a soft grid at
+    every tile boundary.)
+    """
+    a = np.moveaxis(a, axis, 0).copy()
+    n = a.shape[0]
+    band, smooth = n // 16, n / 512
+    step = a[0] - a[-1]
+    # Smooth along the edge with wrap-around, so only the mismatch moves.
+    k = np.exp(-0.5 * (np.arange(-3 * int(smooth), 3 * int(smooth) + 1) / smooth) ** 2)
+    k /= k.sum()
+    pad = len(k) // 2
+    wrapped = np.concatenate([step[-pad:], step, step[:pad]], axis=0)
+    step = np.apply_along_axis(lambda v: np.convolve(v, k, mode="valid"), 0, wrapped)
+    t = np.arange(band) / band
+    ramp = (0.5 + 0.5 * np.cos(np.pi * t))[:, None, None] * 0.5
+    a[:band] -= ramp * step
+    a[n - band:] += ramp[::-1] * step
+    return np.moveaxis(a, 0, axis)
+
+
+def terrain(src: Path, esrgan: Path, scale: int) -> Image.Image:
+    """One backdrop texture at `scale`, tiling with full detail to its edges."""
+    im = Image.open(src).convert("RGBA")
+    engine = None if src.stem in SOFT else esrgan
+    rgb = periodic_upscale(im.convert("RGB"), engine, scale)
+    if src.stem in OPAQUE:
+        alpha = Image.new("L", rgb.size, 255)
+    else:
+        # The clouds and fogs are decals: their alpha goes through the same
+        # upscale as a grey image.
+        alpha = periodic_upscale(im.getchannel("A").convert("RGB"), engine, scale).convert("L")
+    a = np.dstack([np.asarray(rgb, dtype=np.float64), np.asarray(alpha, dtype=np.float64)])
+    a = close_seam(close_seam(a, 1), 0)
+    return Image.fromarray(np.clip(np.round(a), 0, 255).astype(np.uint8), "RGBA")
 
 
 def edge_diff(dst: Path) -> float:
@@ -182,33 +221,15 @@ def edge_diff(dst: Path) -> float:
 
 
 def upscale_textures(esrgan: Path) -> None:
-    # 2x: the backdrop mesh minifies these and macroquad has no mipmaps.
-    src = ROOT / "original" / "textures"
-    for p in sorted(src.glob("*.png")):
+    # 2x: the 4x set's backdrop.
+    if not esrgan.exists():
+        sys.exit(f"Real-ESRGAN not found at {esrgan} (pass --esrgan)")
+    for p in sorted((ROOT / "original" / "textures").glob("*.png")):
         dst = OUT / "textures" / p.name
         dst.parent.mkdir(parents=True, exist_ok=True)
-        with tempfile.TemporaryDirectory() as tmp:
-            detail = Path(tmp) / "detail.png"
-            # realesrgan-x4plus only works at 4x: asked for 2x it returns a
-            # scrambled image. Upscale 4x, then bring it down to 2x.
-            if esrgan_upscale(p, detail, esrgan, 4):
-                w, h = Image.open(p).size
-                half = Image.open(detail).resize((w * 2, h * 2), Image.LANCZOS)
-                out = blend_seamless(half, seamless_base(p, 2), 24)
-            else:
-                out = seamless_base(p, 2)
-            out = tileable(out, 128)
-            out.save(dst, optimize=True)
+        terrain(p, esrgan, 2).save(dst, optimize=True)
         print("texture", p.name, "->", dst.relative_to(ROOT),
               "diff", round(verify(p, dst), 2), "edge", round(edge_diff(dst), 2))
-
-
-def seam_fix_dir(src_dir: Path) -> None:
-    """Apply the edge crossfade to an already generated texture set."""
-    for p in sorted(src_dir.glob("*.png")):
-        out = tileable(Image.open(p), 128)
-        out.save(p, optimize=True)
-        print("seam", p.name, "edge", round(edge_diff(p), 2))
 
 
 def upscale_dir(src: Path, dst_dir: Path, label: str) -> None:
@@ -237,15 +258,13 @@ def upscale_font() -> None:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--esrgan", type=Path, default=DEFAULT_ESRGAN)
-    ap.add_argument("--only", choices=["textures", "seam", "ui", "sprites", "font", "all"],
+    ap.add_argument("--only", choices=["textures", "ui", "sprites", "font", "all"],
                     default="all")
     args = ap.parse_args()
     if FFMPEG is None:
         sys.exit("ffmpeg is required")
     if args.only in ("textures", "all"):
         upscale_textures(args.esrgan)
-    if args.only == "seam":
-        seam_fix_dir(OUT / "textures")
     if args.only in ("ui", "all"):
         upscale_dir(ROOT / "assets" / "ui", OUT / "ui", "ui")
     if args.only in ("sprites", "all"):

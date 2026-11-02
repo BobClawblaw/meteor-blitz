@@ -22,7 +22,7 @@ A love letter to Alley Labs' *Meteor Blitz* (iOS, 2009), given away freely and r
 - **Lighting.** Explosions, shots and the ship light the planet. The terrain has relief from generated normal maps, and nearby rocks and enemies pick up the light.
 - **Glow, shockwaves and colour.** Bloom comes from what emits light (flames, lasers, sparks, explosions), never from bright clouds or the HUD. Bombs, boss deaths and big explosions send out shockwaves that bend the screen, and each world has its own colour grade.
 - **Effects.** Round, glowing particles replace the original square points. Explosions leave scorch marks that fade. The ship has an engine trail, boost speed lines and a shield glow, and fast shots and enemies thrown by the gravity gun leave streaks.
-- **HD art.** 4x sprites, UI and font, and 2x terrain, generated from the originals (`tools/upscale4x.py`). An experimental macOS 8x build (8x sprites/UI/font, 2x terrain) is attached to the 1.0.7 release; `MB_HD=8` selects it.
+- **HD art.** 8x sprites, UI and font, and 8x terrain (4096x4096, Real-ESRGAN, tiling seamlessly with mipmaps), generated from the originals (`tools/upscale4x.py`, `tools/upscale8x.py`). `MB_HD=1` loads the lighter 4x set (2x terrain), `MB_HD=0` the original art.
 - **Options screen** (the SETTINGS button): fullscreen, resolution up to 4K, widescreen, bloom, lighting and effects, frame-rate cap, audio, screen shake, and the tutorial.
 - **Rebindable controls** (Options > Controls): every action has a keyboard/mouse binding and a controller binding, saved to `controls.txt`.
 - **Tutorial.** The original's 27-step tutorial is ported: HELP on the main menu plays it, and "Tutorial before first game" in Options runs it before your first game.
@@ -47,11 +47,12 @@ The Global high-score tab reports that the leaderboard is offline, because the o
 cargo run --release
 ```
 
-The HD art set is committed under `assets/4x/`; `cargo run` picks it up on desktop. To regenerate it (needs `ffmpeg`; the Real-ESRGAN ncnn binary is optional and falls back to Lanczos), and the terrain normal maps:
+The HD art sets are committed under `assets/8x/` (the desktop default) and `assets/4x/`; `cargo run` picks them up. To regenerate them (needs `ffmpeg` and the Real-ESRGAN ncnn binary, `realesrgan-ncnn-vulkan`, passed with `--esrgan`), and the terrain normal maps:
 
 ```bash
 python3 tools/upscale4x.py --only all
 python3 tools/normalmaps.py
+python3 tools/upscale8x.py --only all   # from the 4x set and the originals
 bash tools/optimize-png.sh   # lossless recompression, last (needs oxipng)
 ```
 
@@ -117,7 +118,7 @@ The original look is still there underneath. `MB_WIDE=0 MB_HD=0 MB_RENDER_SCALE=
 ## Layout
 
 - `src/` — the port: game screen, enemies, weapons, HUD, menus, pause popups, options and bindings, scores, controller input, rendering.
-- `assets/` — decoded UI, terrain, sprites and audio used at runtime; `assets/4x/` holds the generated HD copies, `assets/normals/` the terrain normal maps.
+- `assets/` — decoded UI, terrain, sprites and audio used at runtime; `assets/8x/` and `assets/4x/` hold the generated HD copies, `assets/normals/` the terrain normal maps.
 - `tools/` — asset decoders, the upscaler and normal-map generator, the web build, the macOS app wrapper and the emulator-frame comparison tool.
 - `docs/port-plan.md`, `AGENTS.md`, `worklog/` — plan, ground rules/resume status, and the development log.
 

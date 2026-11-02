@@ -56,10 +56,12 @@ impl NameEntry {
             WHITE,
         );
         font.text(&self.name, 240.0, 160.0, 3.0, Align::Centre, WHITE);
-        // The font has no underscore or punctuation, so the caret is a quad.
+        // The font has no underscore or punctuation, so the caret is a quad,
+        // one glyph gap after the text and as tall as its letters (the text
+        // hangs down from y = 160).
         if (get_time() * 2.0) as u64 % 2 == 0 {
-            let caret_x = 240.0 + font.width(&self.name, 3.0) * 0.5 + 3.0;
-            draw_rectangle(caret_x, 140.0, 3.0, 22.0, WHITE);
+            let caret_x = 240.0 + (font.width(&self.name, 3.0) - 3.0) * 0.5 + 3.0;
+            draw_rectangle(caret_x, 160.0, 3.0, font.cap_height(3.0), WHITE);
         }
         font.text("ENTER", 240.0, 220.0, 2.0, Align::Centre, WHITE);
         font.number(self.score, 240.0, 260.0, 2.0, Align::Centre, WHITE);

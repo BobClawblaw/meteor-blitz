@@ -704,20 +704,69 @@ async fn load_texture_file(name: &str) -> Texture2D {
     load_terrain(&path).await
 }
 
+thread_local! {
+    /// Terrain textures already created, by path (see `load_terrain`).
+    static TERRAIN: std::cell::RefCell<HashMap<String, Texture2D>> = Default::default();
+    /// Terrain images `predecode_terrain` decoded ahead of `load_terrain`.
+    static DECODED: std::cell::RefCell<HashMap<String, Image>> = Default::default();
+}
+
+/// Decodes the HD terrain PNGs on worker threads before the loaders ask for
+/// them: the 8x set's 4096x4096 textures took ~2 s to decode one by one.
+#[cfg(not(target_arch = "wasm32"))]
+fn predecode_terrain() {
+    if gfx::asset_scale() <= 1.0 {
+        return;
+    }
+    let textures = [
+        "blue", "clouds", "fire", "crust", "green", "craters", "fogBlackRed", "fogGreen",
+        "space4deep", "fogRed",
+    ];
+    let normals = ["blue", "fire", "green", "craters", "space4deep"];
+    let paths: Vec<String> = textures
+        .iter()
+        .map(|n| art_path(&format!("textures/{}.png", n), ""))
+        .chain(normals.iter().map(|n| art_path(&format!("normals/{}.png", n), "")))
+        .collect();
+    let decoded: Vec<(String, Image)> = std::thread::scope(|s| {
+        let jobs: Vec<_> = paths
+            .into_iter()
+            .map(|path| {
+                s.spawn(move || {
+                    let bytes = std::fs::read(&path).ok()?;
+                    let image = Image::from_file_with_format(&bytes, Some(ImageFormat::Png)).ok()?;
+                    Some((path, image))
+                })
+            })
+            .collect();
+        jobs.into_iter().filter_map(|job| job.join().ok().flatten()).collect()
+    });
+    DECODED.with(|m| m.borrow_mut().extend(decoded));
+}
+
 /// A backdrop texture or normal map: repeating, as the backdrop shader
-/// tiles it. The 8x set's 2048x2048 terrain is magnified near the screen's
-/// centre and minified toward the planet's limb; without mipmaps the
-/// minified part aliases into bands and thrashes the texture cache, so that
-/// set gets trilinear mipmaps. It is created through miniquad because
-/// macroquad allocates no mipmap levels (generating them into its textures
-/// left the backdrop black). The other sets keep plain linear filtering.
+/// tiles it. The HD terrain (4096x4096 in the 8x set, 1024 in the 4x set) is
+/// about 1:1 near the screen's centre at 4K and minified toward the planet's
+/// limb; without mipmaps the minified part aliases into bands and thrashes
+/// the texture cache, so the HD sets get trilinear mipmaps. It is created
+/// through miniquad because macroquad allocates no mipmap levels
+/// (generating them into its textures left the backdrop black). The
+/// original art keeps plain linear filtering, for emulator comparisons.
+/// Each file is loaded once: the worlds and the menu share bases and decals,
+/// and at 4096x4096 a duplicate costs ~90 MB.
 async fn load_terrain(path: &str) -> Texture2D {
     use macroquad::miniquad::{
         MipmapFilterMode, TextureAccess, TextureFormat, TextureKind, TextureParams, TextureSource,
         TextureWrap,
     };
-    let image = load_image(path).await.unwrap();
-    let mipmaps = gfx::asset_scale() >= 8.0;
+    if let Some(tex) = TERRAIN.with(|m| m.borrow().get(path).cloned()) {
+        return tex;
+    }
+    let image = match DECODED.with(|m| m.borrow_mut().remove(path)) {
+        Some(image) => image,
+        None => load_image(path).await.unwrap(),
+    };
+    let mipmaps = gfx::asset_scale() > 1.0;
     let gl = unsafe { get_internal_gl() };
     let id = gl.quad_context.new_texture(
         TextureAccess::Static,
@@ -738,7 +787,9 @@ async fn load_terrain(path: &str) -> Texture2D {
     if mipmaps {
         gl.quad_context.texture_generate_mipmaps(id);
     }
-    Texture2D::from_miniquad_texture(id)
+    let tex = Texture2D::from_miniquad_texture(id);
+    TERRAIN.with(|m| m.borrow_mut().insert(path.to_owned(), tex.clone()));
+    tex
 }
 
 /// GameScreen::loadTextures: each element's small-rock atlas and the medium,
@@ -961,6 +1012,8 @@ async fn main() {
         eprintln!("settings: {}", settings.to_text().replace('\n', " "));
         std::process::exit(0);
     }
+    #[cfg(not(target_arch = "wasm32"))]
+    predecode_terrain();
     let ui = load_ui_set().await;
     let menu_assets = load_menu_assets().await;
     let play_assets = load_play_assets().await;

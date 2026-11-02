@@ -44,6 +44,7 @@ fi
 res="$app/Contents/Resources"
 cp -R assets "$res/assets"
 rm -rf "$res/assets/web-audio"   # the web build's MP3s; desktop loads assets/audio
+rm -rf "$res/assets/4x"          # the app loads the 8x set (MB_HD=1 is for development)
 cp original/app/ngage.dat original/app/systems.dat "$res/original/app/"
 cp -R original/sprites original/textures "$res/original/"
 cp assets/icon/icon.icns "$res/icon.icns"

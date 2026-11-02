@@ -41,6 +41,9 @@ pub enum Align {
 const SPACE_WIDTH: f32 = 8.0;
 const DIGIT_PITCH: f32 = 22.0;
 const ONE_NUDGE: f32 = 5.0;
+/// Inked rows of the letters and digits in ngage.png; their 15-row glyph
+/// rectangles end in two rows of soft shadow.
+const CAP_HEIGHT: f32 = 13.0;
 
 impl Font {
     pub fn new(texture: Texture2D, dat: &[u8], atlas_scale: f32) -> Font {
@@ -88,6 +91,11 @@ impl Font {
                 ..Default::default()
             },
         );
+    }
+
+    /// The letters' ink height at `scale`; text hangs down from y.
+    pub fn cap_height(&self, scale: f32) -> f32 {
+        CAP_HEIGHT * scale
     }
 
     fn advance(&self, c: char, scale: f32) -> f32 {

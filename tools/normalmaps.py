@@ -29,8 +29,12 @@ def blur(h: np.ndarray, passes: int) -> np.ndarray:
     return h
 
 
-def normal_map(src: Path, strength: float) -> Image.Image:
-    rgb = np.asarray(Image.open(src).convert("RGB"), dtype=np.float32) / 255.0
+def normal_map(src: Path, strength: float, size: int | None = None) -> Image.Image:
+    """`size` resamples the texture first (the relief scales with it)."""
+    im = Image.open(src).convert("RGB")
+    if size is not None and im.size != (size, size):
+        im = im.resize((size, size), Image.LANCZOS)
+    rgb = np.asarray(im, dtype=np.float32) / 255.0
     height = rgb @ np.array([0.299, 0.587, 0.114], dtype=np.float32)
     # Dark and bright worlds alike: relief from the contrast, not the level.
     height = (height - height.mean()) / max(float(height.std()), 1e-3) * 0.12
