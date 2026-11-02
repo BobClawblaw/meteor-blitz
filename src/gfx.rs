@@ -97,12 +97,33 @@ fn title_bar_height() -> f32 {
     }
 }
 
+/// The display's backing scale. The window's own `backingScaleFactor` is
+/// still 1 before the window is shown, which made startup resolution
+/// changes half-size; NSScreen reports the real scale at that point.
+#[cfg(target_os = "macos")]
+fn display_scale() -> f32 {
+    use objc2::runtime::AnyObject;
+    use objc2::{class, msg_send};
+    unsafe {
+        let screen: *mut AnyObject = msg_send![class!(NSScreen), mainScreen];
+        if screen.is_null() {
+            return screen_dpi_scale();
+        }
+        let scale: f64 = msg_send![screen, backingScaleFactor];
+        if scale > 0.0 {
+            scale as f32
+        } else {
+            screen_dpi_scale()
+        }
+    }
+}
+
 /// Sets the window to a physical resolution. macOS window frames are in
 /// points, so the physical size is divided by the backing scale and the
 /// title bar is added; Windows and X11 take client pixels directly.
 pub fn set_window_resolution(width: u32, height: u32) {
     #[cfg(target_os = "macos")]
-    let scale = screen_dpi_scale();
+    let scale = display_scale();
     #[cfg(not(target_os = "macos"))]
     let scale = 1.0;
     #[cfg(target_os = "macos")]

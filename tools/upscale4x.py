@@ -6,15 +6,18 @@
   one tile (`-t 1024`): its automatic 400 px tiling left visible seams.
   The backdrop mesh wraps these textures, so the ESRGAN detail is faded into
   a periodic Lanczos base near the edges; otherwise the upscaled edges do not
-  match and the repeats show as a checkerboard. The backdrop mesh samples
-  these minified across the screen and macroquad builds no mipmaps, so a 4x
-  copy (2048x2048) stalls the GPU and drops the frame rate; 2x holds 60 Hz.
+  match and the repeats show as a checkerboard. A final adaptive edge
+  crossfade (`tileable`) makes the texture's own wrap continuous; the base
+  alone was only continuous across the tiled pattern, so the fog textures
+  still showed a line at the texture edge. The backdrop mesh samples these
+  minified across the screen and macroquad builds no mipmaps, so a 4x copy
+  (2048x2048) stalls the GPU and drops the frame rate; 2x holds 60 Hz.
 - UI art, sprites and the bitmap font: xBR 4x (pixel-art aware), with the
   alpha channel upscaled separately so transparency survives.
 
 Outputs mirror the source layout under assets/4x/ and are regenerable.
 Usage:
-  tools/upscale4x.py [--esrgan DIR] [--only textures|ui|sprites|font|all]
+  tools/upscale4x.py [--esrgan DIR] [--only textures|seam|ui|sprites|font|all]
 """
 
 import argparse
@@ -129,6 +132,48 @@ def blend_seamless(detail: Image.Image, base: Image.Image, band: int) -> Image.I
     return Image.fromarray(out, "RGBA")
 
 
+def best_shift(a: np.ndarray, axis: int) -> float:
+    """The wrap offset that leaves the smallest edge step on one axis."""
+    h, w = a.shape[:2]
+    best = (0.0, float("inf"))
+    for frac in (1 / 8, 1 / 4, 3 / 8, 1 / 2, 5 / 8, 3 / 4, 7 / 8):
+        shift = int((h if axis == 0 else w) * frac)
+        rolled = np.roll(a, shift, axis=axis)
+        if axis == 0:
+            diff = np.abs(rolled[0, :, :3] - rolled[-1, :, :3]).mean()
+        else:
+            diff = np.abs(rolled[:, 0, :3] - rolled[:, -1, :3]).mean()
+        if diff < best[1]:
+            best = (frac, float(diff))
+    return best[0]
+
+
+def tileable(im: Image.Image, band: int) -> Image.Image:
+    """Crossfade the edges with a rolled copy so the texture wraps cleanly.
+
+    The current pipeline's periodic base is continuous across the tiled
+    pattern's boundaries but not at the crop's own edges, which is what
+    showed as a line where the backdrop wraps. The roll puts the source's
+    worst edge step at a better offset; the smooth mask keeps the centre
+    detail and makes the two edges the same rolled content.
+    """
+    mode = im.mode
+    a = np.asarray(im.convert("RGBA"), dtype=np.float32)
+    h, w = a.shape[:2]
+    sy = int(h * best_shift(a, 0))
+    sx = int(w * best_shift(a, 1))
+    rolled = np.roll(a, (sy, sx), axis=(0, 1))
+    y = np.arange(h, dtype=np.float32)
+    x = np.arange(w, dtype=np.float32)
+    dx = np.minimum(x, w - 1 - x) / band
+    dy = np.minimum(y, h - 1 - y) / band
+    m = np.clip(np.minimum(dx[None, :], dy[:, None]), 0.0, 1.0)
+    m = (m * m * (3.0 - 2.0 * m))[..., None]
+    out = np.clip(a * m + rolled * (1.0 - m), 0.0, 255.0).astype(np.uint8)
+    result = Image.fromarray(out, "RGBA")
+    return result if mode == "RGBA" else result.convert(mode)
+
+
 def edge_diff(dst: Path) -> float:
     a = np.asarray(Image.open(dst).convert("RGB"), dtype=np.float32)
     return float((np.abs(a[:, 0] - a[:, -1]).mean() + np.abs(a[0, :] - a[-1, :]).mean()) / 2.0)
@@ -150,9 +195,18 @@ def upscale_textures(esrgan: Path) -> None:
                 out = blend_seamless(half, seamless_base(p, 2), 24)
             else:
                 out = seamless_base(p, 2)
+            out = tileable(out, 128)
             out.save(dst, optimize=True)
         print("texture", p.name, "->", dst.relative_to(ROOT),
               "diff", round(verify(p, dst), 2), "edge", round(edge_diff(dst), 2))
+
+
+def seam_fix_dir(src_dir: Path, band: int = 128) -> None:
+    """Apply the edge crossfade to an already generated texture set."""
+    for p in sorted(src_dir.glob("*.png")):
+        out = tileable(Image.open(p), band)
+        out.save(p, optimize=True)
+        print("seam", p.name, "edge", round(edge_diff(p), 2))
 
 
 def upscale_dir(src: Path, dst_dir: Path, label: str) -> None:
@@ -181,13 +235,15 @@ def upscale_font() -> None:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--esrgan", type=Path, default=DEFAULT_ESRGAN)
-    ap.add_argument("--only", choices=["textures", "ui", "sprites", "font", "all"],
+    ap.add_argument("--only", choices=["textures", "seam", "ui", "sprites", "font", "all"],
                     default="all")
     args = ap.parse_args()
     if FFMPEG is None:
         sys.exit("ffmpeg is required")
     if args.only in ("textures", "all"):
         upscale_textures(args.esrgan)
+    if args.only == "seam":
+        seam_fix_dir(OUT / "textures")
     if args.only in ("ui", "all"):
         upscale_dir(ROOT / "assets" / "ui", OUT / "ui", "ui")
     if args.only in ("sprites", "all"):
