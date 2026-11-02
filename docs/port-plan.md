@@ -32,6 +32,20 @@
 9. **Desktop/web** — macOS app, Windows build on `xamd4090`, WASM web build.
 10. **QA** — perf, playtest, release.
 
+## Modern-port additions (2026-11-02)
+
+In order, one commit each (signing/notarization and an online leaderboard are out of scope):
+
+1. Frame rate: 165/240 Hz caps and an uncapped (VSync) choice.
+2. HUD scale option.
+3. Accessibility: reduce flashes (full-screen flashes, shockwaves), colourblind-safe tints for fire/ice and indicators.
+4. Quick restart from the pause menu; replay any cleared stage from stage select.
+5. Controller button icons (Xbox and PlayStation) in prompts and on the Controls page.
+6. Rumble on bombs, hits, deaths and boss kills.
+7. Local stats page and achievements.
+8. Touch controls for the web build (twin sticks, bomb, boost).
+9. Linux package (and Steam Deck check).
+
 ## Performance
 
 - The loop is paced at 60 Hz (the original's simulation rate); `MB_FPS=0` disables the cap for benchmarks, `MB_PROF`/`MB_PROF_FRAMES` report update/draw CPU (see `AGENTS.md`).
