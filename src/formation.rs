@@ -48,6 +48,9 @@ pub enum Kind {
 
 struct Cloud {
     pos: Vec2,
+    /// World units per second: the momentum of what made it, losing speed
+    /// to GAS_DRAG.
+    vel: Vec2,
     radius: f32,
     age: f32,
     life: f32,
@@ -55,6 +58,14 @@ struct Cloud {
     kind: Kind,
     seed: u8,
 }
+
+/// How fast a cloud's momentum dies away, per second (velocity x
+/// e^-drag t, so it coasts velocity / GAS_DRAG units in all).
+const GAS_DRAG: f32 = 3.0;
+/// A moving cloud is drawn stretched along its motion: 1 + speed / this,
+/// up to MAX_STRETCH, rounding out as it slows.
+const STRETCH_SPEED: f32 = 160.0;
+const MAX_STRETCH: f32 = 2.2;
 
 /// The most clouds alive at once; the oldest gives way.
 const MAX_CLOUDS: usize = 64;
@@ -112,8 +123,8 @@ impl Gas {
     }
 
     /// Starts a cloud at a world position, `radius` world units across at
-    /// its widest, lasting `life` seconds.
-    pub fn spawn(&mut self, pos: Vec2, radius: f32, life: f32, palette: Palette, kind: Kind) {
+    /// its widest, lasting `life` seconds, moving at `vel`.
+    pub fn spawn(&mut self, pos: Vec2, vel: Vec2, radius: f32, life: f32, palette: Palette, kind: Kind) {
         if self.clouds.len() >= MAX_CLOUDS {
             self.clouds.remove(0);
         }
@@ -121,6 +132,7 @@ impl Gas {
         self.next_seed = self.next_seed.wrapping_add(97);
         self.clouds.push(Cloud {
             pos,
+            vel,
             radius,
             age: 0.0,
             life,
@@ -131,8 +143,11 @@ impl Gas {
     }
 
     pub fn update(&mut self, dt: f32) {
+        let keep = (-GAS_DRAG * dt).exp();
         for c in &mut self.clouds {
             c.age += dt;
+            c.pos += c.vel * dt;
+            c.vel *= keep;
         }
         self.clouds.retain(|c| c.age < c.life);
     }
@@ -161,13 +176,14 @@ impl Gas {
             let age = ((c.age / c.life).clamp(0.0, 1.0) * 255.0) as u8;
             let color = Color::from_rgba(age, c.seed, code, 255);
             let base = verts.len() as u16;
-            for (dx, dy, u, v) in [
-                (-h, -h, 0.0, 0.0),
-                (h, -h, 1.0, 0.0),
-                (h, h, 1.0, 1.0),
-                (-h, h, 0.0, 1.0),
-            ] {
-                verts.push(Vertex::new(p.x + dx, p.y + dy, z, u, v, color));
+            // The quad turned to the motion and stretched along it.
+            let speed = c.vel.length();
+            let along = if speed > 1e-3 { c.vel / speed } else { vec2(1.0, 0.0) };
+            let across = vec2(-along.y, along.x);
+            let stretch = (1.0 + speed / STRETCH_SPEED).min(MAX_STRETCH);
+            let (a, b) = (along * h * stretch, across * h);
+            for (k, u, v) in [(-a - b, 0.0, 0.0), (a - b, 1.0, 0.0), (a + b, 1.0, 1.0), (-a + b, 0.0, 1.0)] {
+                verts.push(Vertex::new(p.x + k.x, p.y + k.y, z, u, v, color));
             }
             indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
         }
@@ -307,7 +323,7 @@ void main() {
     float core = exp(-r * r / (impact ? 0.03 + 0.06 * age : 0.015 + 0.05 * age)) * pow(1.0 - age, impact ? 2.0 : 3.0);
 
     float fade = pow(1.0 - age, 1.4) * smoothstep(0.0, 0.05, age);
-    float density = (gas * 1.1 + blast * 0.9) * fade;
+    float density = (gas * 0.75 + blast * 0.6) * fade;
     // Gas tops out at the ramp's .85 stop; the core carries it to the end.
     float t = 0.85 * (1.0 - exp(-2.6 * density)) + 0.6 * core;
     vec3 col = cobalt ? cobaltGold(t) : magma(t);

@@ -869,6 +869,8 @@ pub struct Play {
     pub formation: bool,
     /// Formation gas clouds.
     gas: Gas,
+    /// This step's shot hits (where, the shot's velocity), for the gas.
+    hits: Vec<(Vec2, Vec2)>,
     /// Lights from explosions and hits, fading out.
     glows: Vec<Glow>,
     /// Shockwave rings from big explosions.
@@ -961,44 +963,62 @@ fn event_gas(event: &Event) -> Option<(Vec2, f32, f32)> {
             ..
         } => {
             let s = (*size).min(3);
-            // About twice the rock's radius (11, 27, 38, 52), so the cloud
-            // reaches past the pieces it splits into.
-            (*pos, [26.0, 55.0, 80.0, 110.0][s], [0.7, 1.0, 1.3, 1.6][s])
+            // Somewhat past the rock's radius (11, 27, 38, 52).
+            (*pos, [16.0, 33.0, 48.0, 66.0][s], [0.55, 0.8, 1.0, 1.2][s])
         }
         Event::LobberDestroyed {
             pos, effects: true, ..
         }
         | Event::TowerDestroyed {
             pos, effects: true, ..
-        } => (*pos, 64.0, 1.2),
+        } => (*pos, 38.0, 0.9),
         Event::SnakeDestroyed {
             pos, effects: true, ..
-        } => (*pos, 52.0, 1.0),
+        } => (*pos, 31.0, 0.8),
         Event::SeekerDestroyed {
             pos, effects: true, ..
         }
         | Event::MineDestroyed {
             pos, effects: true, ..
-        } => (*pos, 46.0, 0.9),
+        } => (*pos, 28.0, 0.7),
         Event::ArrowDestroyed {
             pos, effects: true, ..
         }
         | Event::ShyGuyDestroyed {
             pos, effects: true, ..
-        } => (*pos, 38.0, 0.8),
+        } => (*pos, 23.0, 0.6),
         Event::PieceDestroyed {
             pos, effects: true, ..
-        } => (*pos, 50.0, 0.9),
-        Event::SegmentDestroyed { pos, .. } => (*pos, 24.0, 0.6),
-        Event::DepotDestroyed { pos, .. } => (*pos, 90.0, 1.3),
-        Event::GravityBurst { pos } => (*pos, 56.0, 0.7),
-        Event::BossDead { pos, .. } => (*pos, 200.0, 2.2),
+        } => (*pos, 30.0, 0.7),
+        Event::SegmentDestroyed { pos, .. } => (*pos, 15.0, 0.5),
+        Event::DepotDestroyed { pos, .. } => (*pos, 54.0, 1.0),
+        Event::GravityBurst { pos } => (*pos, 34.0, 0.6),
+        Event::BossDead { pos, .. } => (*pos, 120.0, 1.8),
         _ => return None,
     })
 }
 
+/// How much of a shot's speed its gas carries on: an impact's puff, and a
+/// blast's cloud (heavier, it carries less), at most GAS_MAX_SPEED.
+const IMPACT_CARRY: f32 = 0.3;
+const BLAST_CARRY: f32 = 0.18;
+const GAS_MAX_SPEED: f32 = 280.0;
+/// A destruction takes the momentum of a shot that hit within this many
+/// units of it in the same step.
+const BLAST_HIT_REACH: f32 = 80.0;
+
+/// Distance from `a` to `b` across the world's wrap.
+fn wrap_dist(a: Vec2, b: Vec2) -> f32 {
+    vec2(wrap_near(a.x, b.x), wrap_near(a.y, b.y)).distance(b)
+}
+
+/// The gas velocity a shot's momentum gives: `carry` of its speed, capped.
+fn gas_velocity(shot: Vec2, carry: f32) -> Vec2 {
+    (shot * carry).clamp_length_max(GAS_MAX_SPEED)
+}
+
 /// Formation gas for a shot's impact: radius and life.
-const IMPACT_GAS: (f32, f32) = (11.0, 0.35);
+const IMPACT_GAS: (f32, f32) = (8.0, 0.3);
 
 /// The burn mark an event leaves (port addition): its size, if any.
 fn event_scorch(event: &Event) -> Option<(Vec2, f32)> {
@@ -1173,6 +1193,7 @@ impl Play {
             colour_assist: false,
             formation: false,
             gas: Gas::new(),
+            hits: Vec::new(),
             glows: Vec::new(),
             shocks: Vec::new(),
             scorches: Vec::new(),
@@ -1565,38 +1586,17 @@ impl Play {
     /// effects and flashes, lights, shockwaves and scorch marks run out
     /// behind the popup instead of freezing at their peak (a boss's white
     /// death flash and shockwave stayed on the results screen).
-    /// MB_GAS_TEST (tuning hook): a magma and a cobalt blast and two
-    /// impacts beside the ship, for judging the Formation gas on its own.
+    /// MB_GAS_TEST (tuning hook): a magma blast carrying a cannon shot's
+    /// momentum upward, a still cobalt blast, and two impacts (cannon up,
+    /// laser right) beside the ship, for judging the Formation gas.
     pub fn gas_test(&mut self) {
         let c = self.ship.pos;
-        self.gas.spawn(
-            c + vec2(-130.0, -40.0),
-            110.0,
-            1.6,
-            Palette::Magma,
-            GasKind::Blast,
-        );
-        self.gas.spawn(
-            c + vec2(130.0, -40.0),
-            110.0,
-            1.6,
-            Palette::CobaltGold,
-            GasKind::Blast,
-        );
-        self.gas.spawn(
-            c + vec2(-40.0, 90.0),
-            IMPACT_GAS.0 * 2.0,
-            IMPACT_GAS.1,
-            Palette::Magma,
-            GasKind::Impact,
-        );
-        self.gas.spawn(
-            c + vec2(40.0, 90.0),
-            IMPACT_GAS.0 * 2.0,
-            IMPACT_GAS.1,
-            Palette::CobaltGold,
-            GasKind::Impact,
-        );
+        let shot = vec2(0.0, -CANNON_SPEED);
+        let laser = vec2(weapons::LASER_SPEED, 0.0);
+        self.gas.spawn(c + vec2(-130.0, 40.0), gas_velocity(shot, BLAST_CARRY), 66.0, 1.2, Palette::Magma, GasKind::Blast);
+        self.gas.spawn(c + vec2(130.0, 40.0), Vec2::ZERO, 66.0, 1.2, Palette::CobaltGold, GasKind::Blast);
+        self.gas.spawn(c + vec2(-40.0, 100.0), gas_velocity(shot, IMPACT_CARRY), IMPACT_GAS.0 * 2.0, IMPACT_GAS.1, Palette::Magma, GasKind::Impact);
+        self.gas.spawn(c + vec2(40.0, 100.0), gas_velocity(laser, IMPACT_CARRY), IMPACT_GAS.0 * 2.0, IMPACT_GAS.1, Palette::CobaltGold, GasKind::Impact);
     }
 
     pub fn update_visuals(&mut self, dt: f32) {
@@ -1764,6 +1764,8 @@ impl Play {
         let effects = &mut self.effects;
         let gas = &mut self.gas;
         let formation = self.formation;
+        let hits = &mut self.hits;
+        hits.clear();
         let fire_damage = weapons::FIRE_DAMAGE[self.ship.fire_gun.level];
         self.ship.bullets.retain(|b| {
             let (radius, damage, mass) = match b.weapon {
@@ -1784,7 +1786,8 @@ impl Play {
                 } else {
                     Palette::Magma
                 };
-                gas.spawn(b.pos, IMPACT_GAS.0, IMPACT_GAS.1, pal, GasKind::Impact);
+                gas.spawn(b.pos, gas_velocity(b.vel, IMPACT_CARRY), IMPACT_GAS.0, IMPACT_GAS.1, pal, GasKind::Impact);
+                hits.push((b.pos, b.vel));
                 let tint = Some(pal.ember());
                 match b.weapon {
                     Weapon::Cannon => {
@@ -2159,7 +2162,15 @@ impl Play {
             let pal = event_palette(&event);
             if self.formation {
                 if let Some((pos, radius, life)) = event_gas(&event) {
-                    self.gas.spawn(pos, radius, life, pal, GasKind::Blast);
+                    // The shot that did it, if one hit near here this step,
+                    // lends the cloud its momentum (bombs and rams lend none).
+                    let shot = self
+                        .hits
+                        .iter()
+                        .filter(|(p, _)| wrap_dist(*p, pos) < BLAST_HIT_REACH)
+                        .min_by(|a, b| wrap_dist(a.0, pos).total_cmp(&wrap_dist(b.0, pos)))
+                        .map_or(Vec2::ZERO, |&(_, v)| v);
+                    self.gas.spawn(pos, gas_velocity(shot, BLAST_CARRY), radius, life, pal, GasKind::Blast);
                 }
             }
             if let Some((pos, size)) = event_scorch(&event) {
