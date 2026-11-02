@@ -247,8 +247,8 @@ const BLOOM_DOWNSAMPLE: u32 = 4;
 
 /// The affine map from clip space back to the landscape canvas on the play
 /// plane (z = 0), as rows of a 2x2 matrix and an offset.
-fn ndc_to_canvas(view_w: f32) -> (Vec4, Vec2) {
-    let m = camera_matrix(view_w);
+fn ndc_to_canvas(view_w: f32, zoom: f32) -> (Vec4, Vec2) {
+    let m = view_matrix(view_w, zoom, Vec2::ZERO);
     let ndc = |x: f32, y: f32| {
         let h = m * vec4(x, y, 0.0, 1.0);
         vec2(h.x / h.w, h.y / h.w)
@@ -261,6 +261,19 @@ fn ndc_to_canvas(view_w: f32) -> (Vec4, Vec2) {
     let row0 = vec2(inv.x_axis.x, inv.y_axis.x);
     let row1 = vec2(inv.x_axis.y, inv.y_axis.y);
     (vec4(row0.x, row0.y, row1.x, row1.y), -(inv * o))
+}
+
+/// The camera with the play plane zoomed out `zoom` times about the
+/// canvas centre (Options > Playfield zoom; 1 is the original) and moved by
+/// `shift` canvas units first (a copy of the wrapping world). Depth scales
+/// too, so the planet's curve and the layers' parallax shrink with the rest
+/// of the picture.
+fn view_matrix(view_w: f32, zoom: f32, shift: Vec2) -> Mat4 {
+    let c = vec3(CANVAS_W * 0.5, CANVAS_H * 0.5, 0.0);
+    camera_matrix(view_w)
+        * Mat4::from_translation(c)
+        * Mat4::from_scale(Vec3::splat(1.0 / zoom))
+        * Mat4::from_translation(shift.extend(0.0) - c)
 }
 
 /// Draws a full target from texture space: (0,0)-(1,1) to the whole pass.
@@ -326,8 +339,13 @@ impl Bloom {
     }
 
     /// Redraws the emitters into `a` through the canvas camera, then blurs.
-    fn render(&self, emitters: &[Mesh], view_w: f32, additive: &Material) {
-        set_camera(&OriginalCamera { render_pass: self.a.render_pass.clone(), view_w });
+    fn render(&self, emitters: &[Mesh], view_w: f32, zoom: f32, additive: &Material) {
+        set_camera(&OriginalCamera {
+            render_pass: self.a.render_pass.clone(),
+            view_w,
+            zoom,
+            shift: Vec2::ZERO,
+        });
         clear_background(BLACK);
         gl_use_material(additive);
         for m in emitters {
@@ -524,11 +542,13 @@ fn pipeline(dst: BlendFactor) -> PipelineParams {
 struct OriginalCamera {
     render_pass: macroquad::texture::RenderPass,
     view_w: f32,
+    zoom: f32,
+    shift: Vec2,
 }
 
 impl Camera for OriginalCamera {
     fn matrix(&self) -> Mat4 {
-        camera_matrix(self.view_w)
+        view_matrix(self.view_w, self.zoom, self.shift)
     }
     fn depth_enabled(&self) -> bool {
         false
@@ -561,18 +581,23 @@ fn offset_z(dx: f32, dy: f32, wide: f32) -> f32 {
 /// columns to fill a wide view, and the game's planet grows with it so its
 /// limb stays off screen (the centre, and so the ground scroll, is
 /// unchanged); cells past the sphere are left out.
-fn backdrop_mesh(flipped: bool, wide: f32) -> Mesh {
+fn backdrop_mesh(flipped: bool, wide: f32, zoom: f32) -> Mesh {
     let sign = if flipped { -1.0 } else { 1.0 };
-    // Growing faster than the width keeps the corners covered at 21:9.
-    let sphere = if flipped { 1.0 } else { wide.powf(1.5) };
-    let half_x = (DRAWN_HALF_X * wide).ceil() as i32 + (wide > 1.0) as i32;
+    // Growing faster than the width keeps the corners covered at 21:9; a
+    // zoomed-out view (`zoom` times the area across) grows it the same way,
+    // with cells `zoom` times larger so the mesh keeps its vertex count
+    // (one draw holds only so many).
+    let sphere = if flipped { 1.0 } else { (wide * zoom).powf(1.5) };
+    let cell = CELL * zoom;
+    let half_x = (DRAWN_HALF_X * wide).ceil() as i32 + (wide * zoom > 1.0) as i32;
+    let half_y = DRAWN_HALF_Y + (zoom > 1.0) as i32;
     let cols = (2 * half_x + 1) as usize;
-    let rows = (2 * DRAWN_HALF_Y + 1) as usize;
+    let rows = (2 * half_y + 1) as usize;
     let mut vertices = Vec::with_capacity(cols * rows);
     for ix in -half_x..=half_x {
-        for iy in -DRAWN_HALF_Y..=DRAWN_HALF_Y {
-            let x = ix as f32 * CELL;
-            let y = iy as f32 * CELL;
+        for iy in -half_y..=half_y {
+            let x = ix as f32 * cell;
+            let y = iy as f32 * cell;
             let z = sign * offset_z(-x, -y, sphere);
             // The menu's flipped surface takes the texture axes swapped
             // (measured against the emulator menu frame); the play-plane
@@ -648,6 +673,12 @@ pub struct Canvas {
     lights: RefCell<Vec<Light>>,
     normal: RefCell<Option<Texture2D>>,
     flat_normal: Texture2D,
+    /// The play plane's zoom this frame (`set_zoom`; 1 outside the game),
+    /// and the world copy being drawn (`set_shift`).
+    zoom: Cell<f32>,
+    shift: Cell<Vec2>,
+    /// The zoom `game_backdrop` was built for.
+    backdrop_zoom: Cell<f32>,
 }
 
 /// Resolution of the offscreen canvas relative to the original 480x320
@@ -767,8 +798,8 @@ impl Canvas {
             glowing: Cell::new(false),
             bloom_on: Cell::new(false),
             white,
-            menu_backdrop: RefCell::new(backdrop_mesh(true, view_w / CANVAS_W)),
-            game_backdrop: RefCell::new(backdrop_mesh(false, view_w / CANVAS_W)),
+            menu_backdrop: RefCell::new(backdrop_mesh(true, view_w / CANVAS_W, 1.0)),
+            game_backdrop: RefCell::new(backdrop_mesh(false, view_w / CANVAS_W, 1.0)),
             backdrop_material,
             additive,
             flash,
@@ -779,6 +810,9 @@ impl Canvas {
             lights: RefCell::new(Vec::new()),
             normal: RefCell::new(None),
             flat_normal: Texture2D::from_rgba8(1, 1, &[128, 128, 255, 255]),
+            zoom: Cell::new(1.0),
+            shift: Cell::new(Vec2::ZERO),
+            backdrop_zoom: Cell::new(1.0),
         }
     }
 
@@ -792,7 +826,7 @@ impl Canvas {
     pub fn add_glow(&self, vertices: Vec<Vertex>, indices: Vec<u16>, texture: Option<&Texture2D>) {
         if self.glowing.get() && self.bloom_on.get() {
             let texture = Some(texture.unwrap_or(&self.white).clone());
-            self.emitters.borrow_mut().push(Mesh { vertices, indices, texture });
+            self.record(Mesh { vertices, indices, texture });
         }
     }
 
@@ -863,17 +897,64 @@ impl Canvas {
             *self.target.borrow_mut() = new_target(size);
             self.target_size.set(size);
             *self.bloom.borrow_mut() = Bloom::new(size);
-            *self.menu_backdrop.borrow_mut() = backdrop_mesh(true, view_w / CANVAS_W);
-            *self.game_backdrop.borrow_mut() = backdrop_mesh(false, view_w / CANVAS_W);
+            *self.menu_backdrop.borrow_mut() = backdrop_mesh(true, view_w / CANVAS_W, 1.0);
+            *self.game_backdrop.borrow_mut() =
+                backdrop_mesh(false, view_w / CANVAS_W, self.backdrop_zoom.get());
         }
-        set_camera(&OriginalCamera {
-            render_pass: self.target.borrow().render_pass.clone(),
-            view_w,
-        });
+        self.zoom.set(1.0);
+        self.shift.set(Vec2::ZERO);
+        self.use_camera(1.0);
         clear_background(BLACK);
         self.emitters.borrow_mut().clear();
         self.glowing.set(false);
         *self.post_fx.borrow_mut() = None;
+    }
+
+    fn use_camera(&self, zoom: f32) {
+        set_camera(&OriginalCamera {
+            render_pass: self.target.borrow().render_pass.clone(),
+            view_w: view_w(),
+            zoom,
+            shift: self.shift.get(),
+        });
+    }
+
+    /// Zooms the play plane out `zoom` times for the world pass (rebuilding
+    /// the planet mesh to cover the wider view); bloom and ground lighting
+    /// follow it for the rest of the frame.
+    pub fn set_zoom(&self, zoom: f32) {
+        if zoom != self.backdrop_zoom.get() {
+            self.backdrop_zoom.set(zoom);
+            *self.game_backdrop.borrow_mut() = backdrop_mesh(false, view_w() / CANVAS_W, zoom);
+        }
+        self.zoom.set(zoom);
+        self.shift.set(Vec2::ZERO);
+        self.use_camera(zoom);
+    }
+
+    /// Draws what follows `shift` canvas units over (a copy of the wrapping
+    /// world, for zoomed views wider than it).
+    pub fn set_shift(&self, shift: Vec2) {
+        self.shift.set(shift);
+        self.use_camera(self.zoom.get());
+    }
+
+    /// Back to the unzoomed camera, for screen-space drawing (the HUD, full
+    /// screen flashes).
+    pub fn screen_space(&self) {
+        self.shift.set(Vec2::ZERO);
+        self.use_camera(1.0);
+    }
+
+    /// An emitter for the bloom pass, moved to the world copy being drawn.
+    fn record(&self, mut mesh: Mesh) {
+        let shift = self.shift.get();
+        if shift != Vec2::ZERO {
+            for v in &mut mesh.vertices {
+                v.position += shift.extend(0.0);
+            }
+        }
+        self.emitters.borrow_mut().push(mesh);
     }
 
     /// Shockwaves and grading for this frame's blit (set after `begin`).
@@ -886,7 +967,7 @@ impl Canvas {
     pub fn end(&self) {
         let bloom = self.bloom_on.get();
         if bloom {
-            self.bloom.borrow().render(&self.emitters.borrow(), view_w(), &self.additive);
+            self.bloom.borrow().render(&self.emitters.borrow(), view_w(), self.zoom.get(), &self.additive);
         }
         set_default_camera();
         clear_background(BLACK);
@@ -997,7 +1078,7 @@ impl Canvas {
         self.backdrop_material.set_uniform("Lit", if normal.is_some() { 1.0f32 } else { 0.0 });
         self.backdrop_material
             .set_texture("Normal", normal.unwrap_or_else(|| self.flat_normal.clone()));
-        let (m, offset) = ndc_to_canvas(view_w());
+        let (m, offset) = ndc_to_canvas(view_w(), self.zoom.get());
         self.backdrop_material.set_uniform("NdcToCanvas", m);
         self.backdrop_material.set_uniform("NdcOffset", offset);
         let lights = self.lights.borrow();
@@ -1045,7 +1126,7 @@ impl Canvas {
         }
         draw_mesh(&mesh);
         if additive && self.glowing.get() && self.bloom_on.get() {
-            self.emitters.borrow_mut().push(mesh);
+            self.record(mesh);
         }
         if additive {
             gl_use_default_material();
@@ -1221,7 +1302,7 @@ mod backdrop_tests {
     #[test]
     fn ndc_maps_back_to_the_canvas() {
         for w in [480.0, 569.0, 768.0] {
-            let (m, o) = ndc_to_canvas(w);
+            let (m, o) = ndc_to_canvas(w, 1.0);
             let cam = camera_matrix(w);
             for p in [vec2(0.0, 0.0), vec2(240.0, 160.0), vec2(-40.0, 300.0), vec2(500.0, 12.0)] {
                 let h = cam * vec4(p.x, p.y, 0.0, 1.0);

@@ -418,7 +418,11 @@ impl Effects {
             }
             canvas.draw_triangles(verts, indices, texture, additive);
         }
-        // FlashManager::draw: full-screen colour at depth 0.
+    }
+
+    /// FlashManager::draw: full-screen colour at depth 0, drawn after the
+    /// world (outside the playfield zoom).
+    pub fn draw_flashes(&self, canvas: &crate::gfx::Canvas) {
         let (x0, x1) = (-crate::gfx::edge(), crate::gfx::CANVAS_W + crate::gfx::edge());
         for (color, _, _) in &self.flashes {
             canvas.draw_triangles(

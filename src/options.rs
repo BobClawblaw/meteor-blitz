@@ -13,7 +13,7 @@ use crate::bindings::{self, Action, Bindings, ACTIONS};
 use crate::gfx::{edge, Canvas, CANVAS_H, CANVAS_W};
 use crate::hud::{Align, Font};
 use crate::pad::{self, Button};
-use crate::pause::{Settings, FPS_CAPS, RESOLUTIONS};
+use crate::pause::{Settings, FPS_CAPS, RESOLUTIONS, ZOOMS};
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Page {
@@ -29,6 +29,7 @@ enum Row {
     Bloom,
     VisualFx,
     FrameRate,
+    Zoom,
     Music,
     Effects,
     Shake,
@@ -41,13 +42,14 @@ enum Row {
     Reset,
 }
 
-const MAIN_ROWS: [Row; 12] = [
+const MAIN_ROWS: [Row; 13] = [
     Row::Fullscreen,
     Row::Resolution,
     Row::Widescreen,
     Row::Bloom,
     Row::VisualFx,
     Row::FrameRate,
+    Row::Zoom,
     Row::Music,
     Row::Effects,
     Row::Shake,
@@ -59,7 +61,7 @@ const MAIN_ROWS: [Row; 12] = [
 /// Layout, in canvas units.
 const TITLE_Y: f32 = 10.0;
 const MAIN_TOP: f32 = 40.0;
-const MAIN_PITCH: f32 = 21.0;
+const MAIN_PITCH: f32 = 20.0;
 const BIND_TOP: f32 = 52.0;
 const BIND_PITCH: f32 = 20.0;
 const ROW_SCALE: f32 = 0.6;
@@ -159,7 +161,8 @@ impl Options {
                     set_slider(row, settings, (v + step).clamp(0.0, 1.0));
                 }
                 Row::Bind(_) => self.pad_column = right,
-                Row::FrameRate => settings.fps = cycle(settings.fps, right),
+                Row::FrameRate => settings.fps = cycle(&FPS_CAPS, settings.fps, right),
+                Row::Zoom => settings.zoom = cycle(&ZOOMS, settings.zoom, right),
                 Row::Resolution => settings.resolution = cycle_resolution(settings.resolution, right),
                 _ => {}
             }
@@ -224,7 +227,8 @@ impl Options {
             Row::Widescreen => settings.widescreen = !settings.widescreen,
             Row::Bloom => settings.bloom = !settings.bloom,
             Row::VisualFx => settings.visual_fx = !settings.visual_fx,
-            Row::FrameRate => settings.fps = cycle(settings.fps, true),
+            Row::FrameRate => settings.fps = cycle(&FPS_CAPS, settings.fps, true),
+            Row::Zoom => settings.zoom = cycle(&ZOOMS, settings.zoom, true),
             Row::Resolution => settings.resolution = cycle_resolution(settings.resolution, true),
             Row::Tutorial => settings.tutorial = !settings.tutorial,
             Row::Music | Row::Effects | Row::Shake => return None,
@@ -292,6 +296,7 @@ impl Options {
                 Row::Bloom => "Bloom",
                 Row::VisualFx => "Lighting and effects",
                 Row::FrameRate => "Frame rate cap",
+                Row::Zoom => "Playfield zoom",
                 Row::Music => "Music",
                 Row::Effects => "Sound effects",
                 Row::Shake => "Screen shake",
@@ -309,6 +314,7 @@ impl Options {
                 Row::Bloom => on_off(font, settings.bloom, y, white),
                 Row::VisualFx => on_off(font, settings.visual_fx, y, white),
                 Row::FrameRate => font.text(&settings.fps.to_string(), VALUE_X, y, ROW_SCALE, Align::Right, white),
+                Row::Zoom => font.text(&format!("{}x", settings.zoom), VALUE_X, y, ROW_SCALE, Align::Right, white),
                 Row::Tutorial => on_off(font, settings.tutorial, y, white),
                 Row::Music | Row::Effects | Row::Shake => {
                     let v = slider(row, settings);
@@ -374,11 +380,11 @@ fn resolution_name(res: Option<(u32, u32)>) -> String {
     }
 }
 
-/// The next (or previous) frame-rate cap, wrapping.
-fn cycle(fps: u32, up: bool) -> u32 {
-    let i = FPS_CAPS.iter().position(|&f| f == fps).unwrap_or(0);
-    let n = FPS_CAPS.len();
-    FPS_CAPS[if up { (i + 1) % n } else { (i + n - 1) % n }]
+/// The next (or previous) choice in `list` (frame-rate caps, zooms), wrapping.
+fn cycle(list: &[u32], value: u32, up: bool) -> u32 {
+    let i = list.iter().position(|&v| v == value).unwrap_or(0);
+    let n = list.len();
+    list[if up { (i + 1) % n } else { (i + n - 1) % n }]
 }
 
 fn on_off(font: &Font, on: bool, y: f32, color: Color) {

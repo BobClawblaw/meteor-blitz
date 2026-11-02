@@ -50,6 +50,10 @@ const INDICATOR_MAX_ACTIVE: usize = 12;
 /// indicator is drawn at it.
 const BOSS_INDICATOR_SCALE: f32 = 2.0;
 
+/// How far past the view a copy of the wrapping world is still drawn: the
+/// largest sprite's half size, so nothing pops in at the view's edge.
+const COPY_MARGIN: f32 = 64.0;
+
 /// Port change: shot impacts (the spark and streak where a shot lands, the
 /// sprays off a hit rock or mine) and a broken rock's debris (burst, sprays
 /// and shards thrown away from the ship) draw a quarter of the original's
@@ -812,6 +816,9 @@ pub struct Play {
     /// Options > Lighting and effects (port addition): lit ground and
     /// sprites, shockwaves, scorch marks, grading, ship effects.
     pub fx: bool,
+    /// Options > Playfield zoom: the camera sees this many times more of
+    /// the play plane across (1 or 2; port addition).
+    pub zoom: f32,
     /// Lights from explosions and hits, fading out.
     glows: Vec<Glow>,
     /// Shockwave rings from big explosions.
@@ -1041,6 +1048,7 @@ impl Play {
             prev: Snapshot::default(),
             blend: 1.0,
             fx: true,
+            zoom: 1.0,
             glows: Vec::new(),
             shocks: Vec::new(),
             scorches: Vec::new(),
@@ -1284,9 +1292,10 @@ impl Play {
             .iter()
             .map(|s| {
                 let t = s.age / s.life;
+                // The blit's waves are in screen space, outside the zoom.
                 Wave {
-                    pos: self.to_screen(s.pos),
-                    radius: s.radius * (1.0 - (1.0 - t) * (1.0 - t)),
+                    pos: SCREEN_CENTRE + (self.to_screen(s.pos) - SCREEN_CENTRE) / self.zoom,
+                    radius: s.radius * (1.0 - (1.0 - t) * (1.0 - t)) / self.zoom,
                     strength: s.strength * (1.0 - t),
                 }
             })
@@ -1299,14 +1308,16 @@ impl Play {
     /// then shots and the ship.
     fn collect_lights(&self) -> Vec<Light> {
         let mut lights: Vec<Light> = Vec::new();
-        let edge = crate::gfx::edge();
+        let half = self.view_half();
+        let copies = self.world_copies();
         let mut add = |pos: Vec2, radius: f32, color: Vec3| {
-            let on_screen = pos.x > -edge - radius
-                && pos.x < CANVAS_W + edge + radius
-                && pos.y > -radius
-                && pos.y < CANVAS_H + radius;
-            if on_screen {
-                lights.push(Light { pos, radius, color });
+            // The ground is drawn once, so a light shows on each copy of
+            // the world in view.
+            for shift in &copies {
+                let d = pos + *shift - SCREEN_CENTRE;
+                if d.x.abs() < half.x + radius && d.y.abs() < half.y + radius {
+                    lights.push(Light { pos: pos + *shift, radius, color });
+                }
             }
         };
         for g in &self.glows {
@@ -2279,7 +2290,7 @@ impl Play {
             }
         } else if can_fire && bindings::key_down(Action::Fire) {
             // Keyboard and mouse fire toward the cursor.
-            let dir = (Canvas::mouse() - self.to_screen(self.view_ship())).normalize_or_zero();
+            let dir = (self.mouse() - self.to_screen(self.view_ship())).normalize_or_zero();
             if dir != Vec2::ZERO {
                 self.ship.shoot(dt, dir);
             }
@@ -2609,8 +2620,8 @@ impl Play {
             targets.push((self.at(&p.boss, 1, 0, b.pos), BOSS_INDICATOR_SCALE));
         }
         // The draw distance reaches 48 units past the original's 480x320
-        // view; a wider view adds its extra width.
-        let reach = DRAW_DISTANCE + vec2(crate::gfx::edge(), 0.0);
+        // view; a wider or zoomed-out view reaches as far past its own.
+        let reach = DRAW_DISTANCE - SCREEN_CENTRE + self.view_half();
         let ship = self.to_screen(self.view_ship());
         let tex = &assets.indicator;
         let (w, h) = tex_size(tex);
@@ -2725,6 +2736,7 @@ impl Play {
     }
 
     pub fn draw(&self, canvas: &Canvas, assets: &PlayAssets) {
+        canvas.set_zoom(self.zoom);
         let cam = self.view_cam();
         let (base, decal) = &assets.backdrops[self.world.min(assets.backdrops.len() - 1)];
         // MB_BG_Z overrides the backdrop depth while it is being verified.
@@ -2747,6 +2759,49 @@ impl Play {
             canvas.set_post(&self.waves(), world_grade(self.world));
         }
         canvas.draw_backdrop(false, base, decal, origin, scroll, 1.0);
+        for shift in self.world_copies() {
+            canvas.set_shift(shift);
+            self.draw_world(canvas, assets, shift == Vec2::ZERO);
+        }
+        canvas.set_shift(Vec2::ZERO);
+        self.draw_indicators(assets);
+        canvas.screen_space();
+        self.effects.draw_flashes(canvas);
+        self.draw_hud(canvas, assets);
+    }
+
+    /// Where the world is drawn: once, plus a copy one world over on each
+    /// side a wide, zoomed-out view reaches past the wrap (everything is
+    /// drawn within half a world of the ship). The copies leave out the
+    /// ship, so it never shows twice.
+    fn world_copies(&self) -> Vec<Vec2> {
+        let half = self.view_half() + Vec2::splat(COPY_MARGIN);
+        let n = |h: f32| ((h - WORLD * 0.5) / WORLD).ceil().max(0.0) as i32;
+        let (nx, ny) = (n(half.x), n(half.y));
+        let mut copies = vec![Vec2::ZERO];
+        for i in -nx..=nx {
+            for j in -ny..=ny {
+                if i != 0 || j != 0 {
+                    copies.push(vec2(i as f32, j as f32) * WORLD);
+                }
+            }
+        }
+        copies
+    }
+
+    /// Half the view's size in play-plane units (canvas units at zoom 1).
+    fn view_half(&self) -> Vec2 {
+        vec2(CANVAS_W * 0.5 + crate::gfx::edge(), CANVAS_H * 0.5) * self.zoom
+    }
+
+    /// The mouse in play-plane canvas coordinates (`to_screen`'s space).
+    fn mouse(&self) -> Vec2 {
+        SCREEN_CENTRE + (Canvas::mouse() - SCREEN_CENTRE) * self.zoom
+    }
+
+    /// Everything on the play plane over the backdrop: scorches, rings,
+    /// enemies, shots, the ship (`with_ship`) and particle effects.
+    fn draw_world(&self, canvas: &Canvas, assets: &PlayAssets, with_ship: bool) {
         if self.fx {
             self.draw_scorches(canvas, assets);
         }
@@ -2942,7 +2997,6 @@ impl Play {
         }
         self.draw_boss(canvas, assets);
         canvas.lighting(false);
-        self.draw_indicators(assets);
 
         // Cannon fire: green additive point sprites trailing each bullet.
         let mut points = Vec::new();
@@ -2979,18 +3033,19 @@ impl Play {
             true,
         );
 
-        self.draw_gravity(canvas, assets);
-        if self.fx {
-            self.draw_ship_fx(canvas, assets);
-        }
-        self.draw_ship(assets);
-        if self.fx {
-            self.draw_shield_rim(canvas, assets);
+        if with_ship {
+            self.draw_gravity(canvas, assets);
+            if self.fx {
+                self.draw_ship_fx(canvas, assets);
+            }
+            self.draw_ship(assets);
+            if self.fx {
+                self.draw_shield_rim(canvas, assets);
+            }
         }
         let soft = self.fx.then_some(&assets.soft_dot);
         self.effects
             .draw(canvas, &assets.spark, soft, self.z, |p| self.to_screen(p));
-        self.draw_hud(canvas, assets);
     }
 
     /// Port addition: the engine trail, boost streaks, and streaks behind

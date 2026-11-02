@@ -1199,6 +1199,11 @@ async fn main() {
     // unless MB_FPS is given, so MB_SHOT_FRAME keeps selecting the same
     // simulation state as before pacing existed.
     #[cfg(not(target_arch = "wasm32"))]
+    // MB_ZOOM=<1|2> overrides Options > Playfield zoom for a run.
+    let zoom_override: Option<u32> = std::env::var("MB_ZOOM")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .filter(|z| pause::ZOOMS.contains(z));
     let fps_override: Option<f64> = std::env::var("MB_FPS")
         .ok()
         .and_then(|v| v.parse().ok())
@@ -1409,6 +1414,7 @@ async fn main() {
                 } else if let Some(g) = game.as_mut() {
                     g.set_shake_scale(settings.shake);
                     g.fx = settings.visual_fx && std::env::var_os("MB_FX_OFF").is_none();
+                    g.zoom = zoom_override.unwrap_or(settings.zoom) as f32;
                     g.update(dt);
                     for id in g.sounds.drain(..) {
                         play_effect(id, settings.effects);

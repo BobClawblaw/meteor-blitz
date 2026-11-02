@@ -92,6 +92,9 @@ pub struct Settings {
     /// Port addition: lit ground and sprites, shockwaves, scorch marks,
     /// colour grading and ship effects.
     pub visual_fx: bool,
+    /// Port addition: the playfield zoom (1 or 2): the camera sees this
+    /// many times more of the play plane across.
+    pub zoom: u32,
 }
 
 impl Default for Settings {
@@ -114,6 +117,7 @@ impl Default for Settings {
             fps: 60,
             resolution: None,
             visual_fx: true,
+            zoom: 1,
         }
     }
 }
@@ -169,6 +173,7 @@ impl Settings {
                 "widescreen" => s.widescreen = parse_bool(value, s.widescreen),
                 "visual_fx" => s.visual_fx = parse_bool(value, s.visual_fx),
                 "fps" => s.fps = value.parse().ok().filter(|f| FPS_CAPS.contains(f)).unwrap_or(s.fps),
+                "zoom" => s.zoom = value.parse().ok().filter(|z| ZOOMS.contains(z)).unwrap_or(s.zoom),
                 "resolution" => {
                     s.resolution = if value.eq_ignore_ascii_case("window") || value.eq_ignore_ascii_case("auto") {
                         None
@@ -184,7 +189,7 @@ impl Settings {
 
     pub fn to_text(&self) -> String {
         format!(
-            "music={}\neffects={}\nshake={}\nshake_control={}\nboost_control={}\nbomb_button={}\nauto_pause={}\nauto_gravity={}\nauto_upgrade={}\nflip={}\ntutorial={}\nfullscreen={}\nbloom={}\nwidescreen={}\nfps={}\nresolution={}\nvisual_fx={}\n",
+            "music={}\neffects={}\nshake={}\nshake_control={}\nboost_control={}\nbomb_button={}\nauto_pause={}\nauto_gravity={}\nauto_upgrade={}\nflip={}\ntutorial={}\nfullscreen={}\nbloom={}\nwidescreen={}\nfps={}\nresolution={}\nvisual_fx={}\nzoom={}\n",
             self.music,
             self.effects,
             self.shake,
@@ -202,12 +207,16 @@ impl Settings {
             self.fps,
             resolution_text(self.resolution),
             self.visual_fx as u8,
+            self.zoom,
         )
     }
 }
 
 /// The frame-rate caps the Options screen offers.
 pub const FPS_CAPS: [u32; 3] = [60, 120, 144];
+
+/// The playfield zooms the Options screen offers.
+pub const ZOOMS: [u32; 2] = [1, 2];
 
 /// The window/render resolutions the Options screen offers, low to 4K.
 pub const RESOLUTIONS: [(u32, u32); 5] = [
@@ -1202,6 +1211,7 @@ mod tests {
             fps: 144,
             resolution: Some((1920, 1080)),
             visual_fx: false,
+            zoom: 2,
         };
         assert_eq!(Settings::parse(&s.to_text()), s);
     }
