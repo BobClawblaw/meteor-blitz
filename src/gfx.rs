@@ -1104,6 +1104,7 @@ pub fn asset_scale() -> f32 {
     *SCALE.get_or_init(|| match std::env::var("MB_HD").as_deref() {
         Ok("0") => 1.0,
         Ok("1") => 4.0,
+        Ok("8") => 8.0,
         _ => DEFAULT_SCALE,
     })
 }
