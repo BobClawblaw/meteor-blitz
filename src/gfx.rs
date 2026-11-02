@@ -637,9 +637,11 @@ pub const BACKGROUND_DEPTH: f32 = 100.0;
 /// A base-layer scroll that keeps the ground under the rocks. The planet is
 /// drawn BACKGROUND_DEPTH behind the play plane, so it shows at
 /// EYE_Z / (EYE_Z + depth) of their scale; at the original's 2/1024 it
-/// moved at 79% of their speed and rocks slid across it.
-pub fn glued_scroll() -> f32 {
-    let scale = EYE_Z / (EYE_Z + BACKGROUND_DEPTH);
+/// moved at 79% of their speed and rocks slid across it. The playfield
+/// zoom scales depth too, bringing the planet `zoom` times closer, so the
+/// rate follows the zoom.
+pub fn glued_scroll(zoom: f32) -> f32 {
+    let scale = EYE_Z / (EYE_Z + BACKGROUND_DEPTH / zoom);
     BACKDROP_SIZE * TEXEL_PER_UNIT / scale
 }
 
@@ -1097,7 +1099,7 @@ impl Canvas {
         // The mesh's v runs against y (GL textures start at the bottom), so
         // in game the vertical scroll goes the other way for the ground to
         // move opposite the ship, as it does horizontally.
-        let k = if menu { ORIGINAL_SCROLL } else { glued_scroll() };
+        let k = if menu { ORIGINAL_SCROLL } else { glued_scroll(self.zoom.get()) };
         let flip = |v: Vec2| if menu { v } else { vec2(v.x, (1.0 - v.y).fract()) };
         self.backdrop_material.set_uniform("Scroll0", flip(wrap(k)));
         self.backdrop_material
@@ -1324,11 +1326,23 @@ mod backdrop_tests {
     }
 
     /// The glued scroll moves the ground at the rocks' speed on screen, at
-    /// the centre of the view.
+    /// the centre of the view, at every playfield zoom.
     #[test]
     fn ground_keeps_pace_with_the_play_plane() {
-        let ratio = step(BACKGROUND_DEPTH) / step(0.0);
-        let ground_units_per_unit = glued_scroll() / BACKDROP_SIZE / TEXEL_PER_UNIT;
-        assert!((ground_units_per_unit * ratio - 1.0).abs() < 1e-4, "{}", ground_units_per_unit * ratio);
+        for zoom in [1.0, 1.5, 2.0] {
+            let m = view_matrix(CANVAS_W, zoom, Vec2::ZERO);
+            let step = |z: f32| {
+                let c = vec3(CANVAS_W * 0.5, CANVAS_H * 0.5, z);
+                let p = |v: Vec3| {
+                    let h = m * v.extend(1.0);
+                    vec2(h.x / h.w, h.y / h.w)
+                };
+                (p(c + vec3(1.0, 0.0, 0.0)) - p(c)).length()
+            };
+            let ratio = step(BACKGROUND_DEPTH) / step(0.0);
+            let ground_units_per_unit = glued_scroll(zoom) / BACKDROP_SIZE / TEXEL_PER_UNIT;
+            let pace = ground_units_per_unit * ratio;
+            assert!((pace - 1.0).abs() < 1e-4, "zoom {} pace {}", zoom, pace);
+        }
     }
 }
