@@ -364,9 +364,6 @@ async fn load_menu_assets() -> MenuAssets {
         horizon: load_ui("horizon").await,
         white: Texture2D::from_rgba8(1, 1, &[255, 255, 255, 255]),
     };
-    for tex in [&menu.space, &menu.fog] {
-        tex.set_filter(FilterMode::Linear);
-    }
     menu
 }
 
@@ -704,9 +701,44 @@ async fn load_texture_file(name: &str) -> Texture2D {
         &format!("textures/{}.png", name),
         &format!("original/textures/{}.png", name),
     );
-    let tex = load_texture(&path).await.unwrap();
-    tex.set_filter(FilterMode::Linear);
-    tex
+    load_terrain(&path).await
+}
+
+/// A backdrop texture or normal map: repeating, as the backdrop shader
+/// tiles it. The 8x set's 2048x2048 terrain is magnified near the screen's
+/// centre and minified toward the planet's limb; without mipmaps the
+/// minified part aliases into bands and thrashes the texture cache, so that
+/// set gets trilinear mipmaps. It is created through miniquad because
+/// macroquad allocates no mipmap levels (generating them into its textures
+/// left the backdrop black). The other sets keep plain linear filtering.
+async fn load_terrain(path: &str) -> Texture2D {
+    use macroquad::miniquad::{
+        MipmapFilterMode, TextureAccess, TextureFormat, TextureKind, TextureParams, TextureSource,
+        TextureWrap,
+    };
+    let image = load_image(path).await.unwrap();
+    let mipmaps = gfx::asset_scale() >= 8.0;
+    let gl = unsafe { get_internal_gl() };
+    let id = gl.quad_context.new_texture(
+        TextureAccess::Static,
+        TextureSource::Bytes(&image.bytes),
+        TextureParams {
+            kind: TextureKind::Texture2D,
+            format: TextureFormat::RGBA8,
+            wrap: TextureWrap::Repeat,
+            min_filter: FilterMode::Linear,
+            mag_filter: FilterMode::Linear,
+            mipmap_filter: if mipmaps { MipmapFilterMode::Linear } else { MipmapFilterMode::None },
+            width: image.width as u32,
+            height: image.height as u32,
+            allocate_mipmaps: mipmaps,
+            sample_count: 0,
+        },
+    );
+    if mipmaps {
+        gl.quad_context.texture_generate_mipmaps(id);
+    }
+    Texture2D::from_miniquad_texture(id)
 }
 
 /// GameScreen::loadTextures: each element's small-rock atlas and the medium,
@@ -769,9 +801,7 @@ async fn load_play_assets() -> PlayAssets {
         ));
         // tools/normalmaps.py: the base's relief, for the lit ground.
         let path = art_path(&format!("normals/{}.png", base), &format!("assets/normals/{}.png", base));
-        let normal = load_texture(&path).await.unwrap();
-        normal.set_filter(FilterMode::Linear);
-        normals.push(normal);
+        normals.push(load_terrain(&path).await);
     }
     let font_dat = art_path("ngage.dat", "original/app/ngage.dat");
     let font = Font::new(

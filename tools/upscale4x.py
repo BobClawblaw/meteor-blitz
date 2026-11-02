@@ -33,7 +33,9 @@ from PIL import Image
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "assets" / "4x"
 FFMPEG = shutil.which("ffmpeg")
-DEFAULT_ESRGAN = Path("/tmp/resrgan/realesrgan-ncnn-vulkan")
+# realesrgan-ncnn-vulkan 20220424 (xinntao/Real-ESRGAN v0.2.5.0), with its
+# models/ folder beside it.
+DEFAULT_ESRGAN = Path.home() / "tools/realesrgan/realesrgan-ncnn-vulkan"
 
 
 def xbr4(src: Path, dst: Path) -> None:

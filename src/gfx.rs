@@ -366,12 +366,14 @@ uniform float Lit;
 uniform vec3 LightPos[12];
 uniform vec3 LightColor[12];
 void main() {
-    vec4 base = texture2D(Texture, fract(uv + Scroll0));
-    vec4 decal = texture2D(Decal, fract(uv + Scroll1));
+    // The textures repeat (main.rs `load_terrain`); a fract() wrap here
+    // would select the smallest mipmap along the seam.
+    vec4 base = texture2D(Texture, uv + Scroll0);
+    vec4 decal = texture2D(Decal, uv + Scroll1);
     vec3 surface = mix(base.rgb, decal.rgb, decal.a);
     if (Lit > 0.5) {
         // Texture u runs with canvas x and v against canvas y.
-        vec3 t = texture2D(Normal, fract(uv + Scroll0)).xyz * 2.0 - 1.0;
+        vec3 t = texture2D(Normal, uv + Scroll0).xyz * 2.0 - 1.0;
         vec3 n = normalize(vec3(t.x, -t.y, t.z));
         // The key light, from the upper left; flat ground stays as drawn.
         vec3 key = normalize(vec3(-0.45, -0.55, 0.7));

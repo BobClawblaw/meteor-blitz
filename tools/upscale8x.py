@@ -3,16 +3,21 @@
 
 - UI, sprites and the bitmap font: xBR 2x on the 4x pixel art, so the
   result is 8x the original. The font's glyph rectangles are scaled by 8.
-- Terrain and fog stay at the committed 2x HD size: 4x terrain (2048x2048)
-  minified without mipmaps showed vertical aliasing bands at 4K, while 2x
-  holds 60 Hz and wraps cleanly. The 8x set copies the 4x textures and
-  normal maps.
-- The normal maps are the committed 2x ones, copied alongside.
+- Terrain and fog: Real-ESRGAN x4plus at its native 4x (2048x2048 from the
+  512x512 originals), made to wrap with tools/upscale4x.py's pipeline (the
+  detail faded into a periodic Lanczos base near the edges, then the
+  adaptive edge crossfade), with its bands scaled to the larger size. At 4K
+  the committed 2x terrain is stretched about 1.9x near the screen's centre
+  and looked soft beside the 8x sprites. The game samples this set's
+  terrain with trilinear mipmaps (`terrain_filter` in main.rs): without them
+  the 2048 textures, minified toward the planet's limb, aliased into
+  vertical bands and slowed the frame.
+- The normal maps are built from this terrain by tools/normalmaps.py's
+  `normal_map`, at 2048x2048.
 
-The game loads this set with MB_HD=8. It is about 143 MB and gives 8x
-sprites, UI and font with the proven 2x terrain.
+The game loads this set with MB_HD=8.
 Usage:
-  tools/upscale8x.py [--only ui|sprites|font|textures|normals|all]
+  tools/upscale8x.py [--esrgan BINARY] [--only ui|sprites|font|textures|normals|all]
 """
 
 import argparse
@@ -31,6 +36,10 @@ OUT = ROOT / "assets" / "8x"
 FFMPEG = shutil.which("ffmpeg")
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import normalmaps  # noqa: E402
+from upscale4x import (  # noqa: E402
+    DEFAULT_ESRGAN, blend_seamless, edge_diff, esrgan_upscale, seamless_base, tileable,
+)
 
 
 def xbr_scale(src: Path, dst: Path) -> None:
@@ -92,24 +101,35 @@ def upscale_font() -> None:
     print("font", Image.open(src).size, "->", Image.open(dst).size)
 
 
-def copy_textures() -> None:
-    for p in sorted((SRC / "textures").glob("*.png")):
+def upscale_textures(esrgan: Path) -> None:
+    """4x terrain from the originals, made to wrap."""
+    if not esrgan.exists():
+        sys.exit(f"Real-ESRGAN not found at {esrgan} (pass --esrgan)")
+    for p in sorted((ROOT / "original" / "textures").glob("*.png")):
         dst = OUT / "textures" / p.name
         dst.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(p, dst)
-        print("texture", p.name, Image.open(p).size, "copied")
+        with tempfile.TemporaryDirectory() as tmp:
+            detail = Path(tmp) / "detail.png"
+            esrgan_upscale(p, detail, esrgan, 4)
+            out = blend_seamless(Image.open(detail), seamless_base(p, 4), 24 * 2)
+            out = tileable(out, 128 * 2)
+            out.save(dst, optimize=True)
+        print("texture", p.name, Image.open(p).size, "->", Image.open(dst).size,
+              "edge", round(edge_diff(dst), 2))
 
 
-def copy_normals() -> None:
-    for p in sorted((SRC / "normals").glob("*.png")):
-        dst = OUT / "normals" / p.name
+def build_normals() -> None:
+    for name in normalmaps.BASES:
+        strength = normalmaps.STRENGTH.get(name, normalmaps.DEFAULT_STRENGTH)
+        dst = OUT / "normals" / f"{name}.png"
         dst.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(p, dst)
-        print("normal", p.name, Image.open(p).size, "copied")
+        normalmaps.normal_map(OUT / "textures" / f"{name}.png", strength).save(dst, optimize=True)
+        print("normal", name, Image.open(dst).size)
 
 
 def main() -> None:
     ap = argparse.ArgumentParser()
+    ap.add_argument("--esrgan", type=Path, default=DEFAULT_ESRGAN)
     ap.add_argument("--only", choices=["ui", "sprites", "font", "textures", "normals", "all"],
                     default="all")
     args = ap.parse_args()
@@ -122,9 +142,9 @@ def main() -> None:
     if args.only in ("font", "all"):
         upscale_font()
     if args.only in ("textures", "all"):
-        copy_textures()
+        upscale_textures(args.esrgan)
     if args.only in ("normals", "all"):
-        copy_normals()
+        build_normals()
 
 
 if __name__ == "__main__":

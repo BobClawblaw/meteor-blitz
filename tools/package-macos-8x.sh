@@ -5,7 +5,7 @@
 #
 # The app is the normal 1.0.7 build with LSEnvironment MB_HD=8 and only the
 # assets/8x set in Resources; the normal app keeps only assets/4x. The 8x
-# set is 8x sprites/UI/font and the proven 2x terrain.
+# set is 8x sprites/UI/font and 4x terrain sampled with mipmaps.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
