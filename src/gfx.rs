@@ -56,6 +56,64 @@ pub fn set_widescreen(on: bool) {
     WIDESCREEN.store(on, Ordering::Relaxed);
 }
 
+/// Settings::resolution's height, set each frame before `Canvas::begin`.
+/// 0 follows the window's fitted resolution.
+static RENDER_HEIGHT: AtomicU32 = AtomicU32::new(0);
+
+pub fn set_render_height(height: u32) {
+    RENDER_HEIGHT.store(height, Ordering::Relaxed);
+}
+
+/// macOS window frames are in points and include the title bar; the
+/// backing scale turns points into pixels. Returns the title bar height in
+/// points so a requested content size can be converted to a frame size.
+#[cfg(target_os = "macos")]
+fn title_bar_height() -> f32 {
+    use objc2::runtime::AnyObject;
+    use objc2::{class, msg_send};
+    use objc2_foundation::NSRect;
+    unsafe {
+        let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
+        if app.is_null() {
+            return 0.0;
+        }
+        let mut window: *mut AnyObject = msg_send![app, mainWindow];
+        if window.is_null() {
+            window = msg_send![app, keyWindow];
+        }
+        if window.is_null() {
+            let windows: *mut AnyObject = msg_send![app, windows];
+            let count: usize = msg_send![windows, count];
+            if count > 0 {
+                window = msg_send![windows, objectAtIndex: 0usize];
+            }
+        }
+        if window.is_null() {
+            return 0.0;
+        }
+        let frame: NSRect = msg_send![window, frame];
+        let content: NSRect = msg_send![window, contentLayoutRect];
+        (frame.size.height - content.size.height).max(0.0) as f32
+    }
+}
+
+/// Sets the window to a physical resolution. macOS window frames are in
+/// points, so the physical size is divided by the backing scale and the
+/// title bar is added; Windows and X11 take client pixels directly.
+pub fn set_window_resolution(width: u32, height: u32) {
+    #[cfg(target_os = "macos")]
+    let scale = screen_dpi_scale();
+    #[cfg(not(target_os = "macos"))]
+    let scale = 1.0;
+    #[cfg(target_os = "macos")]
+    let title = title_bar_height();
+    #[cfg(not(target_os = "macos"))]
+    let title = 0.0;
+    let width = (width as f32 / scale).round().max(1.0) as u32;
+    let height = (height as f32 / scale + title).round().max(1.0) as u32;
+    macroquad::miniquad::window::set_window_size(width, height);
+}
+
 /// The window's aspect, from 3:2 (the original) to 2.4:1. With widescreen
 /// off, or MB_WIDE=0 (emulator comparisons), the original 3:2 view,
 /// letterboxed.
@@ -572,14 +630,20 @@ pub struct Canvas {
 /// Resolution of the offscreen canvas relative to the original 480x320
 /// framebuffer. The default matches the window's fitted canvas so the blit
 /// is 1:1; MB_RENDER_SCALE pins it (1 keeps emulator comparisons exact).
+/// The cap is 8: 4K fullscreen fits a ~6.75 scale, 8 leaves headroom for
+/// 5K/Retina backing stores without unbounded texture sizes.
 fn render_scale(view_w: f32) -> f32 {
     if let Ok(v) = std::env::var("MB_RENDER_SCALE") {
         if let Ok(s) = v.parse::<f32>() {
-            return s.clamp(1.0, 6.0);
+            return s.clamp(1.0, 8.0);
         }
     }
+    let height = RENDER_HEIGHT.load(Ordering::Relaxed);
+    if height > 0 {
+        return (height as f32 / CANVAS_H).clamp(1.0, 8.0);
+    }
     let fit = (screen_width() / view_w).min(screen_height() / CANVAS_H);
-    fit.clamp(1.0, 6.0)
+    fit.clamp(1.0, 8.0)
 }
 
 /// The offscreen target's pixel size for a view `view_w` wide.

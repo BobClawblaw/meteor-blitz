@@ -898,6 +898,35 @@ async fn main() {
     // The data directory (the repo, a release bundle, or MB_ROOT) and the
     // save folder.
     paths::init();
+    let mut settings = Settings::load();
+    // MB_WINDOW sets a test window; MB_RESOLUTION overrides the saved
+    // resolution (a preset like 3840x2160, or "window").
+    let window_override = std::env::var_os("MB_WINDOW").is_some();
+    let mut resolution_override = false;
+    if let Ok(value) = std::env::var("MB_RESOLUTION") {
+        if value.eq_ignore_ascii_case("window") || value.eq_ignore_ascii_case("auto") {
+            settings.resolution = None;
+            resolution_override = true;
+        } else if let Some(res) = pause::parse_resolution(&value) {
+            settings.resolution = Some(res);
+            resolution_override = true;
+        }
+    }
+    if window_override && !resolution_override {
+        settings.resolution = None;
+    }
+    if let Some((w, h)) = settings.resolution {
+        if !window_override || resolution_override {
+            gfx::set_window_resolution(w, h);
+        }
+    }
+    gfx::set_render_height(settings.resolution.map_or(0, |(_, h)| h));
+    // MB_DUMP_SETTINGS prints the loaded settings and exits, for checking
+    // persistence without a GUI.
+    if std::env::var_os("MB_DUMP_SETTINGS").is_some() {
+        eprintln!("settings: {}", settings.to_text().replace('\n', " "));
+        std::process::exit(0);
+    }
     let ui = load_ui_set().await;
     let menu_assets = load_menu_assets().await;
     let play_assets = load_play_assets().await;
@@ -940,13 +969,6 @@ async fn main() {
     let mut backdrop = MenuBackdrop::new();
     let mut progress = Progress::load();
     let mut scores = Scores::load();
-    let mut settings = Settings::load();
-    // MB_DUMP_SETTINGS prints the loaded settings and exits, for checking
-    // persistence without a GUI.
-    if std::env::var_os("MB_DUMP_SETTINGS").is_some() {
-        eprintln!("settings: {}", settings.to_text().replace('\n', " "));
-        std::process::exit(0);
-    }
 
     if settings.fullscreen {
         set_fullscreen(true);
@@ -1194,6 +1216,11 @@ async fn main() {
                 let before = settings;
                 let outcome = options.update(dt, &mut settings);
                 if settings != before {
+                    if settings.resolution != before.resolution {
+                        if let Some((w, h)) = settings.resolution {
+                            gfx::set_window_resolution(w, h);
+                        }
+                    }
                     settings.save();
                 }
                 match outcome {
@@ -1381,6 +1408,7 @@ async fn main() {
         let t1 = get_time();
 
         gfx::set_widescreen(settings.widescreen);
+        gfx::set_render_height(settings.resolution.map_or(0, |(_, h)| h));
         canvas.begin();
         // The glow comes from the world's emitters; a popup hides them.
         canvas.set_bloom(settings.bloom && pause.is_none());

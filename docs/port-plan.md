@@ -1,6 +1,6 @@
 # Meteor Blitz port — plan
 
-**Goal (revised 2026-10-29):** A modern port. The simulation, tuning and content stay as decompiled from the original; presentation and input are modern: any window size and aspect (widescreen and ultrawide fill the screen), fullscreen, HD art, post-processing, rebindable keyboard and controller input, opt-in tutorial. Emulator pixel diffs are no longer a goal; `MB_WIDE=0 MB_HD=0 MB_RENDER_SCALE=1` keeps the original view for reference checks. Web + macOS + Windows.
+**Goal (revised 2026-10-29):** A modern port. The simulation, tuning and content stay as decompiled from the original; presentation and input are modern: any window size and aspect (widescreen and ultrawide fill the screen), fullscreen, a window/render resolution from 854x480 up to 4K, HD art, post-processing, rebindable keyboard and controller input, opt-in tutorial. Emulator pixel diffs are no longer a goal; `MB_WIDE=0 MB_HD=0 MB_RENDER_SCALE=1` keeps the original view for reference checks. Web + macOS + Windows.
 
 (Earlier goal, 2026-10-20: a pixel-perfect port first, then improvements.)
 

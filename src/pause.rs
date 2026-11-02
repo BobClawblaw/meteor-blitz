@@ -85,6 +85,10 @@ pub struct Settings {
     /// Port addition: the frame-rate cap (60, 120 or 144); the simulation
     /// stays at 60 Hz and frames between steps are blended.
     pub fps: u32,
+    /// Port addition: the window and render resolution, or None for the
+    /// window's fitted size. Fixed presets set the window to that physical
+    /// resolution and render the canvas at it.
+    pub resolution: Option<(u32, u32)>,
     /// Port addition: lit ground and sprites, shockwaves, scorch marks,
     /// colour grading and ship effects.
     pub visual_fx: bool,
@@ -108,6 +112,7 @@ impl Default for Settings {
             bloom: true,
             widescreen: true,
             fps: 60,
+            resolution: None,
             visual_fx: true,
         }
     }
@@ -164,6 +169,13 @@ impl Settings {
                 "widescreen" => s.widescreen = parse_bool(value, s.widescreen),
                 "visual_fx" => s.visual_fx = parse_bool(value, s.visual_fx),
                 "fps" => s.fps = value.parse().ok().filter(|f| FPS_CAPS.contains(f)).unwrap_or(s.fps),
+                "resolution" => {
+                    s.resolution = if value.eq_ignore_ascii_case("window") || value.eq_ignore_ascii_case("auto") {
+                        None
+                    } else {
+                        parse_resolution(value).or(s.resolution)
+                    };
+                }
                 _ => {}
             }
         }
@@ -172,7 +184,7 @@ impl Settings {
 
     pub fn to_text(&self) -> String {
         format!(
-            "music={}\neffects={}\nshake={}\nshake_control={}\nboost_control={}\nbomb_button={}\nauto_pause={}\nauto_gravity={}\nauto_upgrade={}\nflip={}\ntutorial={}\nfullscreen={}\nbloom={}\nwidescreen={}\nfps={}\nvisual_fx={}\n",
+            "music={}\neffects={}\nshake={}\nshake_control={}\nboost_control={}\nbomb_button={}\nauto_pause={}\nauto_gravity={}\nauto_upgrade={}\nflip={}\ntutorial={}\nfullscreen={}\nbloom={}\nwidescreen={}\nfps={}\nresolution={}\nvisual_fx={}\n",
             self.music,
             self.effects,
             self.shake,
@@ -188,6 +200,7 @@ impl Settings {
             self.bloom as u8,
             self.widescreen as u8,
             self.fps,
+            resolution_text(self.resolution),
             self.visual_fx as u8,
         )
     }
@@ -195,6 +208,29 @@ impl Settings {
 
 /// The frame-rate caps the Options screen offers.
 pub const FPS_CAPS: [u32; 3] = [60, 120, 144];
+
+/// The window/render resolutions the Options screen offers, low to 4K.
+pub const RESOLUTIONS: [(u32, u32); 5] = [
+    (854, 480),
+    (1280, 720),
+    (1920, 1080),
+    (2560, 1440),
+    (3840, 2160),
+];
+
+pub fn parse_resolution(value: &str) -> Option<(u32, u32)> {
+    let (w, h) = value.split_once('x')?;
+    let w: u32 = w.trim().parse().ok()?;
+    let h: u32 = h.trim().parse().ok()?;
+    (w > 0 && h > 0).then_some((w, h))
+}
+
+fn resolution_text(res: Option<(u32, u32)>) -> String {
+    match res {
+        Some((w, h)) => format!("{}x{}", w, h),
+        None => "window".to_owned(),
+    }
+}
 
 fn parse_bool(value: &str, fallback: bool) -> bool {
     match value {
@@ -1164,6 +1200,7 @@ mod tests {
             bloom: false,
             widescreen: false,
             fps: 144,
+            resolution: Some((1920, 1080)),
             visual_fx: false,
         };
         assert_eq!(Settings::parse(&s.to_text()), s);
@@ -1177,6 +1214,17 @@ mod tests {
         assert_eq!(s.shake, 0.3);
         assert_eq!(s.auto_pause, Settings::default().auto_pause);
         assert_eq!(Settings::parse(""), Settings::default());
+    }
+
+    #[test]
+    fn resolution_round_trips_and_keeps_the_window_default() {
+        assert_eq!(Settings::parse("resolution=window").resolution, None);
+        assert_eq!(Settings::parse("resolution=3840x2160").resolution, Some((3840, 2160)));
+        assert_eq!(Settings::parse("resolution=bogus").resolution, None);
+        assert_eq!(Settings::parse("resolution=0x720").resolution, None);
+        assert_eq!(Settings::parse("resolution=3840x2160\nresolution=window").resolution, None);
+        let s = Settings { resolution: Some((3840, 2160)), ..Settings::default() };
+        assert_eq!(Settings::parse(&s.to_text()).resolution, Some((3840, 2160)));
     }
 }
 

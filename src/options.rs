@@ -13,7 +13,7 @@ use crate::bindings::{self, Action, Bindings, ACTIONS};
 use crate::gfx::{edge, Canvas, CANVAS_H, CANVAS_W};
 use crate::hud::{Align, Font};
 use crate::pad::{self, Button};
-use crate::pause::{Settings, FPS_CAPS};
+use crate::pause::{Settings, FPS_CAPS, RESOLUTIONS};
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Page {
@@ -24,6 +24,7 @@ pub enum Page {
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Row {
     Fullscreen,
+    Resolution,
     Widescreen,
     Bloom,
     VisualFx,
@@ -40,8 +41,9 @@ enum Row {
     Reset,
 }
 
-const MAIN_ROWS: [Row; 11] = [
+const MAIN_ROWS: [Row; 12] = [
     Row::Fullscreen,
+    Row::Resolution,
     Row::Widescreen,
     Row::Bloom,
     Row::VisualFx,
@@ -57,7 +59,7 @@ const MAIN_ROWS: [Row; 11] = [
 /// Layout, in canvas units.
 const TITLE_Y: f32 = 10.0;
 const MAIN_TOP: f32 = 40.0;
-const MAIN_PITCH: f32 = 23.0;
+const MAIN_PITCH: f32 = 21.0;
 const BIND_TOP: f32 = 52.0;
 const BIND_PITCH: f32 = 20.0;
 const ROW_SCALE: f32 = 0.6;
@@ -156,6 +158,7 @@ impl Options {
                 }
                 Row::Bind(_) => self.pad_column = right,
                 Row::FrameRate => settings.fps = cycle(settings.fps, right),
+                Row::Resolution => settings.resolution = cycle_resolution(settings.resolution, right),
                 _ => {}
             }
         }
@@ -220,6 +223,7 @@ impl Options {
             Row::Bloom => settings.bloom = !settings.bloom,
             Row::VisualFx => settings.visual_fx = !settings.visual_fx,
             Row::FrameRate => settings.fps = cycle(settings.fps, true),
+            Row::Resolution => settings.resolution = cycle_resolution(settings.resolution, true),
             Row::Tutorial => settings.tutorial = !settings.tutorial,
             Row::Music | Row::Effects | Row::Shake => return None,
             Row::Controls => {
@@ -281,6 +285,7 @@ impl Options {
             let y = self.rect(i).y + 6.0;
             let label = match row {
                 Row::Fullscreen => "Fullscreen",
+                Row::Resolution => "Resolution",
                 Row::Widescreen => "Widescreen",
                 Row::Bloom => "Bloom",
                 Row::VisualFx => "Lighting and effects",
@@ -297,6 +302,7 @@ impl Options {
             font.text(label, LABEL_X, y, ROW_SCALE, Align::Left, white);
             match row {
                 Row::Fullscreen => on_off(font, settings.fullscreen, y, white),
+                Row::Resolution => font.text(&resolution_name(settings.resolution), VALUE_X, y, ROW_SCALE, Align::Right, white),
                 Row::Widescreen => on_off(font, settings.widescreen, y, white),
                 Row::Bloom => on_off(font, settings.bloom, y, white),
                 Row::VisualFx => on_off(font, settings.visual_fx, y, white),
@@ -349,6 +355,23 @@ impl Options {
     }
 }
 
+/// The next (or previous) resolution, wrapping. The first entry is the
+/// window's own size, then the fixed presets from low to 4K.
+fn cycle_resolution(current: Option<(u32, u32)>, up: bool) -> Option<(u32, u32)> {
+    let mut list = vec![None];
+    list.extend(RESOLUTIONS.iter().map(|&r| Some(r)));
+    let i = list.iter().position(|&r| r == current).unwrap_or(0);
+    let n = list.len();
+    list[if up { (i + 1) % n } else { (i + n - 1) % n }]
+}
+
+fn resolution_name(res: Option<(u32, u32)>) -> String {
+    match res {
+        Some((w, h)) => format!("{}x{}", w, h),
+        None => "Window".to_owned(),
+    }
+}
+
 /// The next (or previous) frame-rate cap, wrapping.
 fn cycle(fps: u32, up: bool) -> u32 {
     let i = FPS_CAPS.iter().position(|&f| f == fps).unwrap_or(0);
@@ -387,4 +410,32 @@ fn set_slider(row: Row, s: &mut Settings, v: f32) {
 fn apply(b: Bindings) {
     b.save();
     bindings::install(b);
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolution_cycles_through_window_and_presets() {
+        assert_eq!(cycle_resolution(None, true), Some((854, 480)));
+        assert_eq!(cycle_resolution(Some((854, 480)), true), Some((1280, 720)));
+        assert_eq!(cycle_resolution(Some((1920, 1080)), true), Some((2560, 1440)));
+        assert_eq!(cycle_resolution(Some((3840, 2160)), true), None);
+        assert_eq!(cycle_resolution(None, false), Some((3840, 2160)));
+        assert_eq!(cycle_resolution(Some((1280, 720)), false), Some((854, 480)));
+    }
+
+    #[test]
+    fn resolution_labels_show_the_size() {
+        assert_eq!(resolution_name(None), "Window");
+        assert_eq!(resolution_name(Some((3840, 2160))), "3840x2160");
+    }
+
+    #[test]
+    fn the_main_rows_fit_above_the_help_line() {
+        let bottom = MAIN_TOP + (MAIN_ROWS.len() as f32 - 1.0) * MAIN_PITCH + MAIN_PITCH;
+        assert!(bottom <= CANVAS_H - 12.0);
+    }
 }

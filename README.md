@@ -17,12 +17,13 @@ A love letter to Alley Labs' *Meteor Blitz* (iOS, 2009), given away freely and r
 ## What's new
 
 - **Widescreen and ultrawide.** The view follows the window from 3:2 up to 21:9. You see more of the playfield at the original scale; the HUD pins to the screen edges and menus stay centred. The window resizes freely, and F11 or Alt+Enter toggles fullscreen.
+- **Resolution up to 4K.** Options > Resolution sets the window and render target to 854x480, 1280x720, 1920x1080, 2560x1440 or 3840x2160; Window follows the current window's fitted size.
 - **120 and 144 Hz.** The simulation still runs at the original's 60 Hz, and frames in between are interpolated, so motion stays smooth at 120 or 144 fps (Options > Frame rate cap).
 - **Lighting.** Explosions, shots and the ship light the planet. The terrain has relief from generated normal maps, and nearby rocks and enemies pick up the light.
 - **Glow, shockwaves and colour.** Bloom comes from what emits light (flames, lasers, sparks, explosions), never from bright clouds or the HUD. Bombs, boss deaths and big explosions send out shockwaves that bend the screen, and each world has its own colour grade.
 - **Effects.** Round, glowing particles replace the original square points. Explosions leave scorch marks that fade. The ship has an engine trail, boost speed lines and a shield glow, and fast shots and enemies thrown by the gravity gun leave streaks.
 - **HD art.** 4x sprites, UI and font, and 2x terrain, generated from the originals (`tools/upscale4x.py`).
-- **Options screen** (the SETTINGS button): fullscreen, widescreen, bloom, lighting and effects, frame-rate cap, audio, screen shake, and the tutorial.
+- **Options screen** (the SETTINGS button): fullscreen, resolution up to 4K, widescreen, bloom, lighting and effects, frame-rate cap, audio, screen shake, and the tutorial.
 - **Rebindable controls** (Options > Controls): every action has a keyboard/mouse binding and a controller binding, saved to `controls.txt`.
 - **Tutorial.** The original's 27-step tutorial is ported: HELP on the main menu plays it, and "Tutorial before first game" in Options runs it before your first game.
 - **Quality of life.** Settings and local high scores persist, and a run that makes the table asks for a name. Ring pickups no longer stack into one very loud sound.
