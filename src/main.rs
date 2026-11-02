@@ -898,6 +898,7 @@ async fn load_play_assets() -> PlayAssets {
             frames
         },
         boss_piece: load_sprite("ball").await,
+        indicator: load_sprite("indicator").await,
         depot_label: load_sprite("labelBonus").await,
         power: load_sprite("bigBonus").await,
         power_labels: [

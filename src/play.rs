@@ -39,6 +39,17 @@ const START_Z: f32 = 1000.0;
 const FADE_IN_SPEED: f32 = 0.6;
 const SCREEN_CENTRE: Vec2 = vec2(240.0, 160.0);
 
+// EnemyManager::draw: an enemy further than Global::DRAW_DISTANCE_X/Y from
+// the view's centre is not drawn; a red chevron 100 units from the ship
+// points at it instead, while GameScreen::draw counts at most 12 enemies
+// (EnemyManager::sharedGetNumActive).
+const DRAW_DISTANCE: Vec2 = vec2(288.0, 208.0);
+const INDICATOR_DISTANCE: f32 = 100.0;
+const INDICATOR_MAX_ACTIVE: usize = 12;
+/// BossInside::BossInside: the core's Sprite scale (0x48) is 2, and the
+/// indicator is drawn at it.
+const BOSS_INDICATOR_SCALE: f32 = 2.0;
+
 // GameScreen::updateLeftWheel: wheel deflection is capped at 64 units and
 // scaled by the ship's speed (5 at start), so 320 units/s at full stick.
 const WHEEL_MAX: f32 = 64.0;
@@ -206,6 +217,8 @@ pub struct PlayAssets {
     /// bossInside.1-8 and ball.png (a boss piece).
     pub boss: Vec<Texture2D>,
     pub boss_piece: Texture2D,
+    /// indicator.png: the chevron pointing at enemies off screen.
+    pub indicator: Texture2D,
     /// depot.png's "BONUS" label.
     pub depot_label: Texture2D,
     /// bigBonus.png: five 16x16 power-up icons.
@@ -2546,6 +2559,83 @@ impl Play {
         }
     }
 
+    /// EnemyManager::draw with indicators on: for every rock, mine, tower,
+    /// lobber, seeker, arrow, snake head, shy guy, boss piece and the core
+    /// (not rings, depots or snake bodies) beyond the draw distance, the
+    /// chevron sits 100 units from the ship towards it and points at it.
+    fn draw_indicators(&self, assets: &PlayAssets) {
+        let f = &self.field;
+        let active = f.rocks.len()
+            + f.depots.len()
+            + f.mines.len()
+            + f.shy_guys.len()
+            + f.snakes.len()
+            + f.arrows.len()
+            + f.towers.len()
+            + f.seekers.len()
+            + f.lobbers.len()
+            + f.boss.is_some() as usize;
+        if active > INDICATOR_MAX_ACTIVE {
+            return;
+        }
+        let p = &self.prev;
+        let mut targets: Vec<(Vec2, f32)> = Vec::new();
+        let n = f.rocks.len();
+        targets.extend(f.rocks.iter().enumerate().map(|(i, e)| (self.at(&p.rocks, n, i, e.pos), 1.0)));
+        let n = f.mines.len();
+        targets.extend(f.mines.iter().enumerate().map(|(i, e)| (self.at(&p.mines, n, i, e.pos), 1.0)));
+        targets.extend(f.towers.iter().map(|e| (self.to_screen(e.pos), 1.0)));
+        let n = f.lobbers.len();
+        targets.extend(f.lobbers.iter().enumerate().map(|(i, e)| (self.at(&p.lobbers, n, i, e.pos), 1.0)));
+        let n = f.seekers.len();
+        targets.extend(f.seekers.iter().enumerate().map(|(i, e)| (self.at(&p.seekers, n, i, e.pos), 1.0)));
+        let n = f.arrows.len();
+        targets.extend(f.arrows.iter().enumerate().map(|(i, e)| (self.at(&p.arrows, n, i, e.pos), 1.0)));
+        let n = f.snakes.len();
+        targets.extend(f.snakes.iter().enumerate().map(|(i, e)| (self.at(&p.snakes, n, i, e.pos), 1.0)));
+        let n = f.shy_guys.len();
+        targets.extend(f.shy_guys.iter().enumerate().map(|(i, e)| (self.at(&p.shy_guys, n, i, e.pos), 1.0)));
+        let n = f.pieces.len();
+        targets.extend(f.pieces.iter().enumerate().map(|(i, e)| (self.at(&p.pieces, n, i, e.pos), 1.0)));
+        if let Some(b) = &f.boss {
+            targets.push((self.at(&p.boss, 1, 0, b.pos), BOSS_INDICATOR_SCALE));
+        }
+        // The draw distance reaches 48 units past the original's 480x320
+        // view; a wider view adds its extra width.
+        let reach = DRAW_DISTANCE + vec2(crate::gfx::edge(), 0.0);
+        let ship = self.to_screen(self.view_ship());
+        let tex = &assets.indicator;
+        let (w, h) = tex_size(tex);
+        for (s, scale) in targets {
+            let d = s - SCREEN_CENTRE;
+            if d.x.abs() < reach.x && d.y.abs() < reach.y {
+                continue;
+            }
+            let dir = (s - ship).normalize_or_zero();
+            if dir == Vec2::ZERO {
+                continue;
+            }
+            // Texture::draw(x - w/2, y - h/2, scale) turned about the
+            // chevron's point by atan2 + 90 degrees: its tip faces `dir`.
+            let at = ship + dir * INDICATOR_DISTANCE;
+            let (sn, cs) = (dir.y.atan2(dir.x) + std::f32::consts::FRAC_PI_2).sin_cos();
+            let corner = |x: f32, y: f32, u: f32, v: f32| {
+                let (x, y) = (x * w - w * 0.5, y * h - h * 0.5);
+                Vertex::new(at.x + x * cs - y * sn, at.y + x * sn + y * cs, self.z, u, v, WHITE)
+            };
+            draw_mesh(&Mesh {
+                vertices: vec![
+                    corner(0.0, 0.0, 0.0, 0.0),
+                    corner(scale, 0.0, 1.0, 0.0),
+                    corner(scale, scale, 1.0, 1.0),
+                    corner(0.0, scale, 0.0, 1.0),
+                ],
+                indices: vec![0, 1, 2, 0, 2, 3],
+                texture: Some(tex.clone()),
+            });
+        }
+    }
+
     fn draw_boss(&self, canvas: &Canvas, assets: &PlayAssets) {
         let n = self.field.pieces.len();
         for (i, p) in self.field.pieces.iter().enumerate() {
@@ -2844,6 +2934,7 @@ impl Play {
         }
         self.draw_boss(canvas, assets);
         canvas.lighting(false);
+        self.draw_indicators(assets);
 
         // Cannon fire: green additive point sprites trailing each bullet.
         let mut points = Vec::new();
