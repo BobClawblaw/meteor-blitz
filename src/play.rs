@@ -17,8 +17,8 @@ use crate::bonus::{Power, Rings};
 use crate::bindings::{self, Action};
 use crate::boss::{self, BossState, Piece};
 use crate::depot::{self, Depot};
-use crate::enemies::{wrap_near, Element, Event, Field, Rock, Script, Weapon};
-use crate::formation::{Palette, Wind};
+use crate::enemies::{wrap_near, Element, Event, Field, Rock, Script, Surface, Weapon};
+use crate::formation::{Smoke, Wind};
 use crate::gfx::{draw_atlas_sprite, draw_quad, draw_sprite, tex_size, Canvas, Grade, Light, Wave, CANVAS_H, CANVAS_W, MAX_LIGHTS};
 use crate::gravity;
 use crate::hud::{self, HudAssets, HudValues, Show};
@@ -879,7 +879,7 @@ pub struct Play {
     /// Formation gas clouds.
     gas: Wind,
     /// This step's shot hits (where, the shot's velocity), for the gas.
-    hits: Vec<(Vec2, Vec2)>,
+    hits: Vec<(Vec2, Vec2, Weapon)>,
     /// Lights from explosions and hits, fading out.
     glows: Vec<Glow>,
     /// Shockwave rings from big explosions.
@@ -942,24 +942,105 @@ const SCORCH_LIFE: f32 = 15.0;
 const SCORCH_FADE: f32 = 5.0;
 const MAX_SCORCHES: usize = 96;
 
-/// The Formation particle style's colour for an event: magma (the film's)
-/// for plain and fire rocks and every enemy, cobalt & gold for ice rocks,
-/// supply depots and the gravity gun's burst.
-fn event_palette(event: &Event) -> Palette {
+/// What blew up, for the look of its Formation gas.
+fn event_surface(event: &Event) -> Surface {
     match event {
-        Event::RockDestroyed {
-            element: Element::Ice,
-            ..
-        }
-        | Event::RockHit {
-            element: Element::Ice,
-            ..
-        }
-        | Event::DepotDestroyed { .. }
-        | Event::GravityBurst { .. } => Palette::CobaltGold,
-        _ => Palette::Magma,
+        Event::RockDestroyed { element, .. } => Surface::Rock(*element),
+        Event::PieceDestroyed { .. } | Event::BossDying { .. } | Event::BossDead { .. } => Surface::Boss,
+        _ => Surface::Craft,
     }
 }
+
+/// Formation gas looks (port addition), in the game's own colours: the
+/// rocks' dust, soot and frost, grey smoke for craft, and the glow of the
+/// lights the game already uses for fire, ice, rocks and the ship.
+const DUST: Vec3 = vec3(0.55, 0.47, 0.38);
+const SOOT: Vec3 = vec3(0.24, 0.2, 0.18);
+const FROST: Vec3 = vec3(0.8, 0.88, 0.96);
+const STEAM: Vec3 = vec3(0.92, 0.94, 0.97);
+const CRAFT_SMOKE: Vec3 = vec3(0.4, 0.4, 0.43);
+const BOSS_SMOKE: Vec3 = vec3(0.3, 0.27, 0.32);
+
+/// The colour a weapon's shots glow (their lights').
+fn weapon_glow(weapon: Weapon) -> Vec3 {
+    match weapon {
+        Weapon::Cannon => SHIP_LIGHT,
+        Weapon::Laser => ICE_LIGHT,
+        Weapon::Fire => FIRE_LIGHT,
+    }
+}
+
+/// A surface blown apart: its own smoke, hot with its own heat.
+fn surface_smoke(surface: Surface) -> Smoke {
+    let smoke = |colour, opacity, glow, heat| Smoke { colour, opacity, glow, heat };
+    match surface {
+        Surface::Rock(Element::Normal) => smoke(DUST, 0.55, ROCK_LIGHT, 0.6),
+        Surface::Rock(Element::Fire) => smoke(SOOT, 0.6, FIRE_LIGHT, 1.0),
+        Surface::Rock(Element::Ice) => smoke(FROST, 0.45, ICE_LIGHT, 0.5),
+        Surface::Craft => smoke(CRAFT_SMOKE, 0.5, WHITE_LIGHT, 0.8),
+        Surface::Boss => smoke(BOSS_SMOKE, 0.55, WHITE_LIGHT, 1.0),
+    }
+}
+
+/// A weapon striking a surface: the surface's smoke lit by the weapon,
+/// with the combinations that make something else of it.
+fn impact_smoke(weapon: Weapon, surface: Surface) -> Smoke {
+    let mut s = surface_smoke(surface);
+    s.glow = weapon_glow(weapon);
+    s.heat = 0.7;
+    match (weapon, surface) {
+        // Fire on ice boils it off as steam.
+        (Weapon::Fire, Surface::Rock(Element::Ice)) => {
+            s.colour = STEAM;
+            s.opacity = 0.6;
+            s.heat = 0.3;
+        }
+        // Fire on fire: thick soot.
+        (Weapon::Fire, Surface::Rock(Element::Fire)) => s.opacity = 0.7,
+        // The laser glints off ice and melts metal white-hot.
+        (Weapon::Laser, Surface::Rock(Element::Ice)) => s.heat = 0.9,
+        (Weapon::Laser, Surface::Craft | Surface::Boss) => {
+            s.glow = ICE_LIGHT.lerp(WHITE_LIGHT, 0.5);
+            s.heat = 0.9;
+        }
+        // The cannon chips rock: more dust, little heat.
+        (Weapon::Cannon, Surface::Rock(_)) => {
+            s.opacity += 0.1;
+            s.heat = 0.45;
+        }
+        _ => {}
+    }
+    s
+}
+
+/// A blast: the surface's smoke; when a shot did it, the combination's
+/// smoke, glowing mostly with the blast's own heat (a quarter the
+/// weapon's).
+fn blast_smoke(surface: Surface, weapon: Option<Weapon>) -> Smoke {
+    let own = surface_smoke(surface);
+    let Some(weapon) = weapon else { return own };
+    let mut s = impact_smoke(weapon, surface);
+    s.glow = own.glow.lerp(s.glow, 0.25);
+    s.heat = own.heat;
+    s
+}
+
+/// The gas a shot sheds in flight: a faint glow in the shot's colour, and
+/// smoke behind the flamethrower.
+fn trail_smoke(weapon: Weapon) -> Smoke {
+    let (colour, opacity, heat) = match weapon {
+        Weapon::Cannon => (CRAFT_SMOKE, 0.0, 0.35),
+        Weapon::Laser => (CRAFT_SMOKE, 0.0, 0.4),
+        Weapon::Fire => (vec3(0.35, 0.3, 0.28), 0.35, 0.7),
+    };
+    Smoke { colour, opacity, glow: weapon_glow(weapon), heat }
+}
+
+/// The ship's own blasts: its death and broken shield (its green light)
+/// and a bomb (white).
+const SHIP_SMOKE: Smoke = Smoke { colour: CRAFT_SMOKE, opacity: 0.45, glow: SHIP_LIGHT, heat: 1.0 };
+const BOMB_SMOKE: Smoke = Smoke { colour: vec3(0.7, 0.7, 0.72), opacity: 0.25, glow: WHITE_LIGHT, heat: 0.8 };
+const SHIELD_SMOKE: Smoke = Smoke { colour: CRAFT_SMOKE, opacity: 0.0, glow: SHIP_LIGHT, heat: 0.9 };
 
 /// Formation gas for a destruction (port addition): where, its radius in
 /// world units, and its life in seconds, by what blew up.
@@ -1599,17 +1680,21 @@ impl Play {
     /// effects and flashes, lights, shockwaves and scorch marks run out
     /// behind the popup instead of freezing at their peak (a boss's white
     /// death flash and shockwave stayed on the results screen).
-    /// MB_GAS_TEST (tuning hook): a magma blast carrying a cannon shot's
-    /// momentum upward, a still cobalt blast, and two impacts (cannon up,
-    /// laser right) beside the ship, for judging the Formation gas.
+    /// MB_GAS_TEST (tuning hook): a plain rock blown up by the cannon,
+    /// carrying the shot's momentum upward, a still fire-rock blast, and
+    /// two impacts (cannon on rock going up, laser on ice going right)
+    /// beside the ship, for judging the Formation gas.
     pub fn gas_test(&mut self) {
         let c = self.ship.pos;
         let shot = vec2(0.0, -CANNON_SPEED);
         let laser = vec2(weapons::LASER_SPEED, 0.0);
-        self.gas.blast(c + vec2(-130.0, 40.0), gas_velocity(shot, BLAST_CARRY), 86.0, 1.2, Palette::Magma);
-        self.gas.blast(c + vec2(130.0, 40.0), Vec2::ZERO, 86.0, 1.2, Palette::CobaltGold);
-        self.gas.impact(c + vec2(-40.0, 100.0), gas_velocity(shot, IMPACT_CARRY), Palette::Magma);
-        self.gas.impact(c + vec2(40.0, 100.0), gas_velocity(laser, IMPACT_CARRY), Palette::CobaltGold);
+        let rock = Surface::Rock(Element::Normal);
+        let fire = Surface::Rock(Element::Fire);
+        let ice = Surface::Rock(Element::Ice);
+        self.gas.blast(c + vec2(-130.0, 40.0), gas_velocity(shot, BLAST_CARRY), 86.0, 1.2, blast_smoke(rock, Some(Weapon::Cannon)));
+        self.gas.blast(c + vec2(130.0, 40.0), Vec2::ZERO, 86.0, 1.2, blast_smoke(fire, None));
+        self.gas.impact(c + vec2(-40.0, 100.0), gas_velocity(shot, IMPACT_CARRY), impact_smoke(Weapon::Cannon, rock));
+        self.gas.impact(c + vec2(40.0, 100.0), gas_velocity(laser, IMPACT_CARRY), impact_smoke(Weapon::Laser, ice));
     }
 
     pub fn update_visuals(&mut self, dt: f32) {
@@ -1790,20 +1875,18 @@ impl Play {
                     weapons::LASER_MASS,
                 ),
             };
-            let hit = field.bullet(b.prev, b.pos, radius, b.weapon, damage, mass, b.vel);
+            let surface = field.bullet(b.prev, b.pos, radius, b.weapon, damage, mass, b.vel);
+            let hit = surface.is_some();
             if formation {
                 // Formation style: shots trail gas and spray it where they
-                // hit, carried on with their momentum (cobalt for the laser).
-                let pal = if b.weapon == Weapon::Laser {
-                    Palette::CobaltGold
-                } else {
-                    Palette::Magma
-                };
-                if hit {
-                    gas.impact(b.pos, gas_velocity(b.vel, IMPACT_CARRY), pal);
-                    hits.push((b.pos, b.vel));
-                } else {
-                    gas.trail(b.prev, b.pos, b.vel, pal);
+                // hit, carried on with their momentum, looking like what
+                // they hit and what they are.
+                match surface {
+                    Some(surface) => {
+                        gas.impact(b.pos, gas_velocity(b.vel, IMPACT_CARRY), impact_smoke(b.weapon, surface));
+                        hits.push((b.pos, b.vel, b.weapon));
+                    }
+                    None => gas.trail(b.prev, b.pos, b.vel, trail_smoke(b.weapon)),
                 }
             } else if hit {
                 // standard/fire/laserBulletCollision: a spark, and a streak
@@ -1973,7 +2056,7 @@ impl Play {
         let p = self.ship.pos;
         self.effects.flash(Color::new(0.8, 0.8, 0.8, 1.0));
         if self.formation {
-            self.gas.blast(p, Vec2::ZERO, SHIP_GAS.0, SHIP_GAS.1, Palette::CobaltGold);
+            self.gas.blast(p, Vec2::ZERO, SHIP_GAS.0, SHIP_GAS.1, SHIP_SMOKE);
             return;
         }
         self.effects.start(Kind::Ring, 1, p, 0.0, false);
@@ -2107,7 +2190,7 @@ impl Play {
         self.camera.shake(0.75, 7.5);
         let p = self.ship.pos;
         if self.formation {
-            self.gas.blast(p, Vec2::ZERO, BOMB_GAS.0, BOMB_GAS.1, Palette::CobaltGold);
+            self.gas.blast(p, Vec2::ZERO, BOMB_GAS.0, BOMB_GAS.1, BOMB_SMOKE);
         } else {
             self.effects.start(Kind::Ring, 5, p, 0.0, false);
             self.effects.start(Kind::Sprite, 8, p, 0.0, false);
@@ -2123,7 +2206,7 @@ impl Play {
         self.camera.shake(0.75, 7.5);
         let p = self.ship.pos;
         if self.formation {
-            self.gas.blast(p, Vec2::ZERO, SHIELD_GAS.0, SHIELD_GAS.1, Palette::CobaltGold);
+            self.gas.blast(p, Vec2::ZERO, SHIELD_GAS.0, SHIELD_GAS.1, SHIELD_SMOKE);
         } else {
             self.effects.start(Kind::Ring, 8, p, 0.0, false);
             for _ in 0..3 {
@@ -2168,18 +2251,19 @@ impl Play {
             if let Some((pos, radius, strength, seconds)) = event_shock(&event) {
                 self.shock(pos, radius, strength, seconds);
             }
-            let pal = event_palette(&event);
             if self.formation {
                 if let Some((pos, radius, life)) = event_gas(&event) {
                     // The shot that did it, if one hit near here this step,
-                    // lends the cloud its momentum (bombs and rams lend none).
+                    // lends the cloud its momentum and its colour (bombs and
+                    // rams lend neither).
                     let shot = self
                         .hits
                         .iter()
-                        .filter(|(p, _)| wrap_dist(*p, pos) < BLAST_HIT_REACH)
-                        .min_by(|a, b| wrap_dist(a.0, pos).total_cmp(&wrap_dist(b.0, pos)))
-                        .map_or(Vec2::ZERO, |&(_, v)| v);
-                    self.gas.blast(pos, gas_velocity(shot, BLAST_CARRY), radius, life, pal);
+                        .filter(|(p, _, _)| wrap_dist(*p, pos) < BLAST_HIT_REACH)
+                        .min_by(|a, b| wrap_dist(a.0, pos).total_cmp(&wrap_dist(b.0, pos)));
+                    let drift = shot.map_or(Vec2::ZERO, |&(_, v, _)| gas_velocity(v, BLAST_CARRY));
+                    let smoke = blast_smoke(event_surface(&event), shot.map(|&(_, _, w)| w));
+                    self.gas.blast(pos, drift, radius, life, smoke);
                 }
             }
             if let Some((pos, size)) = event_scorch(&event) {

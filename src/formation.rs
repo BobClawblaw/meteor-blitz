@@ -1,23 +1,23 @@
 //! Formation gas (port addition, Options > Particle style): explosions,
-//! impacts and shots leave glowing gas that streams and curls, after
-//! BlockYard's pulsar wind (public/js/details3d.js, `drawPulsar` and
-//! `PULSAR_GLSL`), coloured through The Formation's ramps (formgl.js:
-//! magma, the film's own, and cobalt & gold).
+//! impacts and shots leave smoke that streams and curls, after the motion
+//! of BlockYard's pulsar wind (public/js/details3d.js, `drawPulsar` and
+//! `PULSAR_GLSL`) and the smooth density of its Formation sky.
 //!
-//! As in the pulsar wind, the gas is a particle simulation drawn as dots,
-//! not a picture of gas: thousands of soft points, each advected every step
-//! through a flow, and what the eye reads is where they are dense. What it
-//! takes from there:
-//! - A dot is a point, never a streak: structure comes from density.
+//! The gas is a particle simulation drawn as soft puffs: thousands of
+//! points, each advected every step through a flow, wide enough that
+//! neighbours merge into one smooth density. From the pulsar wind:
 //! - Dots are spawned on shared lanes (a blast's jets, a shot's path), so
-//!   they string out nose to tail into filaments.
+//!   they string out into plumes.
 //! - Brightness banding is carried by the dot, fixed at spawn and shared
-//!   along its lane, so bright sheets are made of gas and move with it.
+//!   along its lane, so the dense sheets are made of gas and move with it.
 //! - The turbulence is a two-octave curl field (the perpendicular gradient
 //!   of a stream function), kept weaker than the drift, so eddies bend the
 //!   gas rather than become it.
-//! - Two passes: a broad dim halo that gives the gas volume, then its grain.
 //!
+//! What it looks like is a `Smoke`, chosen by the caller from what was hit
+//! and what hit it: a smoke colour drawn with ordinary blending (dust,
+//! soot, frost, steam can be dull or dark), and a brief additive glow
+//! (the weapon's or the blast's heat) that dies early in the dot's life.
 //! Each dot keeps the momentum it was given (a share of the shot's, plus
 //! its jet's), losing it to drag, so the gas trails the way things moved.
 
@@ -26,49 +26,17 @@ use macroquad::miniquad::{
 };
 use macroquad::prelude::*;
 
-/// Which Formation ramp the gas is coloured through.
+/// How a puff of gas looks.
 #[derive(Clone, Copy, PartialEq, Debug)]
-pub enum Palette {
-    /// The film's own: black, indigo, violet, magenta, salmon, orange, pale yellow.
-    Magma,
-    /// BlockYard's shipped default: all-blue gas, a warm gold core.
-    CobaltGold,
-}
-
-/// The Formation's ramp stops (formgl.js): at 0, .14, .34, .54, .70, .85, 1.
-const STOPS: [f32; 7] = [0.0, 0.14, 0.34, 0.54, 0.70, 0.85, 1.0];
-const MAGMA: [[u8; 3]; 7] = [
-    [0, 0, 0],
-    [19, 8, 56],
-    [66, 22, 122],
-    [143, 41, 133],
-    [219, 77, 102],
-    [251, 143, 84],
-    [255, 240, 199],
-];
-const COBALT_GOLD: [[u8; 3]; 7] = [
-    [0, 0, 0],
-    [5, 10, 44],
-    [12, 28, 98],
-    [26, 56, 150],
-    [48, 92, 190],
-    [92, 140, 222],
-    [255, 232, 176],
-];
-
-impl Palette {
-    /// The ramp at t (0..1).
-    fn ramp(self, t: f32) -> Vec3 {
-        let stops = match self {
-            Palette::Magma => &MAGMA,
-            Palette::CobaltGold => &COBALT_GOLD,
-        };
-        let t = t.clamp(0.0, 1.0);
-        let i = STOPS.iter().rposition(|&s| s <= t).unwrap_or(0).min(5);
-        let f = (t - STOPS[i]) / (STOPS[i + 1] - STOPS[i]);
-        let c = |k: usize| Vec3::new(stops[k][0] as f32, stops[k][1] as f32, stops[k][2] as f32) / 255.0;
-        c(i).lerp(c(i + 1), f)
-    }
+pub struct Smoke {
+    /// The smoke's colour, alpha-blended.
+    pub colour: Vec3,
+    /// How thick it is, 0..1.
+    pub opacity: f32,
+    /// The heat glowing in it while it is young, added.
+    pub glow: Vec3,
+    /// How strong that glow is, 0..1.
+    pub heat: f32,
 }
 
 struct Dot {
@@ -79,12 +47,9 @@ struct Dot {
     life: f32,
     /// Its own pace through the eddies (the pulsar's `m`).
     pace: f32,
-    /// Brightness, 0..1: the dot's own times its lane's carried banding.
+    /// Density, 0..1: the dot's own times its lane's carried banding.
     bright: f32,
-    /// How hot it starts: the first part of its life runs up the ramp
-    /// toward the pale end.
-    heat: f32,
-    palette: Palette,
+    smoke: Smoke,
 }
 
 /// Momentum lost per second (velocity x e^-DRAG t).
@@ -104,6 +69,8 @@ const IMPACT_DOTS: usize = 40;
 const TRAIL_DOTS: usize = 3;
 /// A trail dot keeps up to this share of the shot's velocity.
 const TRAIL_CARRY: f32 = 0.12;
+/// The share of its life a dot glows for.
+const GLOW_TIME: f32 = 0.3;
 /// Quads per draw call: 3,200 vertices and 4,800 indices, inside
 /// macroquad's batch (10,000 and 5,000).
 const CHUNK: usize = 800;
@@ -115,12 +82,13 @@ pub struct Wind {
 }
 
 thread_local! {
-    /// The additive material, built on first use and shared by every game.
-    static MATERIAL: std::cell::OnceCell<Material> = const { std::cell::OnceCell::new() };
+    /// The additive material for the glow, built on first use and shared
+    /// by every game.
+    static GLOW: std::cell::OnceCell<Material> = const { std::cell::OnceCell::new() };
 }
 
-fn material() -> Material {
-    MATERIAL.with(|m| {
+fn glow_material() -> Material {
+    GLOW.with(|m| {
         m.get_or_init(|| {
             let blend = BlendState::new(
                 Equation::Add,
@@ -181,7 +149,7 @@ impl Wind {
     /// `life` seconds, the whole of it carried along at `drift` (a share of
     /// the momentum of the shot that did it). The gas leaves on jets: each
     /// jet is a lane its dots share, strung out by speed, with one banding.
-    pub fn blast(&mut self, pos: Vec2, drift: Vec2, radius: f32, life: f32, palette: Palette) {
+    pub fn blast(&mut self, pos: Vec2, drift: Vec2, radius: f32, life: f32, smoke: Smoke) {
         let count = ((radius * BLAST_DENSITY) as usize).min(MAX_BLAST_DOTS);
         let jets = 5 + (radius / 20.0) as usize;
         let turn = self.rand() * std::f32::consts::TAU;
@@ -206,8 +174,7 @@ impl Wind {
                 life: life * (0.6 + 0.8 * self.rand()),
                 pace: 0.55 + 0.9 * self.rand(),
                 bright: band * (0.5 + 0.5 * self.rand()),
-                heat: 1.0 - reach * 0.6,
-                palette,
+                smoke,
             };
             self.push(dot);
         }
@@ -215,7 +182,7 @@ impl Wind {
 
     /// A shot's impact: a spray carried on with the shot's momentum
     /// (`drift`), opening into a cone around it.
-    pub fn impact(&mut self, pos: Vec2, drift: Vec2, palette: Palette) {
+    pub fn impact(&mut self, pos: Vec2, drift: Vec2, smoke: Smoke) {
         let speed = drift.length();
         let along = if speed > 1e-3 { drift / speed } else { vec2(0.0, -1.0) };
         let lane = self.rand();
@@ -225,11 +192,10 @@ impl Wind {
                 pos,
                 vel: dir * (speed * (0.3 + 0.9 * self.rand()) + 30.0 * self.rand()),
                 age: 0.0,
-                life: 0.25 + 0.3 * self.rand(),
+                life: 0.3 + 0.35 * self.rand(),
                 pace: 0.55 + 0.9 * self.rand(),
                 bright: (0.4 + 0.6 * lane) * (0.4 + 0.6 * self.rand()),
-                heat: 0.8,
-                palette,
+                smoke,
             };
             self.push(dot);
         }
@@ -238,7 +204,7 @@ impl Wind {
     /// Gas shed by a shot that just flew from `from` to `to` at `vel`
     /// (world units per second): a few dots left along the step, drifting
     /// on slowly the way it went.
-    pub fn trail(&mut self, from: Vec2, to: Vec2, vel: Vec2, palette: Palette) {
+    pub fn trail(&mut self, from: Vec2, to: Vec2, vel: Vec2, smoke: Smoke) {
         let side = vec2(-vel.y, vel.x).normalize_or_zero();
         for _ in 0..TRAIL_DOTS {
             let along = self.rand();
@@ -249,8 +215,7 @@ impl Wind {
                 life: 0.3 + 0.35 * self.rand(),
                 pace: 0.55 + 0.9 * self.rand(),
                 bright: 0.25 + 0.45 * self.rand(),
-                heat: 0.35,
-                palette,
+                smoke,
             };
             self.push(dot);
         }
@@ -281,13 +246,12 @@ impl Wind {
     }
 
     /// Draws the gas at depth `z`, `to_screen` mapping world positions to
-    /// the canvas, `dot` the soft round sprite. Additive: where there is no
-    /// gas nothing changes.
+    /// the canvas, `dot` the soft round sprite: the smoke alpha-blended,
+    /// then the glow of the young gas added over it.
     pub fn draw(&self, z: f32, to_screen: impl Fn(Vec2) -> Vec2, dot: &Texture2D) {
         if self.dots.is_empty() {
             return;
         }
-        gl_use_material(&material());
         let mut verts = Vec::with_capacity(CHUNK * 4);
         let mut indices: Vec<u16> = Vec::with_capacity(CHUNK * 6);
         let flush = |verts: &mut Vec<Vertex>, indices: &mut Vec<u16>| {
@@ -299,41 +263,58 @@ impl Wind {
                 });
             }
         };
-        // A broad haze, then the body: both soft and wide enough that
-        // neighbouring dots merge into one continuous density (the
-        // Formation is a smooth field; the pulsar's crisp grain read as
-        // sand).
+        let quad = |verts: &mut Vec<Vertex>, indices: &mut Vec<u16>, p: Vec2, radius: f32, c: Color| {
+            let base = verts.len() as u16;
+            for (dx, dy, tu, tv) in [(-1.0, -1.0, 0.0, 0.0), (1.0, -1.0, 1.0, 0.0), (1.0, 1.0, 1.0, 1.0), (-1.0, 1.0, 0.0, 1.0)] {
+                verts.push(Vertex::new(p.x + dx * radius, p.y + dy * radius, z, tu, tv, c));
+            }
+            indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+            if verts.len() >= CHUNK * 4 {
+                flush(verts, indices);
+            }
+        };
+        // Smoke: a broad haze, then the body, both soft and wide enough
+        // that neighbouring dots merge into one continuous density.
+        gl_use_default_material();
         for pass in 0..2 {
             for d in &self.dots {
-                let u = d.age / d.life;
-                let fade = (1.0 - u * u) * (u / 0.06).min(1.0);
-                let b = (d.bright * fade).clamp(0.0, 0.999);
+                let b = density(d);
                 if b < 0.02 {
                     continue;
                 }
-                // Hot gas starts up the ramp and cools as it goes.
-                let hot = d.heat * (1.0 - u / 0.35).max(0.0);
-                let colour = d.palette.ramp(0.5 + 0.35 * b + 0.2 * hot);
                 let (radius, alpha) = if pass == 0 {
-                    (9.0 + 9.0 * b, 0.025 + 0.06 * b)
+                    (9.0 + 9.0 * b, 0.03 + 0.05 * b)
                 } else {
-                    (4.0 + 4.0 * b, 0.06 + 0.16 * b)
+                    (4.0 + 4.0 * b, 0.05 + 0.12 * b)
                 };
-                let p = to_screen(d.pos);
-                let c = Color::new(colour.x, colour.y, colour.z, alpha);
-                let base = verts.len() as u16;
-                for (dx, dy, tu, tv) in [(-1.0, -1.0, 0.0, 0.0), (1.0, -1.0, 1.0, 0.0), (1.0, 1.0, 1.0, 1.0), (-1.0, 1.0, 0.0, 1.0)] {
-                    verts.push(Vertex::new(p.x + dx * radius, p.y + dy * radius, z, tu, tv, c));
-                }
-                indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
-                if verts.len() >= CHUNK * 4 {
-                    flush(&mut verts, &mut indices);
-                }
+                let s = d.smoke;
+                let c = Color::new(s.colour.x, s.colour.y, s.colour.z, alpha * s.opacity);
+                quad(&mut verts, &mut indices, to_screen(d.pos), radius, c);
             }
+        }
+        flush(&mut verts, &mut indices);
+        // Glow: the young gas, added.
+        gl_use_material(&glow_material());
+        for d in &self.dots {
+            let hot = (1.0 - d.age / (d.life * GLOW_TIME)).max(0.0) * d.smoke.heat;
+            let b = density(d);
+            if hot * b < 0.02 {
+                continue;
+            }
+            let g = d.smoke.glow;
+            let c = Color::new(g.x, g.y, g.z, hot * (0.08 + 0.22 * b));
+            quad(&mut verts, &mut indices, to_screen(d.pos), 4.0 + 4.0 * b, c);
         }
         flush(&mut verts, &mut indices);
         gl_use_default_material();
     }
+}
+
+/// A dot's density now: its brightness, fading in quickly and out as it
+/// ages.
+fn density(d: &Dot) -> f32 {
+    let u = d.age / d.life;
+    (d.bright * (1.0 - u * u) * (u / 0.06).min(1.0)).clamp(0.0, 0.999)
 }
 
 const VERTEX: &str = r#"#version 100
@@ -363,19 +344,17 @@ void main() {
 mod tests {
     use super::*;
 
-    #[test]
-    fn ramps_hit_their_stops() {
-        assert_eq!(Palette::Magma.ramp(0.0), Vec3::ZERO);
-        let pale = Palette::Magma.ramp(1.0) * 255.0;
-        assert!((pale - Vec3::new(255.0, 240.0, 199.0)).length() < 0.01);
-        let mid = Palette::CobaltGold.ramp(0.70) * 255.0;
-        assert!((mid - Vec3::new(48.0, 92.0, 190.0)).length() < 0.01);
-    }
+    const DUST: Smoke = Smoke {
+        colour: Vec3::new(0.5, 0.45, 0.4),
+        opacity: 0.5,
+        glow: Vec3::ONE,
+        heat: 0.5,
+    };
 
     #[test]
     fn gas_keeps_the_shots_momentum() {
         let mut w = Wind::new();
-        w.blast(Vec2::ZERO, vec2(0.0, -100.0), 40.0, 1.0, Palette::Magma);
+        w.blast(Vec2::ZERO, vec2(0.0, -100.0), 40.0, 1.0, DUST);
         for _ in 0..30 {
             w.update(1.0 / 60.0);
         }

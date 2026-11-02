@@ -96,6 +96,16 @@ const TICK: f32 = 0.01;
 /// The next wave waits until at most this many units remain, at least 8.
 const MIN_THRESHOLD: i32 = 8;
 
+/// What a shot hit, for the Formation gas's look (port addition).
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Surface {
+    Rock(Element),
+    /// Depots and enemy craft.
+    Craft,
+    /// The boss's core and pieces, and a lobber's ball.
+    Boss,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Element {
     Normal,
@@ -1741,7 +1751,8 @@ impl Field {
         }
     }
 
-    /// A bullet segment against active rocks. Returns true when it hit one.
+    /// A bullet segment against everything it can hit; returns what it hit
+    /// first, if anything.
     pub fn bullet(
         &mut self,
         from: Vec2,
@@ -1751,7 +1762,7 @@ impl Field {
         damage: f32,
         mass: f32,
         vel: Vec2,
-    ) -> bool {
+    ) -> Option<Surface> {
         for i in 0..self.rocks.len() {
             let rock = &self.rocks[i];
             if !rock.active() {
@@ -1759,6 +1770,7 @@ impl Field {
             }
             let c = vec2(wrap_near(rock.pos.x, to.x), wrap_near(rock.pos.y, to.y));
             if segment_distance(c, from, to) < rock.radius() + radius {
+                let element = rock.element;
                 if self.rocks[i].hit(weapon, damage, to, vel, mass) {
                     self.destroy(i, true);
                 } else if self.rocks[i].sparked {
@@ -1768,7 +1780,7 @@ impl Field {
                         element: r.element,
                     });
                 }
-                return true;
+                return Some(Surface::Rock(element));
             }
         }
         for i in 0..self.depots.len() {
@@ -1786,7 +1798,7 @@ impl Field {
                 } else {
                     self.destroy_depot(i, true);
                 }
-                return true;
+                return Some(Surface::Craft);
             }
         }
         for i in 0..self.lobbers.len() {
@@ -1800,7 +1812,7 @@ impl Field {
                     } else {
                         self.events.push(Event::BossHit);
                     }
-                    return true;
+                    return Some(Surface::Boss);
                 }
             }
             let c = vec2(wrap_near(l.pos.x, to.x), wrap_near(l.pos.y, to.y));
@@ -1810,7 +1822,7 @@ impl Field {
                 } else {
                     self.events.push(Event::DepotHit);
                 }
-                return true;
+                return Some(Surface::Craft);
             }
         }
         for i in 0..self.seekers.len() {
@@ -1822,7 +1834,7 @@ impl Field {
                 } else {
                     self.events.push(Event::DepotHit);
                 }
-                return true;
+                return Some(Surface::Craft);
             }
         }
         for i in 0..self.towers.len() {
@@ -1834,7 +1846,7 @@ impl Field {
                 } else {
                     self.events.push(Event::DepotHit);
                 }
-                return true;
+                return Some(Surface::Craft);
             }
         }
         for i in 0..self.arrows.len() {
@@ -1846,7 +1858,7 @@ impl Field {
                 } else {
                     self.events.push(Event::DepotHit);
                 }
-                return true;
+                return Some(Surface::Craft);
             }
         }
         for i in 0..self.snakes.len() {
@@ -1855,7 +1867,7 @@ impl Field {
             if s.active() && segment_distance(head, from, to) < snake::RADIUS + radius {
                 let hit = self.snakes[i].hit(damage);
                 self.snake_hit(i, hit, true);
-                return true;
+                return Some(Surface::Craft);
             }
             // SnakeBody::handleEvent(0): segments stop bullets unharmed.
             let blocked = s.segments.iter().any(|seg| {
@@ -1863,7 +1875,7 @@ impl Field {
                 seg.active_now() && segment_distance(c, from, to) < snake::RADIUS + radius
             });
             if blocked {
-                return true;
+                return Some(Surface::Craft);
             }
         }
         for i in 0..self.shy_guys.len() {
@@ -1878,7 +1890,7 @@ impl Field {
                 } else {
                     self.events.push(Event::DepotHit);
                 }
-                return true;
+                return Some(Surface::Craft);
             }
         }
         for i in 0..self.mines.len() {
@@ -1894,7 +1906,7 @@ impl Field {
                     self.destroy_mine(i, true, true, true);
                 }
                 self.events.push(Event::MineHit { pos, sound: !dead, sparks });
-                return true;
+                return Some(Surface::Craft);
             }
         }
         for i in 0..self.pieces.len() {
@@ -1909,7 +1921,7 @@ impl Field {
                 } else {
                     self.events.push(Event::BossHit);
                 }
-                return true;
+                return Some(Surface::Boss);
             }
         }
         if let Some(b) = &mut self.boss {
@@ -1920,10 +1932,10 @@ impl Field {
                 } else {
                     self.events.push(Event::BossHit);
                 }
-                return true;
+                return Some(Surface::Boss);
             }
         }
-        false
+        None
     }
 
     /// bossInsideCollision, bossOutsideCollision and Rock::handleCollision
