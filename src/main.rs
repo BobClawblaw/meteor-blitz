@@ -638,6 +638,30 @@ fn draw_project_link(font: &macroquad::text::Font, alpha: f32) {
     );
 }
 
+/// The version and build date, set small in the main menu's lower right
+/// corner (port addition), e.g. "v1.0.8 2026-11-02".
+const VERSION_TEXT: f32 = 10.0;
+const VERSION_MARGIN: f32 = 6.0;
+
+fn draw_version(font: &macroquad::text::Font, alpha: f32) {
+    let text = format!("v{} {}", env!("CARGO_PKG_VERSION"), env!("MB_BUILD_DATE"));
+    let k = gfx::pixel_scale().max(1.0);
+    let size = (VERSION_TEXT * k).round() as u16;
+    let w = measure_text(&text, Some(font), size, 1.0 / k).width;
+    draw_text_ex(
+        &text,
+        gfx::CANVAS_W + gfx::edge() - VERSION_MARGIN - w,
+        gfx::CANVAS_H - VERSION_MARGIN,
+        TextParams {
+            font: Some(font),
+            font_size: size,
+            font_scale: 1.0 / k,
+            color: Color::new(0.9, 0.9, 1.0, 0.6 * alpha),
+            ..Default::default()
+        },
+    );
+}
+
 /// Opens the project page in the default browser (not on the web build).
 fn open_project_page() {
     #[cfg(target_os = "macos")]
@@ -1509,6 +1533,7 @@ async fn main() {
                 menu_screen.draw(&canvas, &menu_assets, &backdrop);
                 if kind == MenuKind::Main {
                     draw_project_link(&link_font, menu_screen.fx.alpha);
+                    draw_version(&link_font, menu_screen.fx.alpha);
                 }
                 if let MenuKind::ScoresTable(mode, _) = kind {
                     draw_scores_tabs(&canvas, &play_assets.hud.font, mode == 1, menu_screen.fx.alpha);
