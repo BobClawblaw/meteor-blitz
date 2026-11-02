@@ -95,6 +95,8 @@ pub struct Settings {
     /// Port addition: the playfield zoom (1 to MAX_ZOOM): the camera sees
     /// this many times more of the play plane across.
     pub zoom: f32,
+    /// Port addition: Options > HUD size, 1 (the original) to MAX_HUD_SCALE.
+    pub hud_scale: f32,
 }
 
 impl Default for Settings {
@@ -118,6 +120,7 @@ impl Default for Settings {
             resolution: None,
             visual_fx: true,
             zoom: 1.0,
+            hud_scale: 1.0,
         }
     }
 }
@@ -174,6 +177,7 @@ impl Settings {
                 "visual_fx" => s.visual_fx = parse_bool(value, s.visual_fx),
                 "fps" => s.fps = value.parse().ok().filter(|f| FPS_CAPS.contains(f)).unwrap_or(s.fps),
                 "zoom" => s.zoom = value.parse().unwrap_or(s.zoom).clamp(1.0, MAX_ZOOM),
+                "hud_scale" => s.hud_scale = value.parse().unwrap_or(s.hud_scale).clamp(1.0, MAX_HUD_SCALE),
                 "resolution" => {
                     s.resolution = if value.eq_ignore_ascii_case("window") || value.eq_ignore_ascii_case("auto") {
                         None
@@ -189,7 +193,7 @@ impl Settings {
 
     pub fn to_text(&self) -> String {
         format!(
-            "music={}\neffects={}\nshake={}\nshake_control={}\nboost_control={}\nbomb_button={}\nauto_pause={}\nauto_gravity={}\nauto_upgrade={}\nflip={}\ntutorial={}\nfullscreen={}\nbloom={}\nwidescreen={}\nfps={}\nresolution={}\nvisual_fx={}\nzoom={}\n",
+            "music={}\neffects={}\nshake={}\nshake_control={}\nboost_control={}\nbomb_button={}\nauto_pause={}\nauto_gravity={}\nauto_upgrade={}\nflip={}\ntutorial={}\nfullscreen={}\nbloom={}\nwidescreen={}\nfps={}\nresolution={}\nvisual_fx={}\nzoom={}\nhud_scale={}\n",
             self.music,
             self.effects,
             self.shake,
@@ -208,6 +212,7 @@ impl Settings {
             resolution_text(self.resolution),
             self.visual_fx as u8,
             self.zoom,
+            self.hud_scale,
         )
     }
 }
@@ -215,6 +220,9 @@ impl Settings {
 /// The frame-rate caps the Options screen offers; 0 is unlimited (no cap
 /// and no vsync: about 800 fps on an M5 Ultra).
 pub const FPS_CAPS: [u32; 6] = [60, 120, 144, 165, 240, 0];
+
+/// The largest HUD size the Options slider reaches.
+pub const MAX_HUD_SCALE: f32 = 1.5;
 
 /// The widest playfield zoom the Options slider reaches.
 pub const MAX_ZOOM: f32 = 1.5;
@@ -1213,6 +1221,7 @@ mod tests {
             resolution: Some((1920, 1080)),
             visual_fx: false,
             zoom: 1.5,
+            hud_scale: 1.25,
         };
         assert_eq!(Settings::parse(&s.to_text()), s);
     }

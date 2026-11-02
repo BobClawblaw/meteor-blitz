@@ -822,6 +822,8 @@ pub struct Play {
     /// Options > Playfield zoom: the camera sees this many times more of
     /// the play plane across (1 to 2; port addition).
     pub zoom: f32,
+    /// Options > HUD size (port addition).
+    pub hud_scale: f32,
     /// Lights from explosions and hits, fading out.
     glows: Vec<Glow>,
     /// Shockwave rings from big explosions.
@@ -1052,6 +1054,7 @@ impl Play {
             blend: 1.0,
             fx: true,
             zoom: 1.0,
+            hud_scale: 1.0,
             glows: Vec::new(),
             shocks: Vec::new(),
             scorches: Vec::new(),
@@ -3220,7 +3223,7 @@ impl Play {
     /// GameScreen::draw: the HUD sits at depth 0 whatever the play layer does.
     fn draw_hud(&self, canvas: &Canvas, assets: &PlayAssets) {
         canvas.set_glowing(false);
-        hud::draw(&assets.hud, &self.hud_values());
+        hud::draw(&assets.hud, &self.hud_values(), self.hud_scale);
         if let Some(t) = &self.tutorial {
             t.draw(canvas, &assets.hud.font);
         }

@@ -1415,6 +1415,7 @@ async fn main() {
                     g.set_shake_scale(settings.shake);
                     g.fx = settings.visual_fx && std::env::var_os("MB_FX_OFF").is_none();
                     g.zoom = play::fit_zoom(zoom_override.unwrap_or(settings.zoom));
+                    g.hud_scale = settings.hud_scale;
                     g.update(dt);
                     for id in g.sounds.drain(..) {
                         play_effect(id, settings.effects);
@@ -1515,7 +1516,7 @@ async fn main() {
                         }
                     } else {
                         let pad_pause = bindings::pressed(bindings::Action::Pause);
-                        let icon = Rect::new(449.0 + gfx::edge(), -1.0, 32.0, 22.0);
+                        let icon = hud::pause_rect(settings.hud_scale);
                         let clicked = is_mouse_button_pressed(MouseButton::Left)
                             && icon.contains(Canvas::mouse());
                         if (is_key_pressed(KeyCode::Escape) || pad_pause || clicked) && g.can_pause() {

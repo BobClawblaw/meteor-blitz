@@ -13,7 +13,7 @@ use crate::bindings::{self, Action, Bindings, ACTIONS};
 use crate::gfx::{edge, Canvas, CANVAS_H, CANVAS_W};
 use crate::hud::{Align, Font};
 use crate::pad::{self, Button};
-use crate::pause::{Settings, FPS_CAPS, MAX_ZOOM, RESOLUTIONS};
+use crate::pause::{Settings, FPS_CAPS, MAX_HUD_SCALE, MAX_ZOOM, RESOLUTIONS};
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Page {
@@ -30,6 +30,7 @@ enum Row {
     VisualFx,
     FrameRate,
     Zoom,
+    HudScale,
     Music,
     Effects,
     Shake,
@@ -42,7 +43,7 @@ enum Row {
     Reset,
 }
 
-const MAIN_ROWS: [Row; 13] = [
+const MAIN_ROWS: [Row; 14] = [
     Row::Fullscreen,
     Row::Resolution,
     Row::Widescreen,
@@ -50,6 +51,7 @@ const MAIN_ROWS: [Row; 13] = [
     Row::VisualFx,
     Row::FrameRate,
     Row::Zoom,
+    Row::HudScale,
     Row::Music,
     Row::Effects,
     Row::Shake,
@@ -62,6 +64,8 @@ const MAIN_ROWS: [Row; 13] = [
 const TITLE_Y: f32 = 10.0;
 const MAIN_TOP: f32 = 40.0;
 const MAIN_PITCH: f32 = 20.0;
+/// Rows that fit above the help line; a longer list scrolls.
+const VISIBLE_ROWS: usize = 13;
 const BIND_TOP: f32 = 52.0;
 const BIND_PITCH: f32 = 20.0;
 const ROW_SCALE: f32 = 0.6;
@@ -79,6 +83,8 @@ const STEP: f32 = 0.05;
 pub struct Options {
     pub page: Page,
     selected: usize,
+    /// The first row shown (the list scrolls past VISIBLE_ROWS).
+    scroll: usize,
     /// On the Controls page: the controller column is selected.
     pad_column: bool,
     /// Waiting for the input to bind to this action.
@@ -103,6 +109,7 @@ impl Options {
         Options {
             page,
             selected: 0,
+            scroll: 0,
             pad_column: false,
             capturing: None,
             dragging: false,
@@ -122,13 +129,29 @@ impl Options {
         }
     }
 
-    /// The row's hit area.
+    /// The row's hit area (row `i` of the whole list, placed by the scroll).
     fn rect(&self, i: usize) -> Rect {
         let (top, pitch) = match self.page {
             Page::Main => (MAIN_TOP, MAIN_PITCH),
             Page::Controls => (BIND_TOP, BIND_PITCH),
         };
-        Rect::new(LABEL_X - 10.0, top + i as f32 * pitch - 4.0, VALUE_X - LABEL_X + 20.0, pitch - 2.0)
+        let at = i as f32 - self.scroll as f32;
+        Rect::new(LABEL_X - 10.0, top + at * pitch - 4.0, VALUE_X - LABEL_X + 20.0, pitch - 2.0)
+    }
+
+    /// The rows on screen.
+    fn visible(&self, n: usize) -> std::ops::Range<usize> {
+        self.scroll..(self.scroll + VISIBLE_ROWS).min(n)
+    }
+
+    /// Scrolls just enough to show the selected row.
+    fn reveal(&mut self, n: usize) {
+        if self.selected < self.scroll {
+            self.scroll = self.selected;
+        } else if self.selected >= self.scroll + VISIBLE_ROWS {
+            self.scroll = self.selected + 1 - VISIBLE_ROWS;
+        }
+        self.scroll = self.scroll.min(n.saturating_sub(VISIBLE_ROWS));
     }
 
     pub fn update(&mut self, dt: f32, settings: &mut Settings) -> Option<Outcome> {
@@ -151,12 +174,21 @@ impl Options {
         if down {
             self.selected = (self.selected + 1) % rows.len();
         }
+        // The mouse wheel scrolls a long list, keeping the selection on it.
+        let wheel = mouse_wheel().1;
+        if wheel != 0.0 && rows.len() > VISIBLE_ROWS {
+            let max = rows.len() - VISIBLE_ROWS;
+            self.scroll = if wheel < 0.0 { (self.scroll + 1).min(max) } else { self.scroll.saturating_sub(1) };
+            self.selected = self.selected.clamp(self.scroll, self.scroll + VISIBLE_ROWS - 1);
+        } else {
+            self.reveal(rows.len());
+        }
         let mut outcome = None;
         let row = rows[self.selected];
         if left || right {
             let step = if right { STEP } else { -STEP };
             match row {
-                Row::Music | Row::Effects | Row::Shake | Row::Zoom => {
+                Row::Music | Row::Effects | Row::Shake | Row::Zoom | Row::HudScale => {
                     let v = slider(row, settings);
                     set_slider(row, settings, (v + step).clamp(0.0, 1.0));
                 }
@@ -169,7 +201,7 @@ impl Options {
 
         // Mouse: hover selects; a click activates; sliders follow a drag.
         let mouse = Canvas::mouse();
-        let hovered = (0..rows.len()).find(|&i| self.rect(i).contains(mouse));
+        let hovered = self.visible(rows.len()).find(|&i| self.rect(i).contains(mouse));
         if mouse_delta_position() != Vec2::ZERO {
             if let Some(i) = hovered {
                 self.selected = i;
@@ -180,7 +212,7 @@ impl Options {
         }
         let click = is_mouse_button_pressed(MouseButton::Left) && hovered.is_some();
         if is_mouse_button_pressed(MouseButton::Left) {
-            self.dragging = hovered.is_some_and(|i| matches!(rows[i], Row::Music | Row::Effects | Row::Shake | Row::Zoom));
+            self.dragging = hovered.is_some_and(|i| matches!(rows[i], Row::Music | Row::Effects | Row::Shake | Row::Zoom | Row::HudScale));
         }
         if !is_mouse_button_down(MouseButton::Left) {
             self.dragging = false;
@@ -211,6 +243,7 @@ impl Options {
         if self.page == Page::Controls && !self.controls_only {
             self.page = Page::Main;
             self.selected = MAIN_ROWS.iter().position(|&r| r == Row::Controls).unwrap_or(0);
+            self.reveal(MAIN_ROWS.len());
             Outcome::Click
         } else {
             Outcome::Close
@@ -229,10 +262,11 @@ impl Options {
             Row::FrameRate => settings.fps = cycle(&FPS_CAPS, settings.fps, true),
             Row::Resolution => settings.resolution = cycle_resolution(settings.resolution, true),
             Row::Tutorial => settings.tutorial = !settings.tutorial,
-            Row::Music | Row::Effects | Row::Shake | Row::Zoom => return None,
+            Row::Music | Row::Effects | Row::Shake | Row::Zoom | Row::HudScale => return None,
             Row::Controls => {
                 self.page = Page::Controls;
                 self.selected = 0;
+                self.scroll = 0;
                 self.pad_column = false;
             }
             Row::Back => return Some(self.back()),
@@ -285,7 +319,8 @@ impl Options {
             font.text("Keyboard", KEY_COL_X, BIND_TOP - 16.0, 0.45, Align::Left, dim);
             font.text("Controller", PAD_COL_X, BIND_TOP - 16.0, 0.45, Align::Left, dim);
         }
-        for (i, &row) in rows.iter().enumerate() {
+        for i in self.visible(rows.len()) {
+            let row = rows[i];
             let y = self.rect(i).y + 6.0;
             let label = match row {
                 Row::Fullscreen => "Fullscreen",
@@ -295,6 +330,7 @@ impl Options {
                 Row::VisualFx => "Lighting and effects",
                 Row::FrameRate => "Frame rate cap",
                 Row::Zoom => "Playfield zoom",
+                Row::HudScale => "HUD size",
                 Row::Music => "Music",
                 Row::Effects => "Sound effects",
                 Row::Shake => "Screen shake",
@@ -316,7 +352,7 @@ impl Options {
                     font.text(&fps, VALUE_X, y, ROW_SCALE, Align::Right, white)
                 }
                 Row::Tutorial => on_off(font, settings.tutorial, y, white),
-                Row::Music | Row::Effects | Row::Shake | Row::Zoom => {
+                Row::Music | Row::Effects | Row::Shake | Row::Zoom | Row::HudScale => {
                     let v = slider(row, settings);
                     let mid = y + 4.0;
                     canvas.fill_rect(SLIDER_X, mid - 1.0, SLIDER_W, 2.0, dim);
@@ -353,6 +389,26 @@ impl Options {
                 }
                 _ => {}
             }
+        }
+        // Arrows on the right when rows are scrolled off above or below.
+        let more = |y: f32, up: bool| {
+            let (tip, base) = if up { (y, y + 6.0) } else { (y + 6.0, y) };
+            canvas.draw_triangles(
+                vec![
+                    Vertex::new(VALUE_X + 14.0, base, 0.0, 0.0, 0.0, dim),
+                    Vertex::new(VALUE_X + 26.0, base, 0.0, 0.0, 0.0, dim),
+                    Vertex::new(VALUE_X + 20.0, tip, 0.0, 0.0, 0.0, dim),
+                ],
+                vec![0, 1, 2],
+                None,
+                false,
+            );
+        };
+        if self.scroll > 0 {
+            more(self.rect(self.scroll).y + 4.0, true);
+        }
+        if self.scroll + VISIBLE_ROWS < rows.len() {
+            more(self.rect(self.scroll + VISIBLE_ROWS - 1).y + 6.0, false);
         }
         let help = match (self.page, self.capturing.is_some()) {
             (_, true) => "Esc cancels",
@@ -402,8 +458,9 @@ fn slider(row: Row, s: &Settings) -> f32 {
     match row {
         Row::Music => s.music,
         Row::Effects => s.effects,
-        // The zoom slider runs from 1x at the left to MAX_ZOOM at the right.
+        // The zoom and HUD sliders run from 1x at the left to their maximum.
         Row::Zoom => (s.zoom - 1.0) / (MAX_ZOOM - 1.0),
+        Row::HudScale => (s.hud_scale - 1.0) / (MAX_HUD_SCALE - 1.0),
         _ => s.shake,
     }
 }
@@ -413,6 +470,7 @@ fn set_slider(row: Row, s: &mut Settings, v: f32) {
         Row::Music => s.music = v,
         Row::Effects => s.effects = v,
         Row::Zoom => s.zoom = 1.0 + v * (MAX_ZOOM - 1.0),
+        Row::HudScale => s.hud_scale = 1.0 + v * (MAX_HUD_SCALE - 1.0),
         _ => s.shake = v,
     }
 }
@@ -445,8 +503,21 @@ mod tests {
     }
 
     #[test]
-    fn the_main_rows_fit_above_the_help_line() {
-        let bottom = MAIN_TOP + (MAIN_ROWS.len() as f32 - 1.0) * MAIN_PITCH + MAIN_PITCH;
+    fn the_visible_rows_fit_above_the_help_line() {
+        let bottom = MAIN_TOP + (VISIBLE_ROWS as f32 - 1.0) * MAIN_PITCH + MAIN_PITCH;
         assert!(bottom <= CANVAS_H - 12.0);
+    }
+
+    #[test]
+    fn the_list_scrolls_to_show_the_selection() {
+        let mut o = Options::new(Page::Main);
+        let n = MAIN_ROWS.len();
+        o.selected = n - 1;
+        o.reveal(n);
+        assert_eq!(o.scroll, n - VISIBLE_ROWS);
+        assert!(o.visible(n).contains(&(n - 1)));
+        o.selected = 0;
+        o.reveal(n);
+        assert_eq!(o.scroll, 0);
     }
 }

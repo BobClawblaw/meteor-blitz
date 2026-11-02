@@ -7,7 +7,7 @@
 
 use macroquad::prelude::*;
 
-use crate::gfx::draw_quad;
+use crate::gfx::{draw_quad, CANVAS_W};
 
 /// A bitmap font: `ngage.png` with glyph rectangles from `ngage.dat`
 /// (u16 count, then x, y, w, h per glyph).
@@ -210,6 +210,8 @@ const RINGS_X: f32 = 3.0;
 const RING_ICON_GAP: f32 = 6.0;
 const RING_ICON_Y: f32 = 25.5;
 const PAUSE_POS: Vec2 = vec2(449.0, -1.0);
+/// The pause icon's click area from PAUSE_POS (GameScreen's touch box).
+const PAUSE_SIZE: Vec2 = vec2(32.0, 22.0);
 /// Hud::draw dims the counters to 40% outside the tutorial.
 const COUNTER_ALPHA: f32 = 0.4;
 
@@ -235,20 +237,61 @@ fn counter(assets: &HudAssets, icon: &Texture2D, n: u32, x: f32, dir: f32, color
 /// The original sets 40% opacity before the life and bomb counters and
 /// never resets it before the text, which is batched and drawn last, so
 /// the whole HUD is translucent except the pause icon.
-pub fn draw(assets: &HudAssets, v: &HudValues) {
+///
+/// `scale` (Options > HUD size, port addition) grows each group about the
+/// top corner or edge it sits against: score and rings top left, lives and
+/// bombs top centre, multiplier, high score and pause top right.
+pub fn draw(assets: &HudAssets, v: &HudValues, scale: f32) {
     let dim = Color::new(1.0, 1.0, 1.0, COUNTER_ALPHA);
     let show = v.show;
     // A wide view pins the corners' items to the screen edges.
     let (left, right) = (-crate::gfx::edge(), crate::gfx::edge());
     if show.lives_and_bombs {
-        counter(assets, &assets.ship_counter, v.lives, LIVES_X, 1.0, dim);
-        counter(assets, &assets.bomb_counter, v.bombs, BOMBS_X, -1.0, dim);
+        scaled(vec2(CANVAS_W * 0.5, 0.0), scale, || {
+            counter(assets, &assets.ship_counter, v.lives, LIVES_X, 1.0, dim);
+            counter(assets, &assets.bomb_counter, v.bombs, BOMBS_X, -1.0, dim);
+        });
     }
 
+    scaled(vec2(left, 0.0), scale, || draw_left(assets, v, left, dim));
+    scaled(vec2(CANVAS_W + right, 0.0), scale, || draw_right(assets, v, right, dim));
+}
+
+/// The pause icon's click area for a HUD `scale`.
+pub fn pause_rect(scale: f32) -> Rect {
+    let corner = vec2(CANVAS_W + crate::gfx::edge(), 0.0);
+    let at = corner + (vec2(PAUSE_POS.x + crate::gfx::edge(), PAUSE_POS.y) - corner) * scale;
+    Rect::new(at.x, at.y, PAUSE_SIZE.x * scale, PAUSE_SIZE.y * scale)
+}
+
+/// Draws `f` scaled by `scale` about `anchor` (canvas units).
+fn scaled(anchor: Vec2, scale: f32, f: impl FnOnce()) {
+    if scale == 1.0 {
+        f();
+        return;
+    }
+    let m = Mat4::from_translation(anchor.extend(0.0))
+        * Mat4::from_scale(vec3(scale, scale, 1.0))
+        * Mat4::from_translation(-anchor.extend(0.0));
+    unsafe { get_internal_gl() }.quad_gl.push_model_matrix(m);
+    f();
+    unsafe { get_internal_gl() }.quad_gl.pop_model_matrix();
+}
+
+fn draw_left(assets: &HudAssets, v: &HudValues, left: f32, dim: Color) {
+    let show = v.show;
     if show.score {
         assets.font.number(v.score, SCORE_POS.x + left, SCORE_POS.y, 1.0, Align::Left, dim);
     }
+    if show.rings {
+        assets.font.number(v.rings as u64, RINGS_X + left, SMALL_Y, SMALL, Align::Left, dim);
+        let w = assets.font.number_width(v.rings as u64, SMALL);
+        draw_quad(&assets.ring, left + w + RING_ICON_GAP, RING_ICON_Y, 1.0, 0.0, dim);
+    }
+}
 
+fn draw_right(assets: &HudAssets, v: &HudValues, right: f32, dim: Color) {
+    let show = v.show;
     if show.multiplier {
         if v.multiplier >= 10 {
             assets.font.number(1, MULTIPLIER_TEN_X + right, MULTIPLIER_Y, 1.0, Align::Left, dim);
@@ -264,12 +307,6 @@ pub fn draw(assets: &HudAssets, v: &HudValues) {
         assets.font.number(high, HIGH_SCORE_X + right, SMALL_Y, SMALL, Align::Right, dim);
         let label_x = HIGH_SCORE_LABEL_X + right - assets.font.number_width(high, SMALL);
         assets.font.text("High Score ", label_x, SMALL_Y, SMALL, Align::Right, dim);
-    }
-
-    if show.rings {
-        assets.font.number(v.rings as u64, RINGS_X + left, SMALL_Y, SMALL, Align::Left, dim);
-        let w = assets.font.number_width(v.rings as u64, SMALL);
-        draw_quad(&assets.ring, left + w + RING_ICON_GAP, RING_ICON_Y, 1.0, 0.0, dim);
     }
 
     if show.pause {
