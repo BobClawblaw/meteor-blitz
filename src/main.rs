@@ -1170,6 +1170,11 @@ async fn main() {
     let pause_frame: u32 = std::env::var("MB_PAUSE_FRAME").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
     let mut held_pause = if pause_frame > 0 { pause.take() } else { None };
 
+    // MB_ZOOM=<1|2> overrides Options > Playfield zoom for a run.
+    let zoom_override: Option<u32> = std::env::var("MB_ZOOM")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .filter(|z| pause::ZOOMS.contains(z));
     // MB_PROF prints update and draw CPU time per window; MB_PROF_FRAMES=N
     // exits after N frames, for unattended benchmarks.
     let prof = std::env::var_os("MB_PROF").is_some();
@@ -1199,11 +1204,6 @@ async fn main() {
     // unless MB_FPS is given, so MB_SHOT_FRAME keeps selecting the same
     // simulation state as before pacing existed.
     #[cfg(not(target_arch = "wasm32"))]
-    // MB_ZOOM=<1|2> overrides Options > Playfield zoom for a run.
-    let zoom_override: Option<u32> = std::env::var("MB_ZOOM")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .filter(|z| pause::ZOOMS.contains(z));
     let fps_override: Option<f64> = std::env::var("MB_FPS")
         .ok()
         .and_then(|v| v.parse().ok())
