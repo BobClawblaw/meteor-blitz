@@ -311,7 +311,10 @@ impl Options {
                 Row::Widescreen => on_off(font, settings.widescreen, y, white),
                 Row::Bloom => on_off(font, settings.bloom, y, white),
                 Row::VisualFx => on_off(font, settings.visual_fx, y, white),
-                Row::FrameRate => font.text(&settings.fps.to_string(), VALUE_X, y, ROW_SCALE, Align::Right, white),
+                Row::FrameRate => {
+                    let fps = if settings.fps == 0 { "Unlimited".to_owned() } else { settings.fps.to_string() };
+                    font.text(&fps, VALUE_X, y, ROW_SCALE, Align::Right, white)
+                }
                 Row::Tutorial => on_off(font, settings.tutorial, y, white),
                 Row::Music | Row::Effects | Row::Shake | Row::Zoom => {
                     let v = slider(row, settings);

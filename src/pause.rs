@@ -212,8 +212,9 @@ impl Settings {
     }
 }
 
-/// The frame-rate caps the Options screen offers.
-pub const FPS_CAPS: [u32; 3] = [60, 120, 144];
+/// The frame-rate caps the Options screen offers; 0 is unlimited (no cap
+/// and no vsync: about 800 fps on an M5 Ultra).
+pub const FPS_CAPS: [u32; 6] = [60, 120, 144, 165, 240, 0];
 
 /// The widest playfield zoom the Options slider reaches.
 pub const MAX_ZOOM: f32 = 1.5;
