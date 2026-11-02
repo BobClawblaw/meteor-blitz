@@ -195,16 +195,16 @@ def upscale_textures(esrgan: Path) -> None:
                 out = blend_seamless(half, seamless_base(p, 2), 24)
             else:
                 out = seamless_base(p, 2)
-            out = tileable(out, 128)
+            out = tileable(out, 32 if p.stem == "sprawl" else 128)
             out.save(dst, optimize=True)
         print("texture", p.name, "->", dst.relative_to(ROOT),
               "diff", round(verify(p, dst), 2), "edge", round(edge_diff(dst), 2))
 
 
-def seam_fix_dir(src_dir: Path, band: int = 128) -> None:
+def seam_fix_dir(src_dir: Path) -> None:
     """Apply the edge crossfade to an already generated texture set."""
     for p in sorted(src_dir.glob("*.png")):
-        out = tileable(Image.open(p), band)
+        out = tileable(Image.open(p), 32 if p.stem == "sprawl" else 128)
         out.save(p, optimize=True)
         print("seam", p.name, "edge", round(edge_diff(p), 2))
 
