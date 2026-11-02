@@ -299,7 +299,10 @@ impl Wind {
                 });
             }
         };
-        // Halo first (volume), then grain.
+        // A broad haze, then the body: both soft and wide enough that
+        // neighbouring dots merge into one continuous density (the
+        // Formation is a smooth field; the pulsar's crisp grain read as
+        // sand).
         for pass in 0..2 {
             for d in &self.dots {
                 let u = d.age / d.life;
@@ -312,9 +315,9 @@ impl Wind {
                 let hot = d.heat * (1.0 - u / 0.35).max(0.0);
                 let colour = d.palette.ramp(0.5 + 0.35 * b + 0.2 * hot);
                 let (radius, alpha) = if pass == 0 {
-                    (4.0 + 7.0 * b, 0.04 + 0.10 * b)
+                    (9.0 + 9.0 * b, 0.025 + 0.06 * b)
                 } else {
-                    (0.7 + 1.1 * b, 0.22 + 0.70 * b)
+                    (4.0 + 4.0 * b, 0.06 + 0.16 * b)
                 };
                 let p = to_screen(d.pos);
                 let c = Color::new(colour.x, colour.y, colour.z, alpha);
