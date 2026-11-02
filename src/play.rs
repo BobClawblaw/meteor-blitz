@@ -184,6 +184,13 @@ pub const SOUND_SHIP_DESTROYED: usize = 15;
 const BOOST_CUE_EARLY: f32 = 1.3;
 const BOOST_CUE_LATE: f32 = 0.65;
 
+/// Controller rumbles (port addition): strong motor, weak motor, seconds.
+const RUMBLE_BOMB: (f32, f32, f32) = (0.9, 0.6, 0.45);
+const RUMBLE_SHIELD: (f32, f32, f32) = (0.45, 0.7, 0.2);
+const RUMBLE_DEATH: (f32, f32, f32) = (1.0, 1.0, 0.6);
+const RUMBLE_BOSS_DYING: (f32, f32, f32) = (0.35, 0.6, 0.5);
+const RUMBLE_BOSS_DEAD: (f32, f32, f32) = (1.0, 0.8, 0.9);
+
 /// One element's meteor art: the small-rock 4x4 atlas, then the medium,
 /// large and extra-large rotation frames.
 pub struct RockArt {
@@ -837,6 +844,8 @@ pub struct Play {
     high_score: u64,
     /// `Audio::play` ids raised this update, for the caller to play.
     pub sounds: Vec<usize>,
+    /// Controller rumbles this update: strong motor, weak motor, seconds.
+    pub rumbles: Vec<(f32, f32, f32)>,
     effects: Effects,
     /// Test hooks, read once: env lookups take the process environment lock
     /// and `var` allocates a String.
@@ -1176,6 +1185,7 @@ impl Play {
             time: TimeScale::default(),
             high_score,
             sounds: Vec::new(),
+            rumbles: Vec::new(),
             effects: Effects::load(&assets.systems),
             drift,
             auto_fire: std::env::var_os("MB_AUTOFIRE").is_some(),
@@ -1957,6 +1967,7 @@ impl Play {
         self.camera.shake(0.75, 7.5);
         self.script.delay();
         self.sounds.push(SOUND_SHIP_DESTROYED);
+        self.rumbles.push(RUMBLE_DEATH);
         self.glow(self.ship.pos, SHIP_LIGHT, 200.0, 0.7);
         self.shock(self.ship.pos, 160.0, 8.0, 0.6);
         // Ship::setState(4): the multiplier starts over from this score.
@@ -2085,6 +2096,7 @@ impl Play {
         self.bombs -= 1;
         self.script.slow_down_survival();
         self.sounds.push(SOUND_BOMB);
+        self.rumbles.push(RUMBLE_BOMB);
         // The original's flash already whitens the screen; the light only
         // warms the ground around it.
         self.glow(self.ship.pos, WHITE_LIGHT * 0.5, 420.0, 0.8);
@@ -2110,6 +2122,7 @@ impl Play {
             self.effects.start(Kind::Point, 17, p, 0.0, false);
         }
         self.sounds.push(SOUND_SHIP_DESTROYED);
+        self.rumbles.push(RUMBLE_SHIELD);
     }
 
     /// Hud::update: the multiplier from the score since the last death.
@@ -2412,6 +2425,7 @@ impl Play {
                     // BossInside::setState(10006): a charge-up that follows the core.
                     self.camera.shake(0.75, 7.5);
                     self.sounds.push(SOUND_BOSS_DYING);
+                    self.rumbles.push(RUMBLE_BOSS_DYING);
                     let id = self.fx(pal, Kind::Line, 10, pos, 0.0, true);
                     if let Some(b) = &mut self.field.boss {
                         b.death_effect = id;
@@ -2424,6 +2438,7 @@ impl Play {
                         t.using_boss();
                     }
                     self.sounds.push(SOUND_BOSS_DEAD);
+                    self.rumbles.push(RUMBLE_BOSS_DEAD);
                     self.camera.shake(0.75, 7.5);
                     self.effects.flash(Color::new(0.8, 0.8, 0.8, 1.0));
                     self.fx(pal, Kind::Ring, 6, pos, 0.0, false);

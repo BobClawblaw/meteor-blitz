@@ -40,6 +40,7 @@ enum Row {
     ReduceFlashes,
     ColourAssist,
     ButtonIcons,
+    Vibration,
     Controls,
     Back,
     /// A bindings row: the action, and which column (false keyboard/mouse,
@@ -48,7 +49,7 @@ enum Row {
     Reset,
 }
 
-const MAIN_ROWS: [Row; 18] = [
+const MAIN_ROWS: [Row; 19] = [
     Row::Fullscreen,
     Row::Resolution,
     Row::Widescreen,
@@ -65,6 +66,7 @@ const MAIN_ROWS: [Row; 18] = [
     Row::ReduceFlashes,
     Row::ColourAssist,
     Row::ButtonIcons,
+    Row::Vibration,
     Row::Controls,
     Row::Back,
 ];
@@ -206,6 +208,7 @@ impl Options {
                 Row::Resolution => settings.resolution = cycle_resolution(settings.resolution, right),
                 Row::Particles => settings.formation = !settings.formation,
                 Row::ButtonIcons => settings.button_icons = cycle_icons(settings.button_icons, right),
+                Row::Vibration => settings.rumble = !settings.rumble,
                 _ => {}
             }
         }
@@ -277,6 +280,12 @@ impl Options {
             Row::ReduceFlashes => settings.reduce_flashes = !settings.reduce_flashes,
             Row::ColourAssist => settings.colour_assist = !settings.colour_assist,
             Row::ButtonIcons => settings.button_icons = cycle_icons(settings.button_icons, true),
+            Row::Vibration => {
+                settings.rumble = !settings.rumble;
+                if settings.rumble {
+                    pad::rumble(0.5, 0.5, 0.25);
+                }
+            }
             Row::Music | Row::Effects | Row::Shake | Row::Zoom | Row::HudScale => return None,
             Row::Controls => {
                 self.page = Page::Controls;
@@ -354,6 +363,7 @@ impl Options {
                 Row::ReduceFlashes => "Reduce flashes",
                 Row::ColourAssist => "Colour assist",
                 Row::ButtonIcons => "Button icons",
+                Row::Vibration => "Vibration",
                 Row::Controls => "Controls",
                 Row::Back => "Back",
                 Row::Bind(action) => action.label(),
@@ -381,6 +391,7 @@ impl Options {
                 Row::Tutorial => on_off(font, settings.tutorial, y, white),
                 Row::ReduceFlashes => on_off(font, settings.reduce_flashes, y, white),
                 Row::ColourAssist => on_off(font, settings.colour_assist, y, white),
+                Row::Vibration => on_off(font, settings.rumble, y, white),
                 Row::ButtonIcons => {
                     let style = match settings.button_icons {
                         icons::AUTO => format!("Auto {}", icons::detected_style().name()),

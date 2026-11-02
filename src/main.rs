@@ -1438,6 +1438,11 @@ async fn main() {
                     for id in g.sounds.drain(..) {
                         play_effect(id, settings.effects);
                     }
+                    for (strong, weak, seconds) in g.rumbles.drain(..) {
+                        if settings.rumble {
+                            pad::rumble(strong, weak, seconds);
+                        }
+                    }
                     if g.tutorial_complete() {
                         // WaveManager::isStageComplete for level 7: go on
                         // to the game the tutorial was opened for.

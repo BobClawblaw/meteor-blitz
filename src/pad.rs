@@ -60,13 +60,83 @@ fn stick(x: f32, y_up: f32) -> Vec2 {
 #[cfg(target_os = "macos")]
 mod raw {
     use super::*;
-    use objc2_game_controller::{GCController, GCControllerButtonInput, GCDevice};
-    use std::cell::Cell;
+    use objc2::rc::{Allocated, Retained};
+    use objc2::runtime::{AnyClass, AnyObject};
+    use objc2::msg_send;
+    use objc2_foundation::{NSArray, NSString};
+    use objc2_game_controller::{GCController, GCControllerButtonInput, GCDevice, GCHapticsLocalityDefault};
+    use std::cell::{Cell, RefCell};
+    use std::ptr;
+
+    #[link(name = "CoreHaptics", kind = "framework")]
+    extern "C" {}
 
     thread_local! {
         /// Setting this posts a KVO notification through LaunchServices (a
         /// synchronous XPC round trip), so do it once, not every frame.
         static MONITORING: Cell<bool> = const { Cell::new(false) };
+        /// The rumbling pad's Core Haptics engine, keyed by the controller.
+        static ENGINE: RefCell<Option<(usize, Retained<AnyObject>)>> = const { RefCell::new(None) };
+    }
+
+    /// Rumble through the controller's haptics: one continuous Core Haptics
+    /// event, its intensity the stronger motor and its sharpness the weak
+    /// (high-frequency) motor's share. Core Haptics is driven by message
+    /// sends: objc2-game-controller binds `createEngineWithLocality` only on
+    /// iOS.
+    pub fn rumble(strong: f32, weak: f32, seconds: f32) -> bool {
+        unsafe {
+            let controllers = GCController::controllers();
+            let Some(c) = controllers.iter().find(|c| c.extendedGamepad().is_some()) else { return false };
+            let key = Retained::as_ptr(&c) as usize;
+            ENGINE.with(|e| {
+                let mut e = e.borrow_mut();
+                if e.as_ref().map(|(k, _)| *k) != Some(key) {
+                    *e = engine(&c).map(|engine| (key, engine));
+                }
+                e.as_ref().and_then(|(_, engine)| play(engine, strong, weak, seconds)).is_some()
+            })
+        }
+    }
+
+    unsafe fn engine(c: &GCController) -> Option<Retained<AnyObject>> {
+        let haptics = c.haptics()?;
+        msg_send![&*haptics, createEngineWithLocality: GCHapticsLocalityDefault]
+    }
+
+    unsafe fn play(engine: &AnyObject, strong: f32, weak: f32, seconds: f32) -> Option<()> {
+        let none = ptr::null_mut::<*mut AnyObject>();
+        // The engine stops when the app is in the background or the pad
+        // idles; starting a running engine is harmless.
+        let started: bool = msg_send![engine, startAndReturnError: none];
+        if !started {
+            return None;
+        }
+        let new = |name: &std::ffi::CStr| -> Option<Allocated<AnyObject>> {
+            let class = AnyClass::get(name)?;
+            Some(msg_send![class, alloc])
+        };
+        let param = |id: &str, value: f32| -> Option<Retained<AnyObject>> {
+            let a = new(c"CHHapticEventParameter")?;
+            Some(msg_send![a, initWithParameterID: &*NSString::from_str(id), value: value])
+        };
+        let intensity = strong.max(weak);
+        let sharpness = if intensity > 0.0 { weak / (strong + weak) } else { 0.0 };
+        let params = NSArray::from_retained_slice(&[param("HapticIntensity", intensity)?, param("HapticSharpness", sharpness)?]);
+        let event: Retained<AnyObject> = msg_send![
+            new(c"CHHapticEvent")?,
+            initWithEventType: &*NSString::from_str("HapticContinuous"),
+            parameters: &*params,
+            relativeTime: 0.0f64,
+            duration: seconds as f64
+        ];
+        let events = NSArray::from_retained_slice(&[event]);
+        let dynamic = NSArray::<AnyObject>::new();
+        let pattern: Option<Retained<AnyObject>> =
+            msg_send![new(c"CHHapticPattern")?, initWithEvents: &*events, parameters: &*dynamic, error: none];
+        let player: Option<Retained<AnyObject>> = msg_send![engine, createPlayerWithPattern: &*pattern?, error: none];
+        let _: bool = msg_send![&*player?, startAtTime: 0.0f64, error: none];
+        Some(())
     }
 
     /// GameController posts its updates as blocks on the main queue. The
@@ -131,6 +201,13 @@ mod raw {
 
     extern "C" {
         fn mb_gamepad_read(out: *mut f32) -> i32;
+        fn mb_gamepad_rumble(strong: f32, weak: f32, ms: f32);
+    }
+
+    /// The Gamepad API's dual-rumble effect, where the browser has it.
+    pub fn rumble(strong: f32, weak: f32, seconds: f32) -> bool {
+        unsafe { mb_gamepad_rumble(strong, weak, seconds * 1000.0) };
+        true
     }
 
     const AXES: usize = 4;
@@ -178,6 +255,7 @@ mod raw {
 #[cfg(all(not(target_arch = "wasm32"), not(target_os = "macos")))]
 mod raw {
     use super::*;
+    use gilrs::ff::{BaseEffect, BaseEffectType, Effect, EffectBuilder, Repeat, Replay, Ticks};
     use gilrs::{Axis, Button as G, Gilrs};
     use std::cell::RefCell;
     use std::mem::ManuallyDrop;
@@ -187,6 +265,40 @@ mod raw {
     // backend joined its thread in Drop and failed fast on every window close.
     thread_local! {
         static GILRS: RefCell<ManuallyDrop<Option<Gilrs>>> = RefCell::new(ManuallyDrop::new(Gilrs::new().ok()));
+        /// The rumble playing; dropping an effect stops it.
+        static EFFECT: RefCell<ManuallyDrop<Option<Effect>>> = const { RefCell::new(ManuallyDrop::new(None)) };
+    }
+
+    /// gilrs force feedback: the strong and weak motors for `seconds`.
+    pub fn rumble(strong: f32, weak: f32, seconds: f32) -> bool {
+        GILRS.with(|g| {
+            let mut g = g.borrow_mut();
+            let Some(gilrs) = g.as_mut() else { return false };
+            let Some(id) = gilrs.gamepads().find(|(_, p)| p.is_connected() && p.is_ff_supported()).map(|(id, _)| id)
+            else {
+                return false;
+            };
+            let length = Ticks::from_ms((seconds * 1000.0) as u32);
+            let motor = |kind| BaseEffect {
+                kind,
+                scheduling: Replay { play_for: length, ..Default::default() },
+                envelope: Default::default(),
+            };
+            let magnitude = |v: f32| (v.clamp(0.0, 1.0) * u16::MAX as f32) as u16;
+            let built = EffectBuilder::new()
+                .add_effect(motor(BaseEffectType::Strong { magnitude: magnitude(strong) }))
+                .add_effect(motor(BaseEffectType::Weak { magnitude: magnitude(weak) }))
+                .gamepads(&[id])
+                .repeat(Repeat::For(length))
+                .finish(gilrs);
+            let Ok(effect) = built else { return false };
+            let played = effect.play().is_ok();
+            EFFECT.with(|e| {
+                let old = std::mem::replace(&mut *e.borrow_mut(), ManuallyDrop::new(Some(effect)));
+                drop(ManuallyDrop::into_inner(old));
+            });
+            played
+        })
     }
 
     pub fn read() -> Option<Raw> {
@@ -329,6 +441,30 @@ mod backend {
     #[cfg(test)]
     pub(super) fn reset_nav_for_test() {
         NAV.with(|n| *n.borrow_mut() = Nav::default());
+    }
+}
+
+thread_local! {
+    /// When the current rumble ends, and how strong it is.
+    static RUMBLE: std::cell::Cell<(f64, f32)> = const { std::cell::Cell::new((0.0, 0.0)) };
+}
+
+/// Rumbles the connected pad (port addition): `strong` is the
+/// low-frequency motor and `weak` the high-frequency one, both 0-1. A
+/// weaker rumble does not cut off a stronger one that is still running.
+pub fn rumble(strong: f32, weak: f32, seconds: f32) {
+    let now = get_time();
+    let level = strong.max(weak);
+    if RUMBLE.with(|r| {
+        let (until, playing) = r.get();
+        now < until && level < playing
+    }) {
+        return;
+    }
+    RUMBLE.with(|r| r.set((now + seconds as f64, level)));
+    let played = raw::rumble(strong.clamp(0.0, 1.0), weak.clamp(0.0, 1.0), seconds);
+    if std::env::var_os("MB_PAD_LOG").is_some() {
+        eprintln!("rumble: {strong:.2} {weak:.2} for {seconds:.2} s, played {played}");
     }
 }
 

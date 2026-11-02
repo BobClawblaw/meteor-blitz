@@ -111,6 +111,9 @@ pub struct Settings {
     /// Options > Button icons: 0 follows the connected pad, 1 Xbox,
     /// 2 PlayStation, 3 Nintendo (`icons`).
     pub button_icons: u8,
+    /// Options > Vibration: rumble the controller on bombs, hits, deaths
+    /// and the boss (port addition).
+    pub rumble: bool,
 }
 
 impl Default for Settings {
@@ -139,6 +142,7 @@ impl Default for Settings {
             colour_assist: false,
             formation: false,
             button_icons: crate::icons::AUTO,
+            rumble: true,
         }
     }
 }
@@ -200,6 +204,7 @@ impl Settings {
                 "colour_assist" => s.colour_assist = parse_bool(value, s.colour_assist),
                 "formation" => s.formation = parse_bool(value, s.formation),
                 "button_icons" => s.button_icons = value.parse().unwrap_or(s.button_icons).min(3),
+                "rumble" => s.rumble = parse_bool(value, s.rumble),
                 "resolution" => {
                     s.resolution = if value.eq_ignore_ascii_case("window") || value.eq_ignore_ascii_case("auto") {
                         None
@@ -215,7 +220,7 @@ impl Settings {
 
     pub fn to_text(&self) -> String {
         format!(
-            "music={}\neffects={}\nshake={}\nshake_control={}\nboost_control={}\nbomb_button={}\nauto_pause={}\nauto_gravity={}\nauto_upgrade={}\nflip={}\ntutorial={}\nfullscreen={}\nbloom={}\nwidescreen={}\nfps={}\nresolution={}\nvisual_fx={}\nzoom={}\nhud_scale={}\nreduce_flashes={}\ncolour_assist={}\nformation={}\nbutton_icons={}\n",
+            "music={}\neffects={}\nshake={}\nshake_control={}\nboost_control={}\nbomb_button={}\nauto_pause={}\nauto_gravity={}\nauto_upgrade={}\nflip={}\ntutorial={}\nfullscreen={}\nbloom={}\nwidescreen={}\nfps={}\nresolution={}\nvisual_fx={}\nzoom={}\nhud_scale={}\nreduce_flashes={}\ncolour_assist={}\nformation={}\nbutton_icons={}\nrumble={}\n",
             self.music,
             self.effects,
             self.shake,
@@ -239,6 +244,7 @@ impl Settings {
             self.colour_assist as u8,
             self.formation as u8,
             self.button_icons,
+            self.rumble as u8,
         )
     }
 }
@@ -1275,6 +1281,7 @@ mod tests {
             colour_assist: true,
             formation: true,
             button_icons: 2,
+            rumble: false,
         };
         assert_eq!(Settings::parse(&s.to_text()), s);
     }

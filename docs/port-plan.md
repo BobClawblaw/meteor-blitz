@@ -26,7 +26,7 @@
 3. **Ship** — movement, dash/boost, plasma/flame/ice/gravity, bombs, heat, upgrades.
 4. **Meteors** — kinds (rock/ice/fire), weakness matrix, shatter into persistent chunks, ore.
 5. **Enemies** — drones, turrets, slingers, bosses.
-6. **Levels** — 6 worlds x 5 stages, wave director, survival mode.
+6. **Levels** — 6 worlds x 5 stages, wave director, survival mode. Done: Options > Vibration; macOS Core Haptics, gilrs force feedback, the web's dual-rumble.
 7. **HUD** — modern minimal HUD, radar, stage select using original UI art.
 8. **Audio** — slice the original SFX sequence, music track, reactive layers.
 9. **Desktop/web** — macOS app, Windows build on `xamd4090`, WASM web build.

@@ -21,4 +21,4 @@ gilrs = { version = "0.11.2", default-features = false, features = ["xinput"] }
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6.5"
 objc2-foundation = { version = "0.3.2", features = ["NSArray", "NSString"] }
-objc2-game-controller = { version = "0.3.2", features = ["GCController", "GCExtendedGamepad", "GCPhysicalInputProfile", "GCControllerElement", "GCControllerButtonInput", "GCControllerAxisInput", "GCControllerDirectionPad", "GCDevice"] }
+objc2-game-controller = { version = "0.3.2", features = ["GCController", "GCExtendedGamepad", "GCPhysicalInputProfile", "GCControllerElement", "GCControllerButtonInput", "GCControllerAxisInput", "GCControllerDirectionPad", "GCDevice", "GCDeviceHaptics"] }

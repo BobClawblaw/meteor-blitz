@@ -65,6 +65,18 @@
             if (/057e|nintendo|pro controller|joy-con/.test(id)) return 3;
             return 1;
           };
+          // Rumble (dual-rumble where the browser supports it).
+          importObject.env.mb_gamepad_rumble = function (strong, weak, ms) {
+            const pads = navigator.getGamepads ? navigator.getGamepads() : [];
+            for (const p of pads) {
+              if (p && p.connected && p.vibrationActuator) {
+                p.vibrationActuator
+                  .playEffect("dual-rumble", { duration: ms, strongMagnitude: strong, weakMagnitude: weak })
+                  .catch(() => {});
+                return;
+              }
+            }
+          };
         },
       });
 
