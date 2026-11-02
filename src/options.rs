@@ -28,6 +28,7 @@ enum Row {
     Widescreen,
     Bloom,
     VisualFx,
+    Particles,
     FrameRate,
     Zoom,
     HudScale,
@@ -45,12 +46,13 @@ enum Row {
     Reset,
 }
 
-const MAIN_ROWS: [Row; 16] = [
+const MAIN_ROWS: [Row; 17] = [
     Row::Fullscreen,
     Row::Resolution,
     Row::Widescreen,
     Row::Bloom,
     Row::VisualFx,
+    Row::Particles,
     Row::FrameRate,
     Row::Zoom,
     Row::HudScale,
@@ -199,6 +201,7 @@ impl Options {
                 Row::Bind(_) => self.pad_column = right,
                 Row::FrameRate => settings.fps = cycle(&FPS_CAPS, settings.fps, right),
                 Row::Resolution => settings.resolution = cycle_resolution(settings.resolution, right),
+                Row::Particles => settings.formation = !settings.formation,
                 _ => {}
             }
         }
@@ -263,6 +266,7 @@ impl Options {
             Row::Widescreen => settings.widescreen = !settings.widescreen,
             Row::Bloom => settings.bloom = !settings.bloom,
             Row::VisualFx => settings.visual_fx = !settings.visual_fx,
+            Row::Particles => settings.formation = !settings.formation,
             Row::FrameRate => settings.fps = cycle(&FPS_CAPS, settings.fps, true),
             Row::Resolution => settings.resolution = cycle_resolution(settings.resolution, true),
             Row::Tutorial => settings.tutorial = !settings.tutorial,
@@ -334,6 +338,7 @@ impl Options {
                 Row::Widescreen => "Widescreen",
                 Row::Bloom => "Bloom",
                 Row::VisualFx => "Lighting and effects",
+                Row::Particles => "Particle style",
                 Row::FrameRate => "Frame rate cap",
                 Row::Zoom => "Playfield zoom",
                 Row::HudScale => "HUD size",
@@ -355,6 +360,14 @@ impl Options {
                 Row::Widescreen => on_off(font, settings.widescreen, y, white),
                 Row::Bloom => on_off(font, settings.bloom, y, white),
                 Row::VisualFx => on_off(font, settings.visual_fx, y, white),
+                Row::Particles => {
+                    let style = if settings.formation {
+                        "Formation"
+                    } else {
+                        "Original"
+                    };
+                    font.text(style, VALUE_X, y, ROW_SCALE, Align::Right, white)
+                }
                 Row::FrameRate => {
                     let fps = if settings.fps == 0 { "Unlimited".to_owned() } else { settings.fps.to_string() };
                     font.text(&fps, VALUE_X, y, ROW_SCALE, Align::Right, white)

@@ -18,6 +18,7 @@ use crate::bindings::{self, Action};
 use crate::boss::{self, BossState, Piece};
 use crate::depot::{self, Depot};
 use crate::enemies::{wrap_near, Element, Event, Field, Rock, Script, Weapon};
+use crate::formation::{Gas, Kind as GasKind, Palette};
 use crate::gfx::{draw_atlas_sprite, draw_quad, draw_sprite, tex_size, Canvas, Grade, Light, Wave, CANVAS_H, CANVAS_W, MAX_LIGHTS};
 use crate::gravity;
 use crate::hud::{self, HudAssets, HudValues, Show};
@@ -864,6 +865,10 @@ pub struct Play {
     pub reduce_flashes: bool,
     /// Options > Colour assist (port addition).
     pub colour_assist: bool,
+    /// Options > Particle style: Formation (port addition).
+    pub formation: bool,
+    /// Formation gas clouds.
+    gas: Gas,
     /// Lights from explosions and hits, fading out.
     glows: Vec<Glow>,
     /// Shockwave rings from big explosions.
@@ -925,6 +930,75 @@ const TRAIL_FULL_SPEED: f32 = 300.0;
 const SCORCH_LIFE: f32 = 15.0;
 const SCORCH_FADE: f32 = 5.0;
 const MAX_SCORCHES: usize = 96;
+
+/// The Formation particle style's colour for an event: magma (the film's)
+/// for plain and fire rocks and every enemy, cobalt & gold for ice rocks,
+/// supply depots and the gravity gun's burst.
+fn event_palette(event: &Event) -> Palette {
+    match event {
+        Event::RockDestroyed {
+            element: Element::Ice,
+            ..
+        }
+        | Event::RockHit {
+            element: Element::Ice,
+            ..
+        }
+        | Event::DepotDestroyed { .. }
+        | Event::GravityBurst { .. } => Palette::CobaltGold,
+        _ => Palette::Magma,
+    }
+}
+
+/// Formation gas for a destruction (port addition): where, its radius in
+/// world units, and its life in seconds, by what blew up.
+fn event_gas(event: &Event) -> Option<(Vec2, f32, f32)> {
+    Some(match event {
+        Event::RockDestroyed {
+            pos,
+            size,
+            effects: true,
+            ..
+        } => {
+            let s = (*size).min(3);
+            // About twice the rock's radius (11, 27, 38, 52), so the cloud
+            // reaches past the pieces it splits into.
+            (*pos, [26.0, 55.0, 80.0, 110.0][s], [0.7, 1.0, 1.3, 1.6][s])
+        }
+        Event::LobberDestroyed {
+            pos, effects: true, ..
+        }
+        | Event::TowerDestroyed {
+            pos, effects: true, ..
+        } => (*pos, 64.0, 1.2),
+        Event::SnakeDestroyed {
+            pos, effects: true, ..
+        } => (*pos, 52.0, 1.0),
+        Event::SeekerDestroyed {
+            pos, effects: true, ..
+        }
+        | Event::MineDestroyed {
+            pos, effects: true, ..
+        } => (*pos, 46.0, 0.9),
+        Event::ArrowDestroyed {
+            pos, effects: true, ..
+        }
+        | Event::ShyGuyDestroyed {
+            pos, effects: true, ..
+        } => (*pos, 38.0, 0.8),
+        Event::PieceDestroyed {
+            pos, effects: true, ..
+        } => (*pos, 50.0, 0.9),
+        Event::SegmentDestroyed { pos, .. } => (*pos, 24.0, 0.6),
+        Event::DepotDestroyed { pos, .. } => (*pos, 90.0, 1.3),
+        Event::GravityBurst { pos } => (*pos, 56.0, 0.7),
+        Event::BossDead { pos, .. } => (*pos, 200.0, 2.2),
+        _ => return None,
+    })
+}
+
+/// Formation gas for a shot's impact: radius and life.
+const IMPACT_GAS: (f32, f32) = (11.0, 0.35);
 
 /// The burn mark an event leaves (port addition): its size, if any.
 fn event_scorch(event: &Event) -> Option<(Vec2, f32)> {
@@ -1097,6 +1171,8 @@ impl Play {
             hud_scale: 1.0,
             reduce_flashes: false,
             colour_assist: false,
+            formation: false,
+            gas: Gas::new(),
             glows: Vec::new(),
             shocks: Vec::new(),
             scorches: Vec::new(),
@@ -1249,6 +1325,7 @@ impl Play {
         self.field = Field::new(assets.rocks[0].frame_counts());
         self.script = Script::arcade(world, stage);
         self.pickups = Rings::default();
+        self.gas.clear();
         self.magnet = 0.0;
         self.since_press = 1.0;
         self.time = TimeScale::default();
@@ -1488,6 +1565,40 @@ impl Play {
     /// effects and flashes, lights, shockwaves and scorch marks run out
     /// behind the popup instead of freezing at their peak (a boss's white
     /// death flash and shockwave stayed on the results screen).
+    /// MB_GAS_TEST (tuning hook): a magma and a cobalt blast and two
+    /// impacts beside the ship, for judging the Formation gas on its own.
+    pub fn gas_test(&mut self) {
+        let c = self.ship.pos;
+        self.gas.spawn(
+            c + vec2(-130.0, -40.0),
+            110.0,
+            1.6,
+            Palette::Magma,
+            GasKind::Blast,
+        );
+        self.gas.spawn(
+            c + vec2(130.0, -40.0),
+            110.0,
+            1.6,
+            Palette::CobaltGold,
+            GasKind::Blast,
+        );
+        self.gas.spawn(
+            c + vec2(-40.0, 90.0),
+            IMPACT_GAS.0 * 2.0,
+            IMPACT_GAS.1,
+            Palette::Magma,
+            GasKind::Impact,
+        );
+        self.gas.spawn(
+            c + vec2(40.0, 90.0),
+            IMPACT_GAS.0 * 2.0,
+            IMPACT_GAS.1,
+            Palette::CobaltGold,
+            GasKind::Impact,
+        );
+    }
+
     pub fn update_visuals(&mut self, dt: f32) {
         self.accumulator += dt;
         while self.accumulator >= STEP {
@@ -1499,6 +1610,7 @@ impl Play {
     /// One step of the purely visual timers.
     fn age_visuals(&mut self, dt: f32) {
         self.effects.update(dt);
+        self.gas.update(dt);
         self.glows.retain_mut(|g| {
             g.life -= dt;
             g.life > 0.0
@@ -1650,6 +1762,8 @@ impl Play {
     fn collide(&mut self) {
         let field = &mut self.field;
         let effects = &mut self.effects;
+        let gas = &mut self.gas;
+        let formation = self.formation;
         let fire_damage = weapons::FIRE_DAMAGE[self.ship.fire_gun.level];
         self.ship.bullets.retain(|b| {
             let (radius, damage, mass) = match b.weapon {
@@ -1662,7 +1776,26 @@ impl Play {
                 ),
             };
             let hit = field.bullet(b.prev, b.pos, radius, b.weapon, damage, mass, b.vel);
-            if hit {
+            if hit && formation {
+                // Formation style: a small gas puff, cobalt for the laser,
+                // with the streak tinted to match.
+                let pal = if b.weapon == Weapon::Laser {
+                    Palette::CobaltGold
+                } else {
+                    Palette::Magma
+                };
+                gas.spawn(b.pos, IMPACT_GAS.0, IMPACT_GAS.1, pal, GasKind::Impact);
+                let tint = Some(pal.ember());
+                match b.weapon {
+                    Weapon::Cannon => {
+                        effects.start_tinted(Kind::Line, 0, b.pos, heading(-b.vel), false, tint)
+                    }
+                    Weapon::Laser => {
+                        effects.start_tinted(Kind::Line, 1, b.pos, heading(-b.vel), false, tint)
+                    }
+                    Weapon::Fire => 0,
+                };
+            } else if hit {
                 // standard/fire/laserBulletCollision: a spark, and a streak
                 // back along the shot for the cannon (line 0) and laser (1).
                 effects.start(Kind::Sprite, 0, b.pos, 0.0, false);
@@ -1991,6 +2124,29 @@ impl Play {
         heading(ship - from)
     }
 
+    /// An event's particle effect. With the Formation particle style (port
+    /// addition) the fireball sprites and shock rings give way to the gas
+    /// cloud `handle_events` starts, and the embers, streaks and shards
+    /// that remain take the cloud's colour.
+    fn fx(
+        &mut self,
+        pal: Palette,
+        kind: Kind,
+        set: usize,
+        pos: Vec2,
+        angle: f32,
+        reverse: bool,
+    ) -> u64 {
+        if !self.formation {
+            return self.effects.start(kind, set, pos, angle, reverse);
+        }
+        if matches!(kind, Kind::Sprite | Kind::Ring) {
+            return 0;
+        }
+        self.effects
+            .start_tinted(kind, set, pos, angle, reverse, Some(pal.ember()))
+    }
+
     fn handle_events(&mut self) {
         let events: Vec<Event> = self.field.events.drain(..).collect();
         for event in events {
@@ -1999,6 +2155,12 @@ impl Play {
             }
             if let Some((pos, radius, strength, seconds)) = event_shock(&event) {
                 self.shock(pos, radius, strength, seconds);
+            }
+            let pal = event_palette(&event);
+            if self.formation {
+                if let Some((pos, radius, life)) = event_gas(&event) {
+                    self.gas.spawn(pos, radius, life, pal, GasKind::Blast);
+                }
             }
             if let Some((pos, size)) = event_scorch(&event) {
                 if self.scorches.len() >= MAX_SCORCHES {
@@ -2033,15 +2195,14 @@ impl Play {
                         Element::Ice => (11, 1),
                         Element::Fire => (12, 2),
                     };
-                    self.effects.start(Kind::Ring, 0, pos, 0.0, false);
-                    self.effects.start(Kind::Sprite, 1, pos, 0.0, false);
-                    self.effects.start(Kind::Point, point, pos, away, false);
-                    self.effects.start(Kind::Diamond, diamond, pos, away, false);
+                    self.fx(pal, Kind::Ring, 0, pos, 0.0, false);
+                    self.fx(pal, Kind::Sprite, 1, pos, 0.0, false);
+                    self.fx(pal, Kind::Point, point, pos, away, false);
+                    self.fx(pal, Kind::Diamond, diamond, pos, away, false);
                 }
                 Event::RockSplit { pos, angle } => {
                     for k in 0..3 {
-                        self.effects
-                            .start(Kind::Line, 2, pos, angle + 120.0 * k as f32, false);
+                        self.fx(pal, Kind::Line, 2, pos, angle + 120.0 * k as f32, false);
                     }
                 }
                 Event::RockHit { pos, element } => {
@@ -2052,14 +2213,13 @@ impl Play {
                         Element::Ice => (11, 13),
                         Element::Fire => (12, 14),
                     };
-                    self.effects
-                        .start(Kind::Point, back, pos, towards + 180.0, false);
-                    self.effects.start(Kind::Point, front, pos, towards, false);
+                    self.fx(pal, Kind::Point, back, pos, towards + 180.0, false);
+                    self.fx(pal, Kind::Point, front, pos, towards, false);
                 }
                 Event::WaveIncoming => self.sounds.push(SOUND_WAVE),
                 Event::DepotHit | Event::BossHit => self.sounds.push(SOUND_DEPOT_HIT),
                 Event::GravityBurst { pos } => {
-                    self.effects.start(Kind::Ring, 7, pos, 0.0, false);
+                    self.fx(pal, Kind::Ring, 7, pos, 0.0, false);
                 }
                 Event::Shake => self.camera.shake(0.75, 7.5),
                 Event::MineHit { pos, sound, sparks } => {
@@ -2068,7 +2228,7 @@ impl Play {
                     }
                     if sparks {
                         let away = self.towards_ship(pos) + 180.0;
-                        self.effects.start(Kind::Point, 3, pos, away, false);
+                        self.fx(pal, Kind::Point, 3, pos, away, false);
                     }
                 }
                 Event::LobberDestroyed {
@@ -2082,22 +2242,24 @@ impl Play {
                         self.sounds.push(SOUND_DEPOT_DESTROYED);
                     }
                     if effects {
-                        self.effects.start(Kind::Sprite, 5, pos, 0.0, false);
-                        self.effects.start(
+                        self.fx(pal, Kind::Sprite, 5, pos, 0.0, false);
+                        self.fx(
+                            pal,
                             Kind::Ring,
                             3,
                             pos + vec2(LOBBER_RING_SPREAD, 0.0),
                             0.0,
                             false,
                         );
-                        self.effects.start(
+                        self.fx(
+                            pal,
                             Kind::Ring,
                             3,
                             pos - vec2(LOBBER_RING_SPREAD, 0.0),
                             0.0,
                             false,
                         );
-                        self.effects.start(Kind::Point, 5, pos, 0.0, false);
+                        self.fx(pal, Kind::Point, 5, pos, 0.0, false);
                     }
                     self.score += (points * self.multiplier) as u64;
                     self.pickups
@@ -2116,11 +2278,10 @@ impl Play {
                     if effects {
                         let a = rand::gen_range(0.0, 360.0);
                         for k in 0..4 {
-                            self.effects
-                                .start(Kind::Line, 6, pos, a + 90.0 * k as f32, false);
+                            self.fx(pal, Kind::Line, 6, pos, a + 90.0 * k as f32, false);
                         }
-                        self.effects.start(Kind::Point, 6, pos, 0.0, false);
-                        self.effects.start(Kind::Sprite, 1, pos, 0.0, false);
+                        self.fx(pal, Kind::Point, 6, pos, 0.0, false);
+                        self.fx(pal, Kind::Sprite, 1, pos, 0.0, false);
                     }
                     self.score += (points * self.multiplier) as u64;
                     self.pickups
@@ -2137,9 +2298,9 @@ impl Play {
                         self.sounds.push(SOUND_DEPOT_DESTROYED);
                     }
                     if effects {
-                        self.effects.start(Kind::Sprite, 3, pos, 0.0, false);
-                        self.effects.start(Kind::Line, 4, pos, 0.0, false);
-                        self.effects.start(Kind::Point, 4, pos, 0.0, false);
+                        self.fx(pal, Kind::Sprite, 3, pos, 0.0, false);
+                        self.fx(pal, Kind::Line, 4, pos, 0.0, false);
+                        self.fx(pal, Kind::Point, 4, pos, 0.0, false);
                     }
                     self.score += (points * self.multiplier) as u64;
                     self.pickups
@@ -2157,9 +2318,9 @@ impl Play {
                     }
                     if effects {
                         let away = self.towards_ship(pos) + 180.0;
-                        self.effects.start(Kind::Diamond, 4, pos, away, false);
-                        self.effects.start(Kind::Sprite, 4, pos, 0.0, false);
-                        self.effects.start(Kind::Point, 18, pos, 0.0, false);
+                        self.fx(pal, Kind::Diamond, 4, pos, away, false);
+                        self.fx(pal, Kind::Sprite, 4, pos, 0.0, false);
+                        self.fx(pal, Kind::Point, 18, pos, 0.0, false);
                     }
                     self.score += (points * self.multiplier) as u64;
                     self.pickups
@@ -2169,8 +2330,7 @@ impl Play {
                     if sound {
                         self.sounds.push(SOUND_DEPOT_DESTROYED);
                     }
-                    self.effects
-                        .start(Kind::Point, 7, pos, rand::gen_range(0.0, 360.0), false);
+                    self.fx(pal, Kind::Point, 7, pos, rand::gen_range(0.0, 360.0), false);
                     self.score += (points * self.multiplier) as u64;
                 }
                 Event::SnakeDestroyed {
@@ -2185,12 +2345,11 @@ impl Play {
                     }
                     if effects {
                         let a = rand::gen_range(0.0, 360.0);
-                        self.effects.start(Kind::Sprite, 7, pos, 0.0, false);
+                        self.fx(pal, Kind::Sprite, 7, pos, 0.0, false);
                         for k in 0..4 {
-                            self.effects
-                                .start(Kind::Line, 7, pos, a + 90.0 * k as f32, false);
+                            self.fx(pal, Kind::Line, 7, pos, a + 90.0 * k as f32, false);
                         }
-                        self.effects.start(Kind::Point, 7, pos, a, false);
+                        self.fx(pal, Kind::Point, 7, pos, a, false);
                     }
                     self.score += (points * self.multiplier) as u64;
                     self.pickups
@@ -2208,10 +2367,10 @@ impl Play {
                     }
                     if effects {
                         let a = rand::gen_range(0.0, 360.0);
-                        self.effects.start(Kind::Line, 5, pos, a, false);
-                        self.effects.start(Kind::Line, 5, pos, a + 180.0, false);
-                        self.effects.start(Kind::Ring, 0, pos, 0.0, false);
-                        self.effects.start(Kind::Sprite, 1, pos, 0.0, false);
+                        self.fx(pal, Kind::Line, 5, pos, a, false);
+                        self.fx(pal, Kind::Line, 5, pos, a + 180.0, false);
+                        self.fx(pal, Kind::Ring, 0, pos, 0.0, false);
+                        self.fx(pal, Kind::Sprite, 1, pos, 0.0, false);
                     }
                     self.score += (points * self.multiplier) as u64;
                     self.pickups
@@ -2229,10 +2388,10 @@ impl Play {
                     }
                     if effects {
                         let away = self.towards_ship(pos) + 180.0;
-                        self.effects.start(Kind::Ring, 2, pos, 0.0, false);
-                        self.effects.start(Kind::Sprite, 1, pos, 0.0, false);
-                        self.effects.start(Kind::Point, 3, pos, away, false);
-                        self.effects.start(Kind::Diamond, 3, pos, away, false);
+                        self.fx(pal, Kind::Ring, 2, pos, 0.0, false);
+                        self.fx(pal, Kind::Sprite, 1, pos, 0.0, false);
+                        self.fx(pal, Kind::Point, 3, pos, away, false);
+                        self.fx(pal, Kind::Diamond, 3, pos, away, false);
                     }
                     self.score += (points * self.multiplier) as u64;
                     self.pickups
@@ -2242,11 +2401,11 @@ impl Play {
                     // BossInside::setState(10006): a charge-up that follows the core.
                     self.camera.shake(0.75, 7.5);
                     self.sounds.push(SOUND_BOSS_DYING);
-                    let id = self.effects.start(Kind::Line, 10, pos, 0.0, true);
+                    let id = self.fx(pal, Kind::Line, 10, pos, 0.0, true);
                     if let Some(b) = &mut self.field.boss {
                         b.death_effect = id;
                     }
-                    self.effects.start(Kind::Point, 17, pos, 0.0, false);
+                    self.fx(pal, Kind::Point, 17, pos, 0.0, false);
                     self.effects.flash(Color::new(0.8, 0.8, 0.8, 1.0));
                 }
                 Event::BossDead { pos, points } => {
@@ -2256,10 +2415,10 @@ impl Play {
                     self.sounds.push(SOUND_BOSS_DEAD);
                     self.camera.shake(0.75, 7.5);
                     self.effects.flash(Color::new(0.8, 0.8, 0.8, 1.0));
-                    self.effects.start(Kind::Ring, 6, pos, 0.0, false);
-                    self.effects.start(Kind::Line, 8, pos, 0.0, false);
-                    self.effects.start(Kind::Point, 9, pos, 0.0, false);
-                    self.effects.start(Kind::Point, 9, pos, 180.0, false);
+                    self.fx(pal, Kind::Ring, 6, pos, 0.0, false);
+                    self.fx(pal, Kind::Line, 8, pos, 0.0, false);
+                    self.fx(pal, Kind::Point, 9, pos, 0.0, false);
+                    self.fx(pal, Kind::Point, 9, pos, 180.0, false);
                     self.score += (points * self.multiplier) as u64;
                     self.pickups
                         .drop(pos, BOSS_RING_SPEED, BOSS_RINGS, self.magnet > 0.0);
@@ -2279,15 +2438,14 @@ impl Play {
                     if effects {
                         let a = rand::gen_range(0.0, 360.0);
                         for k in 0..4 {
-                            self.effects
-                                .start(Kind::Line, 9, pos, a + 90.0 * k as f32, false);
+                            self.fx(pal, Kind::Line, 9, pos, a + 90.0 * k as f32, false);
                         }
-                        self.effects.start(Kind::Sprite, 9, pos, 0.0, false);
+                        self.fx(pal, Kind::Sprite, 9, pos, 0.0, false);
                     }
                 }
                 Event::DepotDestroyed { pos, points } => {
                     self.sounds.push(SOUND_DEPOT_DESTROYED);
-                    self.effects.start(Kind::Point, 17, pos, 0.0, false);
+                    self.fx(pal, Kind::Point, 17, pos, 0.0, false);
                     self.score += (points * self.multiplier) as u64;
                     let power = self.choose_power();
                     self.pickups.drop_power(pos, power);
@@ -3174,6 +3332,9 @@ impl Play {
             if self.fx {
                 self.draw_shield_rim(canvas, assets);
             }
+        }
+        if self.formation {
+            self.gas.draw(self.z, |p| self.to_screen(p));
         }
         let soft = self.fx.then_some(&assets.soft_dot);
         self.effects
