@@ -26,7 +26,7 @@
 3. **Ship** — movement, dash/boost, plasma/flame/ice/gravity, bombs, heat, upgrades.
 4. **Meteors** — kinds (rock/ice/fire), weakness matrix, shatter into persistent chunks, ore.
 5. **Enemies** — drones, turrets, slingers, bosses.
-6. **Levels** — 6 worlds x 5 stages, wave director, survival mode. Done: Options > Vibration; macOS Core Haptics, gilrs force feedback, the web's dual-rumble.
+6. **Levels** — 6 worlds x 5 stages, wave director, survival mode.
 7. **HUD** — modern minimal HUD, radar, stage select using original UI art.
 8. **Audio** — slice the original SFX sequence, music track, reactive layers.
 9. **Desktop/web** — macOS app, Windows build on `xamd4090`, WASM web build.
@@ -41,7 +41,7 @@ In order, one commit each (signing/notarization and an online leaderboard are ou
 3. Accessibility: reduce flashes (full-screen flashes, shockwaves), colourblind-safe tints for fire/ice and indicators.
 4. Quick restart from the pause menu; replay any cleared stage from stage select.
 5. Controller button icons (Xbox and PlayStation) in prompts and on the Controls page. Done: Xbox, PlayStation and Nintendo styles, Auto by the connected pad.
-6. Rumble on bombs, hits, deaths and boss kills.
+6. Rumble on bombs, hits, deaths and boss kills. Done: Options > Vibration; macOS Core Haptics, gilrs force feedback, the web's dual-rumble.
 7. Local stats page and achievements.
 8. Touch controls for the web build (twin sticks, bomb, boost).
 9. Linux package (and Steam Deck check).
