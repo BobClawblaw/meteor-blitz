@@ -161,7 +161,12 @@ impl Settings {
             // First launch: NSUserDefaults starts from the defaults and keeps
             // them, so persist them once here.
             Err(_) => {
-                let settings = Settings::default();
+                // Port addition: on a Steam Deck (Steam sets SteamDeck=1)
+                // the first launch starts fullscreen at the panel's size.
+                let settings = Settings {
+                    fullscreen: std::env::var("SteamDeck").is_ok_and(|v| v == "1"),
+                    ..Settings::default()
+                };
                 settings.save();
                 settings
             }

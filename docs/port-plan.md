@@ -44,7 +44,7 @@ In order, one commit each (signing/notarization and an online leaderboard are ou
 6. Rumble on bombs, hits, deaths and boss kills. Done: Options > Vibration; macOS Core Haptics, gilrs force feedback, the web's dual-rumble.
 7. Local stats page and achievements. Done: lifetime stats (`stats.txt`) and 23 achievements on a Stats & achievements page from the main menu, with unlock toasts in play.
 8. Touch controls for the web build (twin sticks, bomb, boost). Done: floating sticks on the original wheel art, bomb and boost buttons placed by the original Boost/Bomb settings.
-9. Linux package (and Steam Deck check).
+9. Linux package (and Steam Deck check). Done: `tools/package-linux.sh` (Debian 11 container, glibc 2.30), Steam Deck defaults; checked under Xvfb at 1280x800, not yet on a Deck.
 
 ## Performance
 

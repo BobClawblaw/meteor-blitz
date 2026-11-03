@@ -198,6 +198,8 @@ fn window_conf() -> Conf {
         Some((w.parse().ok()?, h.parse().ok()?))
     }) {
         Some((w, h)) => (w, h, false),
+        // A Steam Deck's panel is 1280x800 (Steam sets SteamDeck=1 there).
+        None if std::env::var("SteamDeck").is_ok_and(|v| v == "1") => (1280, 800, true),
         None => (1280, 720, true),
     };
     Conf {
