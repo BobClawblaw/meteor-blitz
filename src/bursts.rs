@@ -429,8 +429,12 @@ impl Bursts {
                 let alpha = p.alpha * 0.75 * (1.0 - u).powf(1.5);
                 batch.puff(to_screen(p.pos), radius, colour(heat, alpha));
             } else {
+                // The tail is placed from the head, not mapped on its own:
+                // `to_screen` wraps each point to the copy of the world
+                // nearest the view, and a spark on the wrap seam then had its
+                // ends a world apart, a line across the whole screen.
                 let head = to_screen(p.pos);
-                let tail = to_screen(p.pos - p.vel * STREAK_TIME);
+                let tail = head - p.vel * STREAK_TIME;
                 let half = p.size.0.max(pixel * 0.75);
                 let alpha = p.alpha * (1.0 - u) * p.size.0 / half;
                 batch.streak(tail, head, half, colour(heat, alpha));
