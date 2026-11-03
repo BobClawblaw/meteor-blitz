@@ -1,8 +1,8 @@
 # Meteor Blitz — a modern port
 
-A love letter to Alley Labs' *Meteor Blitz* (iOS, 2009), given away freely and remade in Rust through AI-assisted reverse engineering. The game logic, tuning, waves and bosses are translated from the decompiled ARMv6 binary of the original 1.4 release, and the art, music and sound come from its app bundle. On top of that faithful core, the presentation is rebuilt for today's machines: widescreen, high refresh rates, dynamic lighting, post-processing and rebindable controls. One Rust + macroquad codebase runs on macOS, Windows and the web (WASM).
+A love letter to Alley Labs' *Meteor Blitz* (iOS, 2009), given away freely and remade in Rust through AI-assisted reverse engineering. The game logic, tuning, waves and bosses are translated from the decompiled ARMv6 binary of the original 1.4 release, and the art, music and sound come from its app bundle. On top of that faithful core, the presentation is rebuilt for today's machines: widescreen, high refresh rates, dynamic lighting, post-processing and rebindable controls. One Rust + macroquad codebase runs on macOS, Windows, Linux (including the Steam Deck) and the web (WASM).
 
-**Play it in your browser: https://bobclawblaw.github.io/meteor-blitz/** (keyboard, mouse or a game controller), or download the macOS and Windows builds from [Releases](https://github.com/BobClawblaw/meteor-blitz/releases).
+**Play it in your browser: https://bobclawblaw.github.io/meteor-blitz/** (keyboard, mouse, a game controller, or touch on a phone or tablet), or download the macOS, Windows and Linux builds from [Releases](https://github.com/BobClawblaw/meteor-blitz/releases).
 
 ![Gameplay](screenshots/gameplay.png)
 
@@ -66,13 +66,13 @@ python3 tools/upscale8x.py --only all   # from the 4x set and the originals
 bash tools/optimize-png.sh   # lossless recompression, last (needs oxipng)
 ```
 
-Release packages (self-contained: the game data travels with the executable; saves go to `~/Library/Application Support/Meteor Blitz` or `%APPDATA%\Meteor Blitz`):
+Release packages (self-contained: the game data travels with the executable; saves go to `~/Library/Application Support/Meteor Blitz`, `%APPDATA%\Meteor Blitz` or `~/.local/share/meteor-blitz`):
 
 ```bash
 bash tools/package-macos.sh
 ```
 
-That builds a universal (Apple Silicon + Intel) `dist/Meteor Blitz.app` and `dist/MeteorBlitz-<version>-macos.dmg`. `tools/make-app.sh` builds the same app for this Mac only (GameController routes controller input to app bundles). On Windows, `tools\package-windows.ps1` builds `dist\MeteorBlitz-<version>-windows.zip`.
+That builds a universal (Apple Silicon + Intel) `dist/Meteor Blitz.app` and `dist/MeteorBlitz-<version>-macos.dmg`. `tools/make-app.sh` builds the same app for this Mac only (GameController routes controller input to app bundles). On Windows, `tools\package-windows.ps1` builds `dist\MeteorBlitz-<version>-windows.zip`. `tools/package-linux.sh` builds `dist/MeteorBlitz-<version>-linux-x86_64.tar.gz` in a Debian 11 container (needs Docker), for distributions with glibc 2.30 or later and SteamOS.
 
 The web build is published with GitHub Pages from the repo root (`index.html`, `web/`, and the art and audio it loads; `.nojekyll` keeps Pages from processing the files). In the browser it uses the original-resolution art, keeps settings and scores for the session only, and reads controllers through the Gamepad API (press a button once the page has focus).
 
