@@ -34,7 +34,7 @@
 
 ## Modern-port additions (2026-11-02)
 
-In order, one commit each (signing/notarization and an online leaderboard are out of scope):
+In order, one commit each. Out of scope (decided 2026-11-03): macOS notarization and Windows code signing (no developer account; the apps stay ad hoc signed), and an online leaderboard (the Global scores tab stays "offline").
 
 1. Frame rate: 165/240 Hz caps and an uncapped (VSync) choice.
 2. HUD scale option.
