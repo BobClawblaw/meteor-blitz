@@ -30,6 +30,7 @@ mod seeker;
 mod shyguy;
 mod snake;
 mod stats;
+mod touch;
 mod tower;
 mod tutorial;
 mod waves;
@@ -962,6 +963,7 @@ async fn load_play_assets() -> PlayAssets {
         },
         boss_piece: load_sprite("ball").await,
         indicator: load_sprite("indicator").await,
+        wheel: load_sprite("wheelMove.128x128").await,
         depot_label: load_sprite("labelBonus").await,
         power: load_sprite("bigBonus").await,
         power_labels: [
@@ -1268,6 +1270,16 @@ async fn main() {
         let dt = get_frame_time().min(0.05);
         let t0 = get_time();
         pad::poll();
+        // Touch sticks and buttons work while a game runs unpaused, laid
+        // out by the settings page's Boost and Bomb options.
+        let playing = matches!(screen, Screen::Game) && pause.is_none() && game.is_some();
+        touch::poll(
+            dt,
+            playing.then_some(touch::Layout {
+                boost: settings.boost_control,
+                bomb: settings.bomb_button,
+            }),
+        );
         // MB_ICONS=<0-3> overrides Options > Button icons for captures.
         icons::set_setting(icons_override.unwrap_or(settings.button_icons));
         // F11 or Alt+Enter toggles fullscreen, remembered across launches.
@@ -1683,6 +1695,10 @@ async fn main() {
             Screen::Game => {
                 if let Some(g) = game.as_ref() {
                     g.draw(&canvas, &play_assets);
+                    if pause.is_none() {
+                        let (bombs, boost) = g.touch_ready();
+                        touch::draw(&play_assets.wheel, &play_assets.hud.font, bombs, boost);
+                    }
                     if let Some(p) = pause.as_ref() {
                         p.draw(&canvas, &pause_assets, g, &settings);
                     }

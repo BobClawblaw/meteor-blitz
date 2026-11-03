@@ -132,12 +132,48 @@ try {
   }
   await send("Page.navigate", { url });
   await sleep(waitMs);
+  // TOUCH=1 taps the X,Y points with touch events instead of the mouse.
+  // TOUCH=play then also plays with the touch controls: the left thumb
+  // holds the move stick right and the right thumb aims up and fires; the
+  // shot is taken with both held.
+  const touch = (type, points) => send("Input.dispatchTouchEvent",
+    { type, touchPoints: points.map(([x, y, id]) => ({ x, y, id })) });
+  if (process.env.TOUCH) {
+    await send("Emulation.setTouchEmulationEnabled", { enabled: true, maxTouchPoints: 5 });
+  }
   for (const [cx, cy] of clicks) {
-    for (const type of ["mousePressed", "mouseReleased"]) {
-      await send("Input.dispatchMouseEvent",
-        { type, x: cx, y: cy, button: "left", clickCount: 1 });
+    if (process.env.TOUCH) {
+      await touch("touchStart", [[cx, cy, 9]]);
+      await sleep(60);
+      await touch("touchEnd", []);
+    } else {
+      for (const type of ["mousePressed", "mouseReleased"]) {
+        await send("Input.dispatchMouseEvent",
+          { type, x: cx, y: cy, button: "left", clickCount: 1 });
+      }
     }
     await sleep(2500);
+  }
+  let held = [];
+  if (process.env.TOUCH === "play") {
+    const w = width || 1280, h = height || 720;
+    const move = [w * 0.15, h * 0.75, 1], aim = [w * 0.8, h * 0.75, 2];
+    await touch("touchStart", [move]);
+    await touch("touchStart", [move, aim]);
+    for (let i = 1; i <= 10; i++) {
+      held = [[move[0] + i * w * 0.006, move[1], 1], [aim[0], aim[1] - i * h * 0.012, 2]];
+      await touch("touchMove", held);
+      await sleep(30);
+    }
+    await sleep(Number(process.env.TOUCH_HOLD ?? 3000));
+    // TOUCH_TAP=X,Y taps there with a third finger while both are held.
+    if (process.env.TOUCH_TAP) {
+      const [tx, ty] = process.env.TOUCH_TAP.split(",").map(Number);
+      await touch("touchStart", [...held, [tx, ty, 3]]);
+      await sleep(80);
+      await touch("touchMove", held);
+      await sleep(400);
+    }
   }
   // KEYS=Enter,Escape,... presses those keys in order, 2.5 s apart, after
   // the clicks (key names as in KeyboardEvent.key).
@@ -162,6 +198,7 @@ try {
 
   const shot = await send("Page.captureScreenshot", { format: "png", fromSurface: true });
   writeFileSync(out, Buffer.from(shot.data, "base64"));
+  if (held.length) await touch("touchEnd", []);
   console.log("wrote", out);
   ws.close();
 } finally {

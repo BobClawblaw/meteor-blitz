@@ -43,7 +43,7 @@ In order, one commit each (signing/notarization and an online leaderboard are ou
 5. Controller button icons (Xbox and PlayStation) in prompts and on the Controls page. Done: Xbox, PlayStation and Nintendo styles, Auto by the connected pad.
 6. Rumble on bombs, hits, deaths and boss kills. Done: Options > Vibration; macOS Core Haptics, gilrs force feedback, the web's dual-rumble.
 7. Local stats page and achievements. Done: lifetime stats (`stats.txt`) and 23 achievements on a Stats & achievements page from the main menu, with unlock toasts in play.
-8. Touch controls for the web build (twin sticks, bomb, boost).
+8. Touch controls for the web build (twin sticks, bomb, boost). Done: floating sticks on the original wheel art, bomb and boost buttons placed by the original Boost/Bomb settings.
 9. Linux package (and Steam Deck check).
 
 ## Performance

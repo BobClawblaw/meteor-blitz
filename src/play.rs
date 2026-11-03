@@ -25,6 +25,7 @@ use crate::gravity;
 use crate::hud::{self, HudAssets, HudValues, Show};
 use crate::pad;
 use crate::particles::{Effects, Kind};
+use crate::touch;
 use crate::tower;
 use crate::tutorial::{self, Spawn, Tutorial};
 use crate::weapons::{self, FireGun, LaserGun};
@@ -245,6 +246,8 @@ pub struct PlayAssets {
     pub boss_piece: Texture2D,
     /// indicator.png: the chevron pointing at enemies off screen.
     pub indicator: Texture2D,
+    /// wheelMove.png: the original's control wheel, drawn for touch sticks.
+    pub wheel: Texture2D,
     /// depot.png's "BONUS" label.
     pub depot_label: Texture2D,
     /// bigBonus.png: five 16x16 power-up icons.
@@ -2615,7 +2618,11 @@ impl Play {
         // A controller's left stick is the original's left wheel: speed
         // follows how far it is pushed.
         // MB_DRIFT=x,y holds the stick there, for screenshot runs.
-        let pad_stick = self.drift.unwrap_or_else(pad::left);
+        // Touch's move stick works the same way.
+        let pad_stick = self.drift.unwrap_or_else(|| {
+            let t = touch::left();
+            if t != Vec2::ZERO { t } else { pad::left() }
+        });
         // Tutorial::canUse*: each control works once its step is reached,
         // and Tutorial::using* counts the uses a step waits for.
         let (stick, pad_stick) = if self.allowed(Tutorial::can_move) {
@@ -2648,7 +2655,7 @@ impl Play {
         let auto_bomb = self
             .auto_bomb
             .is_some_and(|t| self.elapsed >= t && self.elapsed - dt < t);
-        let bomb = auto_bomb || bindings::pressed(Action::Bomb);
+        let bomb = touch::take_bomb() | auto_bomb | bindings::pressed(Action::Bomb);
         if bomb && self.allowed(Tutorial::can_bomb) {
             self.bomb();
             if let Some(t) = &mut self.tutorial {
@@ -2659,7 +2666,7 @@ impl Play {
         let auto_boost = self
             .auto_boost
             .is_some_and(|t| self.elapsed >= t && self.elapsed - dt < t);
-        let boost = auto_boost || bindings::pressed(Action::Boost);
+        let boost = touch::take_boost() | auto_boost | bindings::pressed(Action::Boost);
         if boost && self.ship.can_boost() && self.allowed(Tutorial::can_boost) {
             self.ship.boost(dt);
             self.camera.shake(0.75, 7.5);
@@ -2697,7 +2704,14 @@ impl Play {
                     self.release_gun();
                 }
             }
-        } else if can_fire && bindings::key_down(Action::Fire) {
+        } else if let Some(dir) = touch::aim().filter(|_| can_fire) {
+            // Touch's aim stick fires while pushed; a double tap on it
+            // reaches out with the gun and lifting the thumb throws.
+            self.ship.shoot(dt, dir);
+            if touch::take_gun() {
+                self.activate_gun();
+            }
+        } else if can_fire && bindings::key_down(Action::Fire) && !touch::shown() {
             // Keyboard and mouse fire toward the cursor.
             let dir = (self.mouse() - self.to_screen(self.view_ship())).normalize_or_zero();
             if dir != Vec2::ZERO {
@@ -2738,6 +2752,11 @@ impl Play {
             }
         }
         self.since_press += dt;
+    }
+
+    /// Whether a bomb and a boost are available, for the touch buttons.
+    pub fn touch_ready(&self) -> (bool, bool) {
+        (self.bombs > 0, self.ship.can_boost())
     }
 
     /// GravityGun::activate, once the tutorial allows it.

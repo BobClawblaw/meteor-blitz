@@ -883,9 +883,14 @@ impl Canvas {
     /// Mouse position in canvas coordinates (x runs past 0..480 in a wide
     /// view).
     pub fn mouse() -> Vec2 {
-        let r = Canvas::placement();
         let (mx, my) = mouse_position();
-        vec2((mx - r.x) / r.w * view_w() - edge(), (my - r.y) / r.h * CANVAS_H)
+        Canvas::to_canvas(vec2(mx, my))
+    }
+
+    /// A window position (mouse or touch, in pixels) in canvas coordinates.
+    pub fn to_canvas(p: Vec2) -> Vec2 {
+        let r = Canvas::placement();
+        vec2((p.x - r.x) / r.w * view_w() - edge(), (p.y - r.y) / r.h * CANVAS_H)
     }
 
     /// Starts a frame: follows the window's aspect and size, then targets
