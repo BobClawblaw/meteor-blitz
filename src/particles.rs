@@ -202,6 +202,8 @@ struct Running {
     frame: usize,
     /// Handle for effects that follow something (LineSystem pointers).
     id: u64,
+    /// Runs for its timing only and is not drawn (`start_hidden`).
+    hidden: bool,
 }
 
 pub struct Effects {
@@ -278,11 +280,23 @@ impl Effects {
             reverse,
             frame: 0,
             id,
+            hidden: false,
         };
         if running.len() < info.pool {
             running.push(effect);
         } else if let Some(oldest) = running.iter_mut().max_by_key(|e| e.frame) {
             *oldest = effect;
+        }
+        id
+    }
+
+    /// Starts an effect that is never drawn, for what waits on its length
+    /// (the boss's death charge-up when the physics particle style replaces
+    /// the original effects).
+    pub fn start_hidden(&mut self, kind: Kind, set: usize, pos: Vec2, angle: f32, reverse: bool) -> u64 {
+        let id = self.start(kind, set, pos, angle, reverse);
+        if let Some(e) = self.find(id) {
+            e.hidden = true;
         }
         id
     }
@@ -369,7 +383,7 @@ impl Effects {
             let mut one_verts: Vec<Vertex> = Vec::new();
             let mut one_indices: Vec<u16> = Vec::new();
             for running in &self.running[m] {
-                for e in running {
+                for e in running.iter().filter(|e| !e.hidden) {
                     let anim = &self.sets[m].1[e.set].variants[e.variant];
                     let origin = to_screen(e.pos);
                     let (s, c) = e.angle.to_radians().sin_cos();

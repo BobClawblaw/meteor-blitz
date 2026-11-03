@@ -2554,7 +2554,13 @@ impl Play {
                     self.camera.shake(0.75, 7.5);
                     self.sounds.push(SOUND_BOSS_DYING);
                     self.rumbles.push(RUMBLE_BOSS_DYING);
-                    let id = self.fx(Kind::Line, 10, pos, 0.0, true);
+                    // Its length times the death, so it runs (unseen) in the
+                    // physics style too; without it the boss never died.
+                    let id = if self.physics_particles {
+                        self.effects.start_hidden(Kind::Line, 10, pos, 0.0, true)
+                    } else {
+                        self.effects.start(Kind::Line, 10, pos, 0.0, true)
+                    };
                     if let Some(b) = &mut self.field.boss {
                         b.death_effect = id;
                     }
