@@ -106,6 +106,34 @@ thread_local! {
     static ADDITIVE: std::cell::OnceCell<Material> = const { std::cell::OnceCell::new() };
 }
 
+thread_local! {
+    /// The debris chip sprite, built on first use.
+    static CHIP: std::cell::OnceCell<Texture2D> = const { std::cell::OnceCell::new() };
+}
+
+/// A white square whose edges fade over the outer eighth, so a chip's
+/// outline is antialiased and a chip a pixel or two across draws as a soft
+/// fleck instead of snapping to pixel rows and columns.
+fn chip_texture() -> Texture2D {
+    CHIP.with(|t| {
+        t.get_or_init(|| {
+            const N: u16 = 32;
+            let mut bytes = Vec::with_capacity(N as usize * N as usize * 4);
+            for y in 0..N {
+                for x in 0..N {
+                    let edge = |i: u16| (i.min(N - 1 - i) as f32 + 0.5) / (N as f32 / 8.0);
+                    let a = edge(x).min(edge(y)).min(1.0);
+                    bytes.extend_from_slice(&[255, 255, 255, (a * a * (3.0 - 2.0 * a) * 255.0) as u8]);
+                }
+            }
+            let tex = Texture2D::from_rgba8(N, N, &bytes);
+            tex.set_filter(FilterMode::Linear);
+            tex
+        })
+        .clone()
+    })
+}
+
 fn additive() -> Material {
     ADDITIVE.with(|m| {
         m.get_or_init(|| {
@@ -359,10 +387,13 @@ impl Bursts {
     }
 
     /// Draws everything at depth `z`, `to_screen` mapping world positions
-    /// to the canvas and `dot` the soft round sprite: smoke and debris
-    /// blended, then fire and sparks added over them and handed to the
-    /// bloom.
-    pub fn draw(&self, canvas: &Canvas, z: f32, to_screen: impl Fn(Vec2) -> Vec2, dot: &Texture2D) {
+    /// to the canvas, `dot` the soft round sprite and `pixel` the size of a
+    /// screen pixel in canvas units: smoke and debris blended, then fire and
+    /// sparks added over them and handed to the bloom. Chips and sparks
+    /// thinner than a pixel draw a pixel wide and fade by what they would
+    /// cover, so at low resolutions (the web build) they do not alias into
+    /// broken horizontal and vertical slivers.
+    pub fn draw(&self, canvas: &Canvas, z: f32, to_screen: impl Fn(Vec2) -> Vec2, dot: &Texture2D, pixel: f32) {
         if self.parts.is_empty() {
             return;
         }
@@ -377,13 +408,16 @@ impl Bursts {
             batch.flush_if_full(Some(dot), None);
         }
         batch.flush(Some(dot), None);
+        let chip = chip_texture();
         for p in self.parts.iter().filter(|p| p.kind == Kind::Debris) {
             let u = p.age / p.life;
-            let alpha = (1.0 - u * u * u).clamp(0.0, 1.0);
-            batch.chip(to_screen(p.pos), p.size, p.angle, colour(p.colour, alpha));
-            batch.flush_if_full(None, None);
+            let size = (p.size.0.max(pixel), p.size.1.max(pixel));
+            let cover = (p.size.0 * p.size.1) / (size.0 * size.1);
+            let alpha = (1.0 - u * u * u).clamp(0.0, 1.0) * cover;
+            batch.chip(to_screen(p.pos), size, p.angle, colour(p.colour, alpha));
+            batch.flush_if_full(Some(&chip), None);
         }
-        batch.flush(None, None);
+        batch.flush(Some(&chip), None);
         gl_use_material(&additive());
         for p in self.parts.iter().filter(|p| matches!(p.kind, Kind::Fire | Kind::Spark)) {
             let u = p.age / p.life;
@@ -397,8 +431,9 @@ impl Bursts {
             } else {
                 let head = to_screen(p.pos);
                 let tail = to_screen(p.pos - p.vel * STREAK_TIME);
-                let alpha = p.alpha * (1.0 - u);
-                batch.streak(tail, head, p.size.0, colour(heat, alpha));
+                let half = p.size.0.max(pixel * 0.75);
+                let alpha = p.alpha * (1.0 - u) * p.size.0 / half;
+                batch.streak(tail, head, half, colour(heat, alpha));
             }
             batch.flush_if_full(Some(dot), Some(canvas));
         }

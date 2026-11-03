@@ -3486,7 +3486,9 @@ impl Play {
             }
         }
         if self.physics_particles {
-            self.gas.draw(canvas, self.z, |p| self.to_screen(p), &assets.soft_dot);
+            // One screen pixel on the play plane, in canvas units.
+            let pixel = self.zoom / crate::gfx::pixel_scale().max(0.5);
+            self.gas.draw(canvas, self.z, |p| self.to_screen(p), &assets.soft_dot, pixel);
         }
         let soft = self.fx.then_some(&assets.soft_dot);
         self.effects
