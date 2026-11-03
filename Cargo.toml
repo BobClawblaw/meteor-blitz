@@ -22,3 +22,8 @@ gilrs = { version = "0.11.2", default-features = false, features = ["xinput"] }
 objc2 = "0.6.5"
 objc2-foundation = { version = "0.3.2", features = ["NSArray", "NSString"] }
 objc2-game-controller = { version = "0.3.2", features = ["GCController", "GCExtendedGamepad", "GCPhysicalInputProfile", "GCControllerElement", "GCControllerButtonInput", "GCControllerAxisInput", "GCControllerDirectionPad", "GCDevice", "GCDeviceHaptics"] }
+
+# quad-snd 0.2.8 with a peak limiter on the mix (vendor/quad-snd/src/limiter.rs):
+# upstream adds sounds with no headroom and the backends hard-clip the sum.
+[patch.crates-io]
+quad-snd = { path = "vendor/quad-snd" }

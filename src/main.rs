@@ -51,7 +51,7 @@ use menu::{MenuAssets, MenuBackdrop, MenuButton, MenuScreen};
 use name_entry::NameEntry;
 use options::{Options, Outcome as OptionsOutcome, Page as OptionsPage};
 use pause::{Action, Page, Pause, PauseAssets, Settings};
-use play::{Play, PlayAssets, RockArt, UPGRADES};
+use play::{Play, PlayAssets, RockArt, SOUND_ROCK, UPGRADES};
 use progress::Progress;
 use tutorial::Tutorial;
 use scores::Scores;
@@ -245,6 +245,12 @@ enum MenuKind {
 const SOUND_COUNT: usize = 17;
 /// Shortest time between two starts of the same effect, in seconds.
 const EFFECT_GAP: f64 = 0.08;
+/// Rock explosions (three sounds, so `EFFECT_GAP` lets all three overlap)
+/// sounding at once at most; more are dropped, so a bomb on a full field
+/// stays an explosion instead of a wall of noise. `ROCK_VOICE_TIME` is the
+/// longest of them (sound_12, 0.63 s).
+const ROCK_VOICES: usize = 3;
+const ROCK_VOICE_TIME: f64 = 0.63;
 /// Audio::play id for button presses.
 const SOUND_BUTTON: usize = 9;
 
@@ -1102,12 +1108,24 @@ async fn main() {
     // into one very loud sound.
     let last_played: Vec<std::cell::Cell<f64>> =
         (0..=SOUND_COUNT).map(|_| std::cell::Cell::new(f64::NEG_INFINITY)).collect();
+    // When each sounding rock explosion ends.
+    let rock_voices = std::cell::RefCell::new(Vec::<f64>::new());
     let play_effect = |id: usize, volume: f32| {
         let now = get_time();
         if let Some(last) = last_played.get(id) {
             if now - last.get() < EFFECT_GAP {
                 return;
             }
+        }
+        if SOUND_ROCK.contains(&id) {
+            let mut voices = rock_voices.borrow_mut();
+            voices.retain(|&end| end > now);
+            if voices.len() >= ROCK_VOICES {
+                return;
+            }
+            voices.push(now + ROCK_VOICE_TIME);
+        }
+        if let Some(last) = last_played.get(id) {
             last.set(now);
         }
         if let Some(Some(sound)) = sounds.get(id) {

@@ -28,6 +28,42 @@
     </div>
     <script src="./web/mq_js_bundle.js"></script>
     <script>
+      // Web Audio adds every playing sound together and clips the sum, so
+      // stacked explosions crackled. Everything bound for a context's output
+      // goes through one limiter first (the desktop builds limit in the
+      // mixer, vendor/quad-snd/src/limiter.rs): a 20:1 compressor above
+      // -3 dBFS, a trim that cancels the make-up gain the Web Audio
+      // compressor adds (the spec's 0.6 x the 2.85 dB it takes off a
+      // full-scale signal: 1.71 dB, so audio under the threshold plays at its
+      // own level), and a shaper that is linear to 0.9 and rounds anything the
+      // compressor's attack lets through off below 1.0.
+      (() => {
+        const connect = AudioNode.prototype.connect;
+        const limiters = new WeakMap();
+        const shoulder = new Float32Array(4097);
+        for (let i = 0; i < shoulder.length; i++) {
+          const x = (i / (shoulder.length - 1)) * 2 - 1, a = Math.abs(x);
+          shoulder[i] = Math.sign(x) * (a <= 0.9 ? a : 0.9 + 0.1 * Math.tanh((a - 0.9) / 0.1));
+        }
+        AudioNode.prototype.connect = function (target, ...rest) {
+          if (target instanceof AudioDestinationNode && !(this instanceof WaveShaperNode)) {
+            let limiter = limiters.get(target);
+            if (!limiter) {
+              const ctx = target.context;
+              limiter = new DynamicsCompressorNode(ctx, { threshold: -3, knee: 0, ratio: 20, attack: 0.002, release: 0.08 });
+              const trim = new GainNode(ctx, { gain: Math.pow(10, -1.71 / 20) });
+              const shape = new WaveShaperNode(ctx, { curve: shoulder });
+              connect.call(limiter, trim);
+              connect.call(trim, shape);
+              connect.call(shape, target);
+              limiters.set(target, limiter);
+            }
+            target = limiter;
+          }
+          return connect.call(this, target, ...rest);
+        };
+      })();
+
       // miniquad reads keys from canvas.onkeydown, so the canvas must hold focus.
       const gameCanvas = document.getElementById("glcanvas");
       gameCanvas.focus();
