@@ -2172,6 +2172,11 @@ impl Script {
         self.speed
     }
 
+    /// Survival waves started (0 in arcade).
+    pub fn survival_wave(&self) -> u32 {
+        self.survival.as_ref().map_or(0, |s| s.count.max(0) as u32)
+    }
+
     /// WaveManager::slowDownSurvival: a death, a bomb or a broken shield
     /// eases survival off.
     pub fn slow_down_survival(&mut self) {

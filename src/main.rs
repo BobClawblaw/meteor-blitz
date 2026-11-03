@@ -29,6 +29,7 @@ mod scores;
 mod seeker;
 mod shyguy;
 mod snake;
+mod stats;
 mod tower;
 mod tutorial;
 mod waves;
@@ -53,6 +54,7 @@ use play::{Play, PlayAssets, RockArt, UPGRADES};
 use progress::Progress;
 use tutorial::Tutorial;
 use scores::Scores;
+use stats::{Outcome as StatsOutcome, StageEnd, Stats, StatsScreen, Tab as StatsTab, Toasts};
 
 /// macOS frame pacing for the blocking event loop: a repeating run-loop
 /// timer at the frame-rate cap schedules the next frame and posts an empty
@@ -252,6 +254,8 @@ enum Screen {
     /// `labelEnterName`: asked once a run qualifies for the local table.
     NameEntry(NameEntry),
     Options(Options),
+    /// Stats & achievements (port addition).
+    Stats(StatsScreen),
 }
 
 /// A finished run waiting on the name step before its results popup.
@@ -275,6 +279,7 @@ enum Next {
     Options(OptionsPage),
     /// HELP: the tutorial, then back to the main menu.
     Tutorial,
+    Stats,
 }
 
 /// Menu art by file stem (`assets/ui/<name>.png`).
@@ -449,6 +454,14 @@ fn build_menu(kind: MenuKind, ui: &Ui, progress: &Progress, fade_backdrop: bool)
                     down: ui["github"].clone(),
                     rect: PROJECT_LINK,
                     event: PROJECT_LINK_EVENT,
+                },
+                // Port addition: the stats and achievements link, drawn as
+                // text in the lower left (`draw_stats_link`).
+                MenuButton {
+                    up: ui["blank"].clone(),
+                    down: ui["blank"].clone(),
+                    rect: STATS_LINK,
+                    event: STATS_LINK_EVENT,
                 },
             ],
             fade_backdrop,
@@ -664,6 +677,29 @@ fn draw_version(font: &macroquad::text::Font, alpha: f32) {
     );
 }
 
+/// The main menu's stats and achievements link, lower left (port
+/// addition).
+const STATS_LINK: Rect = Rect { x: 8.0, y: 304.0, w: 118.0, h: 16.0 };
+const STATS_LINK_EVENT: u8 = 5;
+const STATS_LINK_TEXT: &str = "Stats & achievements";
+
+fn draw_stats_link(font: &macroquad::text::Font, alpha: f32) {
+    let k = gfx::pixel_scale().max(1.0);
+    let r = STATS_LINK;
+    draw_text_ex(
+        STATS_LINK_TEXT,
+        r.x + 2.0,
+        r.y + 12.0,
+        TextParams {
+            font: Some(font),
+            font_size: (PROJECT_LINK_TEXT * k).round() as u16,
+            font_scale: 1.0 / k,
+            color: Color::new(0.9, 0.9, 1.0, alpha),
+            ..Default::default()
+        },
+    );
+}
+
 /// Opens the project page in the default browser (not on the web build).
 fn open_project_page() {
     #[cfg(target_os = "macos")]
@@ -690,6 +726,7 @@ fn menu_event(kind: MenuKind, event: u8) -> Option<Next> {
         // HELP plays the tutorial (as the original's did); the controls
         // are under SETTINGS > Controls.
         (MenuKind::Main, 3) => Some(Next::Tutorial),
+        (MenuKind::Main, STATS_LINK_EVENT) => Some(Next::Stats),
         // HIGH SCORES opens the arcade table; its tabs switch to survival.
         (MenuKind::Main, 1) => Some(Next::Menu(MenuKind::ScoresTable(0, false))),
         (MenuKind::ScoresSelect, 0) => Some(Next::Menu(MenuKind::ScoresTable(0, false))),
@@ -1083,6 +1120,14 @@ async fn main() {
     let mut backdrop = MenuBackdrop::new();
     let mut progress = Progress::load();
     let mut scores = Scores::load();
+    let mut stats = Stats::load(progress.unlocked);
+    let mut toasts = Toasts::default();
+    // Stats not yet written, and seconds since they last were.
+    let mut stats_dirty = false;
+    let mut stats_age = 0.0f32;
+    // Closing the window (or Esc on the main menu) writes unsaved stats
+    // before the process ends.
+    prevent_quit();
 
     if settings.fullscreen {
         set_fullscreen(true);
@@ -1121,6 +1166,9 @@ async fn main() {
         game = None;
         if name == "name" {
             screen = Screen::NameEntry(NameEntry::new(22410));
+        } else if name == "stats" || name == "achievements" {
+            let tab = if name == "stats" { StatsTab::Stats } else { StatsTab::Achievements };
+            screen = Screen::Stats(StatsScreen::new(tab));
         } else if name == "options" || name == "controls" || name == "help" {
             let page = if name == "options" { OptionsPage::Main } else { OptionsPage::Controls };
             screen = Screen::Options(Options::new(page));
@@ -1335,8 +1383,21 @@ async fn main() {
                             }
                         }
                         Some(Next::Options(page)) => screen = Screen::Options(Options::new(page)),
+                        Some(Next::Stats) => screen = Screen::Stats(StatsScreen::new(StatsTab::Stats)),
                         None => menu_screen = build_menu(kind, &ui, &progress, false),
                     }
+                }
+            }
+            Screen::Stats(ref mut page) => {
+                backdrop.update(dt);
+                match page.update(dt) {
+                    Some(StatsOutcome::Click) => play_effect(SOUND_BUTTON, settings.effects),
+                    Some(StatsOutcome::Close) => {
+                        play_effect(SOUND_BUTTON, settings.effects);
+                        menu_screen = build_menu(MenuKind::Main, &ui, &progress, false);
+                        screen = Screen::Menu(MenuKind::Main);
+                    }
+                    None => {}
                 }
             }
             Screen::Options(ref mut options) => {
@@ -1466,6 +1527,18 @@ async fn main() {
                             bonus: g.time_bonus(),
                             survival: g.world == SURVIVAL,
                         };
+                        if !g.is_tutorial() {
+                            toasts.push(&stats.stage_end(&StageEnd {
+                                cleared,
+                                survival: g.world == SURVIVAL,
+                                world: g.world,
+                                stage: g.stage,
+                                score: g.score,
+                                deaths: g.stage_deaths(),
+                            }));
+                            stats_dirty = true;
+                            stats_age = f32::MAX;
+                        }
                         if g.world < SURVIVAL {
                             progress.unlocked = progress.unlocked.max(g.world * 5 + g.stage);
                             progress.best = progress.best.max(g.score);
@@ -1551,6 +1624,34 @@ async fn main() {
             Screen::NameEntry(_) => {}
         }
 
+        // Lifetime stats (port addition): take what the game counted this
+        // frame (the tutorial counts nothing), and write them out away from
+        // play, every 30 s during it, and at once after an unlock.
+        if let Some(g) = game.as_mut() {
+            let tally = std::mem::take(&mut g.tally);
+            if !g.is_tutorial() && tally != Default::default() {
+                let new = stats.add(&tally);
+                if !new.is_empty() {
+                    stats_age = f32::MAX;
+                }
+                toasts.push(&new);
+                stats_dirty = true;
+            }
+        }
+        if is_quit_requested() {
+            if stats_dirty {
+                stats.save();
+            }
+            std::process::exit(0);
+        }
+        stats_age += dt;
+        if stats_dirty && (!matches!(screen, Screen::Game) || stats_age >= 30.0) {
+            stats.save();
+            stats_dirty = false;
+            stats_age = 0.0;
+        }
+        toasts.update(dt);
+
         let t1 = get_time();
 
         gfx::set_widescreen(settings.widescreen);
@@ -1563,6 +1664,7 @@ async fn main() {
                 menu_screen.draw(&canvas, &menu_assets, &backdrop);
                 if kind == MenuKind::Main {
                     draw_project_link(&link_font, menu_screen.fx.alpha);
+                    draw_stats_link(&link_font, menu_screen.fx.alpha);
                     draw_version(&link_font, menu_screen.fx.alpha);
                 }
                 if let MenuKind::ScoresTable(mode, _) = kind {
@@ -1597,7 +1699,12 @@ async fn main() {
                 backdrop.draw(&canvas, &menu_assets, 1.0);
                 options.draw(&canvas, &play_assets.hud.font, &settings);
             }
+            Screen::Stats(ref page) => {
+                backdrop.draw(&canvas, &menu_assets, 1.0);
+                page.draw(&canvas, &play_assets.hud.font, &link_font, &stats);
+            }
         }
+        toasts.draw(&canvas, &play_assets.hud.font, &link_font);
         canvas.end();
         let t2 = get_time();
 

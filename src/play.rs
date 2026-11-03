@@ -19,6 +19,7 @@ use crate::boss::{self, BossState, Piece};
 use crate::depot::{self, Depot};
 use crate::enemies::{wrap_near, Element, Event, Field, Rock, Script, Surface, Weapon};
 use crate::bursts::{Bursts, Look};
+use crate::stats::Tally;
 use crate::gfx::{draw_atlas_sprite, draw_quad, draw_sprite, tex_size, Canvas, Grade, Light, Wave, CANVAS_H, CANVAS_W, MAX_LIGHTS};
 use crate::gravity;
 use crate::hud::{self, HudAssets, HudValues, Show};
@@ -878,6 +879,11 @@ pub struct Play {
     pub physics_particles: bool,
     /// Physics-style explosions and impacts.
     gas: Bursts,
+    /// What this game did since the main loop last took it, for the
+    /// lifetime stats (port addition).
+    pub tally: Tally,
+    /// Ships lost in this stage.
+    stage_deaths: u32,
     /// This step's shot hits (where, the shot's velocity), for the gas.
     hits: Vec<(Vec2, Vec2, Weapon)>,
     /// Lights from explosions and hits, fading out.
@@ -1284,6 +1290,8 @@ impl Play {
             reduce_flashes: false,
             colour_assist: false,
             physics_particles: false,
+            tally: Tally { games: 1, ..Tally::default() },
+            stage_deaths: 0,
             gas: Bursts::new(),
             hits: Vec::new(),
             glows: Vec::new(),
@@ -1331,6 +1339,11 @@ impl Play {
             State::Over { cleared } => Some(cleared),
             _ => None,
         }
+    }
+
+    /// Ships lost in this stage.
+    pub fn stage_deaths(&self) -> u32 {
+        self.stage_deaths
     }
 
     pub fn stage_time(&self) -> f32 {
@@ -1420,6 +1433,7 @@ impl Play {
         let weapon = self.ship.weapon;
         self.world = world;
         self.stage = stage;
+        self.stage_deaths = 0;
         self.state = State::Entering;
         self.alpha = 0.0;
         self.z = START_Z;
@@ -1494,6 +1508,8 @@ impl Play {
         self.upgrade_points -= cost;
         let level = self.upgrades[u as usize] + 1;
         self.upgrades[u as usize] = level;
+        self.tally.upgrades += 1;
+        self.tally.maxed |= self.upgrade_cost(u).is_none();
         match u {
             Upgrade::Cannon => {
                 self.ship.cannon_level = level;
@@ -1761,6 +1777,7 @@ impl Play {
         }
         self.age_visuals(dt);
         self.elapsed += dt;
+        self.tally.time += dt;
     }
 
     /// GameScreen::updateStateReady with keyboard and mouse in place of the
@@ -1798,6 +1815,7 @@ impl Play {
             self.script.update(dt, self.ship.pos, &mut self.field);
         }
         self.time.base = self.script.speed();
+        self.tally.wave = self.tally.wave.max(self.script.survival_wave());
         self.time.update(dt);
         self.field.time_factor = self.time.factor;
         self.field.aim = self.ship.aim_dir;
@@ -2043,6 +2061,8 @@ impl Play {
     fn kill_ship(&mut self) {
         self.field.gun_release();
         self.ship.life = Life::Dead(0.0);
+        self.tally.deaths += 1;
+        self.stage_deaths += 1;
         self.script.slow_down_survival();
         self.ship.bullets.clear();
         self.ship.aiming = false;
@@ -2098,6 +2118,7 @@ impl Play {
                     self.effects
                         .start(Kind::Point, 15, pos, rand::gen_range(0.0, 360.0), false);
                     self.rings += 1;
+                    self.tally.rings += 1;
                     self.upgrade_points += 1;
                     self.score += self.multiplier as u64;
                 }
@@ -2180,6 +2201,7 @@ impl Play {
             return;
         }
         self.bombs -= 1;
+        self.tally.bombs += 1;
         self.script.slow_down_survival();
         self.sounds.push(SOUND_BOMB);
         self.rumbles.push(RUMBLE_BOMB);
@@ -2223,6 +2245,7 @@ impl Play {
     fn update_multiplier(&mut self) {
         let since = self.score - self.multiplier_base;
         self.multiplier = 1 + MULTIPLIER_STEPS.iter().filter(|&&t| since > t).count() as u32;
+        self.tally.multiplier = self.tally.multiplier.max(self.multiplier);
     }
 
     /// Enemy::rotationTowards the ship, in the original's degrees.
@@ -2242,6 +2265,27 @@ impl Play {
             return 0;
         }
         self.effects.start(kind, set, pos, angle, reverse)
+    }
+
+    /// Counts a kill for the lifetime stats.
+    fn count(&mut self, event: &Event) {
+        let t = &mut self.tally;
+        match event {
+            Event::RockDestroyed { size, .. } => {
+                t.rocks += 1;
+                t.big_rocks += (*size == 3) as u32;
+            }
+            Event::LobberDestroyed { .. }
+            | Event::SeekerDestroyed { .. }
+            | Event::TowerDestroyed { .. }
+            | Event::ArrowDestroyed { .. }
+            | Event::SnakeDestroyed { .. }
+            | Event::ShyGuyDestroyed { .. }
+            | Event::MineDestroyed { .. } => t.enemies += 1,
+            Event::DepotDestroyed { .. } => t.depots += 1,
+            Event::BossDead { .. } => t.bosses += 1,
+            _ => {}
+        }
     }
 
     fn handle_events(&mut self) {
@@ -2275,6 +2319,7 @@ impl Play {
                 let angle = rand::gen_range(0.0, std::f32::consts::TAU);
                 self.scorches.push(Scorch { pos, size, angle, age: 0.0 });
             }
+            self.count(&event);
             match event {
                 Event::RockDestroyed {
                     pos,
@@ -2705,6 +2750,7 @@ impl Play {
     /// GravityGun::release: throwing something it caught is a use.
     fn release_gun(&mut self) {
         if self.field.gripped().is_some() {
+            self.tally.throws += 1;
             if let Some(t) = &mut self.tutorial {
                 t.using_gravity();
             }
