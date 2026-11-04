@@ -1,6 +1,6 @@
 //! Physics particles (port addition, Options > Particle style): explosions
-//! and impacts as layered particle physics instead of the original's
-//! sprite systems. Every explosion is four kinds of particle, each with its
+//! and impacts get layered particle physics on top of the original's
+//! sprite systems, which still play. Every explosion is four kinds of particle, each with its
 //! own drag and its own share of the momentum of the shot that did it:
 //! - fire: a cluster of expanding puffs, white-hot, cooling through
 //!   yellow and orange to red as they slow (additive, and in the bloom);
