@@ -19,6 +19,7 @@ use crate::boss::{self, BossState, Piece};
 use crate::depot::{self, Depot};
 use crate::enemies::{wrap_near, Element, Event, Field, Rock, Script, Surface, Weapon};
 use crate::bursts::{Bursts, Look};
+use crate::gas::GasQueue;
 use crate::pause::ParticleStyle;
 use crate::stats::Tally;
 use crate::gfx::{
@@ -882,10 +883,14 @@ pub struct Play {
     pub reduce_flashes: bool,
     /// Options > Colour assist (port addition).
     pub colour_assist: bool,
-    /// Options > Particle style (`Classic` or `Physics`).
+    /// Options > Particle style (`Classic`, `Physics`, or `Gas Physics`).
     pub particles: ParticleStyle,
-    /// Physics-style explosions and impacts.
+    /// Physics-style explosions and impacts (full in `Physics`, crisp
+    /// sparks/debris chips only in `Gas Physics`).
     gas: Bursts,
+    /// Queued impulses & luminous plasma jets for the 512x512 GPU Navier-Stokes
+    /// fluid simulation (`Gas Physics` mode).
+    pub fluid: GasQueue,
     /// What this game did since the main loop last took it, for the
     /// lifetime stats (port addition).
     pub tally: Tally,
@@ -1300,6 +1305,7 @@ impl Play {
             tally: Tally { games: 1, ..Tally::default() },
             stage_deaths: 0,
             gas: Bursts::new(),
+            fluid: GasQueue::new(),
             hits: Vec::new(),
             glows: Vec::new(),
             shocks: Vec::new(),
@@ -1460,6 +1466,7 @@ impl Play {
         self.script = Script::arcade(world, stage);
         self.pickups = Rings::default();
         self.gas.clear();
+        self.fluid.clear();
         self.magnet = 0.0;
         self.since_press = 1.0;
         self.time = TimeScale::default();
@@ -1796,11 +1803,24 @@ impl Play {
         let l2 = blast_look(Surface::Craft, Some(Weapon::Cannon));
         let l3 = impact_look(Weapon::Cannon, fire);
         let l4 = impact_look(Weapon::Laser, ice);
-        if self.particles == ParticleStyle::Physics {
-            self.gas.blast(c + vec2(-130.0, 40.0), shot, 62.0, 1.0, l1);
-            self.gas.blast(c + vec2(130.0, 40.0), shot, 49.0, 0.9, l2);
-            self.gas.impact(c + vec2(-40.0, 100.0), shot, l3);
-            self.gas.impact(c + vec2(40.0, 100.0), laser, l4);
+        match self.particles {
+            ParticleStyle::Physics => {
+                self.gas.blast(c + vec2(-130.0, 40.0), shot, 62.0, 1.0, l1);
+                self.gas.blast(c + vec2(130.0, 40.0), shot, 49.0, 0.9, l2);
+                self.gas.impact(c + vec2(-40.0, 100.0), shot, l3);
+                self.gas.impact(c + vec2(40.0, 100.0), laser, l4);
+            }
+            ParticleStyle::GasPhysics => {
+                self.gas.blast_sparks(c + vec2(-130.0, 40.0), shot, 62.0, 1.0, l1);
+                self.gas.blast_sparks(c + vec2(130.0, 40.0), shot, 49.0, 0.9, l2);
+                self.gas.impact_sparks(c + vec2(-40.0, 100.0), shot, l3);
+                self.gas.impact_sparks(c + vec2(40.0, 100.0), laser, l4);
+                self.fluid.blast(c + vec2(-130.0, 40.0), shot, 62.0, l1.tint, l1.tint_amount, l1.heat);
+                self.fluid.blast(c + vec2(130.0, 40.0), shot, 49.0, l2.tint, l2.tint_amount, l2.heat);
+                self.fluid.impact(c + vec2(-40.0, 100.0), shot, l3.tint, l3.tint_amount, l3.heat);
+                self.fluid.impact(c + vec2(40.0, 100.0), laser, l4.tint, l4.tint_amount, l4.heat);
+            }
+            ParticleStyle::Classic => {}
         }
     }
 
@@ -1816,6 +1836,9 @@ impl Play {
     fn age_visuals(&mut self, dt: f32) {
         self.effects.update(dt);
         self.gas.update(dt);
+        if self.particles == ParticleStyle::GasPhysics {
+            self.fluid.step(dt);
+        }
         self.glows.retain_mut(|g| {
             g.life -= dt;
             g.life > 0.0
@@ -1893,6 +1916,7 @@ impl Play {
         } else {
             self.control(dt);
         }
+        let prev_ship_pos = self.ship.pos;
         self.ship.update(dt);
         let total = self.ship.vel + self.ship.boost_vel;
         self.scroll += total * dt;
@@ -1902,6 +1926,20 @@ impl Play {
             let speed = total.length();
             self.trail.push_front((self.ship.pos, speed));
             self.trail.truncate(TRAIL_POINTS);
+            // Gas Physics: continuous thruster plasma stream strictly out the
+            // ship's tail nozzle (opposite its facing angle), never forward.
+            if self.particles == ParticleStyle::GasPhysics && speed > 18.0 {
+                let rad = self.ship.angle.to_radians();
+                let nose = vec2(rad.sin(), -rad.cos());
+                let boost = self.ship.invincible > 0.0;
+                self.fluid.ship_exhaust(prev_ship_pos, self.ship.pos, nose, speed, boost);
+            }
+            if self.particles == ParticleStyle::GasPhysics
+                && (self.field.gun.active || self.field.gripped().is_some())
+            {
+                let target = self.field.gripped().unwrap_or(self.ship.pos + self.ship.aim_dir * 75.0);
+                self.fluid.vortex(target, self.ship.pos, 58.0);
+            }
         }
         self.camera.update(dt, total * CAMERA_LEAD);
 
@@ -1971,7 +2009,8 @@ impl Play {
         let field = &mut self.field;
         let effects = &mut self.effects;
         let gas = &mut self.gas;
-        let physics = self.particles == ParticleStyle::Physics;
+        let fluid = &mut self.fluid;
+        let style = self.particles;
         let hits = &mut self.hits;
         hits.clear();
         let fire_damage = weapons::FIRE_DAMAGE[self.ship.fire_gun.level];
@@ -1987,8 +2026,8 @@ impl Play {
             };
             let surface = field.bullet(b.prev, b.pos, radius, b.weapon, damage, mass, b.vel);
             let hit = surface.is_some();
-            if physics {
-                match surface {
+            match style {
+                ParticleStyle::Physics => match surface {
                     Some(surface) => {
                         let look = impact_look(b.weapon, surface);
                         gas.impact(b.pos, b.vel, look);
@@ -1999,7 +2038,20 @@ impl Play {
                             gas.trail(b.prev, b.pos, b.vel, look);
                         }
                     }
-                }
+                },
+                ParticleStyle::GasPhysics => match surface {
+                    Some(surface) => {
+                        let look = impact_look(b.weapon, surface);
+                        gas.impact_sparks(b.pos, b.vel, look);
+                        fluid.impact(b.pos, b.vel, look.tint, look.tint_amount, look.heat);
+                        hits.push((b.pos, b.vel, b.weapon));
+                    }
+                    None => match b.weapon {
+                        Weapon::Fire => fluid.flame_stream(b.prev, b.pos, b.vel),
+                        Weapon::Cannon | Weapon::Laser => fluid.bullet_wake_vel(b.pos, b.vel),
+                    },
+                },
+                ParticleStyle::Classic => {}
             }
             if hit {
                 // standard/fire/laserBulletCollision: a spark, and a streak
@@ -2170,8 +2222,15 @@ impl Play {
         self.multiplier_base = self.score;
         let p = self.ship.pos;
         self.effects.flash(Color::new(0.8, 0.8, 0.8, 1.0));
-        if self.particles == ParticleStyle::Physics {
-            self.gas.blast(p, Vec2::ZERO, SHIP_GAS.0, SHIP_GAS.1, SHIP_LOOK);
+        match self.particles {
+            ParticleStyle::Physics => {
+                self.gas.blast(p, Vec2::ZERO, SHIP_GAS.0, SHIP_GAS.1, SHIP_LOOK);
+            }
+            ParticleStyle::GasPhysics => {
+                self.gas.blast_sparks(p, Vec2::ZERO, SHIP_GAS.0, SHIP_GAS.1, SHIP_LOOK);
+                self.fluid.blast(p, Vec2::ZERO, SHIP_GAS.0, SHIP_LOOK.tint, SHIP_LOOK.tint_amount, SHIP_LOOK.heat);
+            }
+            ParticleStyle::Classic => {}
         }
         self.effects.start(Kind::Ring, 1, p, 0.0, false);
         self.effects.start(Kind::Line, 3, p, 0.0, false);
@@ -2305,8 +2364,15 @@ impl Play {
         self.effects.flash(Color::new(0.8, 0.8, 0.8, 1.0));
         self.camera.shake(0.75, 7.5);
         let p = self.ship.pos;
-        if self.particles == ParticleStyle::Physics {
-            self.gas.blast(p, Vec2::ZERO, BOMB_GAS.0, BOMB_GAS.1, BOMB_LOOK);
+        match self.particles {
+            ParticleStyle::Physics => {
+                self.gas.blast(p, Vec2::ZERO, BOMB_GAS.0, BOMB_GAS.1, BOMB_LOOK);
+            }
+            ParticleStyle::GasPhysics => {
+                self.gas.blast_sparks(p, Vec2::ZERO, BOMB_GAS.0, BOMB_GAS.1, BOMB_LOOK);
+                self.fluid.shock_ring(p, BOMB_GAS.0, vec3(2.2, 1.25, 0.45));
+            }
+            ParticleStyle::Classic => {}
         }
         self.effects.start(Kind::Ring, 5, p, 0.0, false);
         self.effects.start(Kind::Sprite, 8, p, 0.0, false);
@@ -2320,8 +2386,15 @@ impl Play {
         self.ship.grace = SHIELD_GRACE;
         self.camera.shake(0.75, 7.5);
         let p = self.ship.pos;
-        if self.particles == ParticleStyle::Physics {
-            self.gas.blast(p, Vec2::ZERO, SHIELD_GAS.0, SHIELD_GAS.1, SHIELD_LOOK);
+        match self.particles {
+            ParticleStyle::Physics => {
+                self.gas.blast(p, Vec2::ZERO, SHIELD_GAS.0, SHIELD_GAS.1, SHIELD_LOOK);
+            }
+            ParticleStyle::GasPhysics => {
+                self.gas.blast_sparks(p, Vec2::ZERO, SHIELD_GAS.0, SHIELD_GAS.1, SHIELD_LOOK);
+                self.fluid.shock_ring(p, SHIELD_GAS.0, vec3(0.35, 1.45, 2.2));
+            }
+            ParticleStyle::Classic => {}
         }
         self.effects.start(Kind::Ring, 8, p, 0.0, false);
         for _ in 0..3 {
@@ -2377,7 +2450,7 @@ impl Play {
             if let Some((pos, radius, strength, seconds)) = event_shock(&event) {
                 self.shock(pos, radius, strength, seconds);
             }
-            if self.particles == ParticleStyle::Physics {
+            if self.particles != ParticleStyle::Classic {
                 if let Some((pos, radius, life)) = event_gas(&event) {
                     // The shot that did it, if one hit near here this step,
                     // lends the cloud its momentum and its colour (bombs and
@@ -2389,7 +2462,16 @@ impl Play {
                         .min_by(|a, b| wrap_dist(a.0, pos).total_cmp(&wrap_dist(b.0, pos)));
                     let vel = shot.map_or(Vec2::ZERO, |&(_, v, _)| v);
                     let look = blast_look(event_surface(&event), shot.map(|&(_, _, w)| w));
-                    self.gas.blast(pos, vel, radius, life, look);
+                    if self.particles == ParticleStyle::Physics {
+                        self.gas.blast(pos, vel, radius, life, look);
+                    } else {
+                        self.gas.blast_sparks(pos, vel, radius, life, look);
+                        if matches!(event, Event::BossDead { .. }) {
+                            self.fluid.shock_ring(pos, radius, vec3(2.4, 1.15, 0.42));
+                        } else {
+                            self.fluid.blast(pos, vel, radius, look.tint, look.tint_amount, look.heat);
+                        }
+                    }
                 }
             }
             if let Some((pos, size)) = event_scorch(&event) {
@@ -3331,6 +3413,16 @@ impl Play {
             self.draw_world(canvas, assets, shift == Vec2::ZERO);
         }
         canvas.set_shift(Vec2::ZERO);
+        if self.particles == ParticleStyle::GasPhysics {
+            canvas.set_glowing(true);
+            canvas.draw_gas_field(
+                self.view_ship(),
+                self.view_cam(),
+                self.view_half(),
+                self.z,
+            );
+            canvas.set_glowing(false);
+        }
         self.draw_indicators(assets);
         canvas.screen_space();
         self.effects.draw_flashes(canvas, if self.reduce_flashes { REDUCED_FLASH } else { 1.0 });
@@ -3624,15 +3716,17 @@ impl Play {
                 self.draw_shield_rim(canvas, assets);
             }
         }
-        if self.particles == ParticleStyle::Physics {
+        if self.particles != ParticleStyle::Classic {
             // One screen pixel on the play plane, in canvas units.
             let pixel = self.zoom / crate::gfx::pixel_scale().max(0.5);
             let lights = self.frame_lights.borrow();
             self.gas.draw(canvas, self.z, |p| self.to_screen(p), &assets.soft_dot, pixel, &lights);
         }
-        let soft = self.fx.then_some(&assets.soft_dot);
-        self.effects
-            .draw(canvas, &assets.spark, soft, self.z, |p| self.to_screen(p));
+        if self.particles != ParticleStyle::GasPhysics {
+            let soft = self.fx.then_some(&assets.soft_dot);
+            self.effects
+                .draw(canvas, &assets.spark, soft, self.z, |p| self.to_screen(p));
+        }
     }
 
     /// Port addition: tapered plasma engine ribbon, weapon muzzle flashes,

@@ -960,6 +960,59 @@ void main() {
     gl_FragColor = vec4(col, clamp(intensity * color.a, 0.0, 1.0));
 }"#;
 
+/// 512x512 GPU Navier-Stokes luminous gas & plasma shader (`Gas Physics`):
+/// renders pure swirling HDR plasma curls with 3D fluid normals, key-light
+/// ridge shading, and 12 dynamic point lights. Opacity follows the luminous
+/// gas density directly so wisps dissolve cleanly into space with zero
+/// lingering muddy grey splotches.
+const GAS_FIELD_FRAGMENT: &str = r#"#version 100
+precision highp float;
+varying highp vec2 uv;
+varying lowp vec4 color;
+varying highp vec2 canvas;
+uniform sampler2D Texture;
+uniform vec3 LightPos[12];
+uniform vec3 LightColor[12];
+
+void main() {
+    vec4 d = texture2D(Texture, uv);
+    float plasma_lum = max(d.r, max(d.g, d.b));
+    if (plasma_lum < 0.012) {
+        discard;
+    }
+
+    // 3D volumetric fluid normal from 512x512 central differences.
+    const float e = 1.0 / 512.0;
+    float hL = length(texture2D(Texture, uv - vec2(e, 0.0)).rgb);
+    float hR = length(texture2D(Texture, uv + vec2(e, 0.0)).rgb);
+    float hB = length(texture2D(Texture, uv - vec2(0.0, e)).rgb);
+    float hT = length(texture2D(Texture, uv + vec2(0.0, e)).rgb);
+    vec3 N = normalize(vec3((hL - hR) * 2.8, (hB - hT) * 2.8, 0.45));
+
+    vec3 L = normalize(vec3(-0.55, -0.65, 0.52));
+    float ndl = clamp(dot(N, L), 0.0, 1.0);
+    float rim = pow(1.0 - clamp(N.z, 0.0, 1.0), 1.8);
+    float relief = 0.68 + 0.55 * ndl + 0.30 * rim;
+
+    vec3 dyn = vec3(0.0);
+    for (int i = 0; i < 12; i++) {
+        vec2 dp = LightPos[i].xy - canvas;
+        float r = LightPos[i].z;
+        float fall = clamp(1.0 - length(dp) / max(r, 1.0), 0.0, 1.0);
+        dyn += LightColor[i] * (fall * fall);
+    }
+    dyn = dyn / (1.0 + dyn * 0.9);
+
+    vec3 rich = d.rgb / (1.0 + d.rgb * 0.40);
+    vec3 hot_spine = vec3(1.0, 0.94, 0.78) * smoothstep(1.3, 3.0, plasma_lum) * 0.85;
+    vec3 out_rgb = (rich * 1.32 + hot_spine) * relief + rich * dyn * 0.45;
+    float out_a = clamp(smoothstep(0.012, 0.08, plasma_lum) * (1.0 - exp(-plasma_lum * 1.25)) * color.a, 0.0, 0.94);
+    if (out_a < 0.004) {
+        discard;
+    }
+    gl_FragColor = vec4(out_rgb, out_a);
+}"#;
+
 /// The final blit with post effects (port addition): shockwave rings that
 /// bend both the scene and bloom (with a slight colour split at the ring),
 /// linear-space bloom addition with calibrated ACES filmic tone mapping,
@@ -1208,6 +1261,8 @@ pub struct Canvas {
     lit: Material,
     shield: Material,
     gravity: Material,
+    gas_mat: Material,
+    gpu_fluid: RefCell<crate::gpu_fluid::GpuFluid>,
     post: Material,
     /// The next blit's shockwaves and grading (None: the plain blit).
     post_fx: RefCell<Option<(Vec<Wave>, Grade)>>,
@@ -1336,6 +1391,24 @@ impl Canvas {
             },
         )
         .expect("gravity shader");
+        let gas_mat = load_material(
+            ShaderSource::Glsl {
+                vertex: LIT_VERTEX,
+                fragment: GAS_FIELD_FRAGMENT,
+            },
+            MaterialParams {
+                pipeline_params: pipeline(BlendFactor::OneMinusValue(BlendValue::SourceAlpha)),
+                uniforms: vec![
+                    UniformDesc::new("NdcToCanvas", UniformType::Float4),
+                    UniformDesc::new("NdcOffset", UniformType::Float2),
+                    UniformDesc::new("LightPos", UniformType::Float3).array(MAX_LIGHTS),
+                    UniformDesc::new("LightColor", UniformType::Float3).array(MAX_LIGHTS),
+                ],
+                ..Default::default()
+            },
+        )
+        .expect("gas shader");
+        let gpu_fluid = RefCell::new(crate::gpu_fluid::GpuFluid::new());
         let post = load_material(
             ShaderSource::Glsl { vertex: DEFAULT_VERTEX, fragment: POST_FRAGMENT },
             MaterialParams {
@@ -1394,6 +1467,8 @@ impl Canvas {
             lit,
             shield,
             gravity,
+            gas_mat,
+            gpu_fluid,
             post,
             post_fx: RefCell::new(None),
             lighting_on: Cell::new(false),
@@ -1834,6 +1909,86 @@ impl Canvas {
                 vertices: g_verts,
                 indices,
                 texture: Some(self.white.clone()),
+            });
+        }
+    }
+
+    /// Advances the high-resolution GPU Navier-Stokes fluid solver (`Gas Physics`)
+    /// from any queued game splats and fixed steps. Call before `begin()` so its
+    /// offscreen RGBA16F passes never nest inside the main frame pass.
+    pub fn step_fluid(&self, queue: &mut crate::gas::GasQueue) {
+        let (clear, steps, splats) = queue.take();
+        if clear || steps > 0 || !splats.is_empty() {
+            self.gpu_fluid.borrow_mut().step(clear, steps, &splats);
+        }
+    }
+
+    /// Renders the 512x512 GPU Navier-Stokes luminous gas field across the visible
+    /// playfield with 3D fluid normals, 12-light illumination, and HDR plasma
+    /// filaments feeding directly into the 5-level pyramid bloom.
+    pub fn draw_gas_field(
+        &self,
+        ship_world: Vec2,
+        cam_offset: Vec2,
+        view_half: Vec2,
+        z: f32,
+    ) {
+        let fluid = self.gpu_fluid.borrow();
+        if !fluid.is_active() {
+            return;
+        }
+        let dye_tex = fluid.dye_texture().clone();
+        drop(fluid);
+
+        let centre = vec2(CANVAS_W * 0.5, CANVAS_H * 0.5);
+        let pad = view_half + Vec2::splat(24.0);
+        let x0 = centre.x - pad.x;
+        let x1 = centre.x + pad.x;
+        let y0 = centre.y - pad.y;
+        let y1 = centre.y + pad.y;
+        let to_uv = |cx: f32, cy: f32| {
+            let w = ship_world + (vec2(cx, cy) - centre - cam_offset);
+            (w.x / 1024.0, w.y / 1024.0)
+        };
+        let (u00, v00) = to_uv(x0, y0);
+        let (u10, v10) = to_uv(x1, y0);
+        let (u11, v11) = to_uv(x1, y1);
+        let (u01, v01) = to_uv(x0, y1);
+        let verts = vec![
+            Vertex::new(x0, y0, z, u00, v00, WHITE),
+            Vertex::new(x1, y0, z, u10, v10, WHITE),
+            Vertex::new(x1, y1, z, u11, v11, WHITE),
+            Vertex::new(x0, y1, z, u01, v01, WHITE),
+        ];
+        let indices = vec![0, 1, 2, 0, 2, 3];
+
+        let (m, offset) = ndc_to_canvas(view_w(), self.zoom.get());
+        self.gas_mat.set_uniform("NdcToCanvas", m);
+        self.gas_mat.set_uniform("NdcOffset", offset);
+        let lights = self.lights.borrow();
+        let mut pos = [Vec3::ZERO; MAX_LIGHTS];
+        let mut color = [Vec3::ZERO; MAX_LIGHTS];
+        for (i, l) in lights.iter().enumerate() {
+            pos[i] = vec3(l.pos.x, l.pos.y, l.radius);
+            color[i] = l.color;
+        }
+        self.gas_mat.set_uniform_array("LightPos", &pos);
+        self.gas_mat.set_uniform_array("LightColor", &color);
+
+        gl_use_material(&self.gas_mat);
+        draw_mesh(&Mesh {
+            vertices: verts.clone(),
+            indices: indices.clone(),
+            texture: Some(dye_tex.clone()),
+        });
+        gl_use_default_material();
+
+        // Feed HDR luminous plasma filaments into the 5-level bloom pyramid.
+        if self.glowing.get() && self.bloom_on.get() {
+            self.record(Mesh {
+                vertices: verts,
+                indices,
+                texture: Some(dye_tex),
             });
         }
     }

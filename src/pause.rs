@@ -66,13 +66,17 @@ pub enum ParticleStyle {
     Classic,
     /// Layered Newtonian fire, sparks, debris, and smoke carrying shot momentum.
     Physics,
+    /// Full high-resolution GPU Navier-Stokes fluid-gas simulation replacing
+    /// explosion and flame clouds with swirling plasma filaments.
+    GasPhysics,
 }
 
 impl ParticleStyle {
-    pub fn cycle(self, _forward: bool) -> ParticleStyle {
-        match self {
-            ParticleStyle::Classic => ParticleStyle::Physics,
-            ParticleStyle::Physics => ParticleStyle::Classic,
+    pub fn cycle(self, forward: bool) -> ParticleStyle {
+        match (self, forward) {
+            (ParticleStyle::Classic, true) | (ParticleStyle::GasPhysics, false) => ParticleStyle::Physics,
+            (ParticleStyle::Physics, true) | (ParticleStyle::Classic, false) => ParticleStyle::GasPhysics,
+            (ParticleStyle::GasPhysics, true) | (ParticleStyle::Physics, false) => ParticleStyle::Classic,
         }
     }
 
@@ -80,6 +84,7 @@ impl ParticleStyle {
         match self {
             ParticleStyle::Classic => "Classic",
             ParticleStyle::Physics => "Physics",
+            ParticleStyle::GasPhysics => "Gas Physics",
         }
     }
 
@@ -87,18 +92,20 @@ impl ParticleStyle {
         match self {
             ParticleStyle::Classic => "classic",
             ParticleStyle::Physics => "physics",
+            ParticleStyle::GasPhysics => "gas",
         }
     }
 
     pub fn from_key(v: &str) -> Option<ParticleStyle> {
         if v.eq_ignore_ascii_case("classic") {
             Some(ParticleStyle::Classic)
-        } else if v.eq_ignore_ascii_case("physics")
-            || v.eq_ignore_ascii_case("gas")
+        } else if v.eq_ignore_ascii_case("physics") {
+            Some(ParticleStyle::Physics)
+        } else if v.eq_ignore_ascii_case("gas")
             || v.eq_ignore_ascii_case("gas_physics")
             || v.eq_ignore_ascii_case("super")
         {
-            Some(ParticleStyle::Physics)
+            Some(ParticleStyle::GasPhysics)
         } else {
             None
         }
