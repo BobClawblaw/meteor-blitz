@@ -144,7 +144,7 @@ pub struct Settings {
     /// window's fitted size. Fixed presets set the window to that physical
     /// resolution and render the canvas at it.
     pub resolution: Option<(u32, u32)>,
-    /// Port addition: lit ground and sprites, shockwaves, scorch marks,
+    /// Port addition: lit ground and sprites, shockwaves,
     /// colour grading and ship effects.
     pub visual_fx: bool,
     /// Port addition: the playfield zoom (1 to MAX_ZOOM): the camera sees

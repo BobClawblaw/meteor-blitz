@@ -263,8 +263,6 @@ pub struct PlayAssets {
     pub backdrops: Vec<(Texture2D, Texture2D)>,
     /// Normal maps of the base textures, same order (tools/normalmaps.py).
     pub normals: Vec<Texture2D>,
-    /// A soft burn mark for scorch decals (`scorch_texture`).
-    pub scorch: Texture2D,
     /// A round Gaussian glow for soft particles (`soft_dot_texture`).
     pub soft_dot: Texture2D,
 }
@@ -279,34 +277,6 @@ pub fn soft_dot_texture() -> Texture2D {
             let d = vec2(x as f32 + 0.5, y as f32 + 0.5) / N as f32 * 2.0 - Vec2::ONE;
             let a = (-d.length_squared() * 4.0).exp() * (1.0 - d.length()).clamp(0.0, 1.0).sqrt();
             img.set_pixel(x as u32, y as u32, Color::new(1.0, 1.0, 1.0, a));
-        }
-    }
-    let tex = Texture2D::from_image(&img);
-    tex.set_filter(FilterMode::Linear);
-    tex
-}
-
-/// A soft, ragged burn mark: dark in the middle, fading out, with noise so
-/// overlapping marks do not look stamped (port addition).
-pub fn scorch_texture() -> Texture2D {
-    const N: u16 = 64;
-    let mut img = Image::gen_image_color(N, N, Color::new(0.0, 0.0, 0.0, 0.0));
-    let mut seed: u32 = 0x9e37_79b9;
-    let mut noise = || {
-        seed ^= seed << 13;
-        seed ^= seed >> 17;
-        seed ^= seed << 5;
-        (seed % 1000) as f32 / 1000.0
-    };
-    for y in 0..N {
-        for x in 0..N {
-            let d = vec2(x as f32 + 0.5, y as f32 + 0.5) / N as f32 * 2.0 - Vec2::ONE;
-            let a = d.y.atan2(d.x);
-            let ragged = 0.8 + 0.12 * (a * 5.0).sin() + 0.08 * (a * 11.0).cos();
-            let r = d.length() / ragged;
-            let core = (1.0 - r).clamp(0.0, 1.0);
-            let alpha = core.powf(0.8) * (0.75 + 0.25 * noise());
-            img.set_pixel(x as u32, y as u32, Color::new(0.07, 0.045, 0.03, alpha));
         }
     }
     let tex = Texture2D::from_image(&img);
@@ -872,7 +842,7 @@ pub struct Play {
     prev: Snapshot,
     blend: f32,
     /// Options > Lighting and effects (port addition): lit ground and
-    /// sprites, shockwaves, scorch marks, grading, ship effects.
+    /// sprites, shockwaves, grading, ship effects.
     pub fx: bool,
     /// Options > Playfield zoom: the camera sees this many times more of
     /// the play plane across (1 to 2; port addition).
@@ -902,8 +872,6 @@ pub struct Play {
     glows: Vec<Glow>,
     /// Shockwave rings from big explosions.
     shocks: Vec<Shock>,
-    /// Burn marks on the ground, oldest first.
-    scorches: Vec<Scorch>,
     /// The ship's recent positions and speeds, newest first, for its
     /// engine trail.
     trail: VecDeque<(Vec2, f32)>,
@@ -941,24 +909,12 @@ fn event_light(event: &Event) -> Option<(Vec2, Vec3, f32, f32)> {
     })
 }
 
-/// A burn mark where something exploded; it fades over its last seconds.
-struct Scorch {
-    pos: Vec2,
-    size: f32,
-    angle: f32,
-    age: f32,
-}
-
 /// Engine trail: samples kept (one per step), and the speed at which it
 /// shows fully.
 const TRAIL_POINTS: usize = 16;
 /// Shot streaks: how many seconds of flight they trail.
 const BULLET_STREAK: f32 = 0.03;
 const TRAIL_FULL_SPEED: f32 = 300.0;
-
-const SCORCH_LIFE: f32 = 15.0;
-const SCORCH_FADE: f32 = 5.0;
-const MAX_SCORCHES: usize = 96;
 
 /// What blew up, for the look of its physics particles.
 fn event_surface(event: &Event) -> Surface {
@@ -1129,23 +1085,6 @@ fn wrap_dist(a: Vec2, b: Vec2) -> f32 {
     vec2(wrap_near(a.x, b.x), wrap_near(a.y, b.y)).distance(b)
 }
 
-/// The burn mark an event leaves (port addition): its size, if any.
-fn event_scorch(event: &Event) -> Option<(Vec2, f32)> {
-    Some(match event {
-        Event::RockDestroyed { pos, size, effects: true, .. } => (*pos, 18.0 + 12.0 * *size as f32),
-        Event::LobberDestroyed { pos, .. }
-        | Event::SeekerDestroyed { pos, .. }
-        | Event::TowerDestroyed { pos, .. }
-        | Event::ArrowDestroyed { pos, .. }
-        | Event::SnakeDestroyed { pos, .. }
-        | Event::ShyGuyDestroyed { pos, .. }
-        | Event::MineDestroyed { pos, .. } => (*pos, 30.0),
-        Event::DepotDestroyed { pos, .. } => (*pos, 44.0),
-        Event::BossDead { pos, .. } => (*pos, 90.0),
-        _ => return None,
-    })
-}
-
 /// A shockwave ring: it grows to `radius` over `life` seconds and fades.
 struct Shock {
     pos: Vec2,
@@ -1309,7 +1248,6 @@ impl Play {
             hits: Vec::new(),
             glows: Vec::new(),
             shocks: Vec::new(),
-            scorches: Vec::new(),
             trail: VecDeque::new(),
             frame_lights: std::cell::RefCell::new(Vec::new()),
             stage_start: Carry::EMPTY,
@@ -1785,7 +1723,7 @@ impl Play {
     }
 
     /// While a popup covers the game, only its visuals keep time: particle
-    /// effects and flashes, lights, shockwaves and scorch marks run out
+    /// effects and flashes, lights and shockwaves run out
     /// behind the popup instead of freezing at their peak (a boss's white
     /// death flash and shockwave stayed on the results screen).
     /// MB_BURST_TEST (tuning hook): a plain rock blown up by the cannon,
@@ -1846,10 +1784,6 @@ impl Play {
         self.shocks.retain_mut(|s| {
             s.age += dt;
             s.age < s.life
-        });
-        self.scorches.retain_mut(|s| {
-            s.age += dt;
-            s.age < SCORCH_LIFE
         });
     }
 
@@ -2473,13 +2407,6 @@ impl Play {
                         }
                     }
                 }
-            }
-            if let Some((pos, size)) = event_scorch(&event) {
-                if self.scorches.len() >= MAX_SCORCHES {
-                    self.scorches.remove(0);
-                }
-                let angle = rand::gen_range(0.0, std::f32::consts::TAU);
-                self.scorches.push(Scorch { pos, size, angle, age: 0.0 });
             }
             self.count(&event);
             match event {
@@ -3458,12 +3385,11 @@ impl Play {
         SCREEN_CENTRE + (Canvas::mouse() - SCREEN_CENTRE) * self.zoom
     }
 
-    /// Everything on the play plane over the backdrop: shadows, scorches, rings,
+    /// Everything on the play plane over the backdrop: shadows, rings,
     /// enemies, shots, the ship (`with_ship`) and particle effects.
     fn draw_world(&self, canvas: &Canvas, assets: &PlayAssets, with_ship: bool) {
         if self.fx {
             self.draw_shadows(canvas, assets, with_ship);
-            self.draw_scorches(canvas, assets);
         }
         canvas.set_glowing(true);
         canvas.lighting(self.fx);
@@ -3887,26 +3813,6 @@ impl Play {
         let (w, _) = tex_size(&assets.shield);
         let radius = w * (0.58 + 0.04 * pulse);
         canvas.draw_energy_shield(p, radius, self.z, self.elapsed, up * ship.alpha, &assets.shield);
-    }
-
-    /// Burn marks on the play plane.
-    fn draw_scorches(&self, canvas: &Canvas, assets: &PlayAssets) {
-        let mut verts = Vec::with_capacity(self.scorches.len() * 4);
-        let mut indices: Vec<u16> = Vec::with_capacity(self.scorches.len() * 6);
-        for s in &self.scorches {
-            let fade = ((SCORCH_LIFE - s.age) / SCORCH_FADE).min(1.0);
-            let c = self.to_screen(s.pos);
-            let color = Color::new(1.0, 1.0, 1.0, 0.8 * fade);
-            let (sn, cs) = s.angle.sin_cos();
-            let h = s.size * 0.5;
-            let n = verts.len() as u16;
-            for (x, y, u, v) in [(-1.0, -1.0, 0.0, 0.0), (1.0, -1.0, 1.0, 0.0), (1.0, 1.0, 1.0, 1.0), (-1.0, 1.0, 0.0, 1.0)] {
-                let p = c + vec2(x * cs - y * sn, x * sn + y * cs) * h;
-                verts.push(Vertex::new(p.x, p.y, self.z, u, v, color));
-            }
-            indices.extend_from_slice(&[n, n + 1, n + 2, n, n + 2, n + 3]);
-        }
-        canvas.draw_triangles(verts, indices, Some(&assets.scorch), false);
     }
 
     fn draw_ship(&self, canvas: &Canvas, assets: &PlayAssets) {
