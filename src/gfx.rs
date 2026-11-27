@@ -928,77 +928,6 @@ void main() {
     gl_FragColor = vec4(col, clamp(intensity * color.a, 0.0, 1.0));
 }"#;
 
-/// 512x512 GPU Navier-Stokes fluid-gas display shader (`Gas Physics`): renders
-/// the RGBA16F HDR plasma & smoke field directly with central-difference 3D
-/// fluid relief normals, key-light specular sheen, and all 12 dynamic point
-/// lights. Sharpness comes from real 512x512 MacCormack advection and curl
-/// vorticity confinement — zero fake noise stamps or blurry blobs.
-const GAS_FIELD_FRAGMENT: &str = r#"#version 100
-precision highp float;
-varying highp vec2 uv;
-varying lowp vec4 color;
-varying highp vec2 canvas;
-uniform sampler2D Texture;
-uniform vec3 LightPos[12];
-uniform vec3 LightColor[12];
-
-void main() {
-    vec4 d = texture2D(Texture, uv);
-    float plasma_lum = max(d.r, max(d.g, d.b));
-    if (plasma_lum < 0.004 && d.a < 0.004) {
-        discard;
-    }
-
-    // 3D volumetric fluid normal from 512x512 central differences.
-    const float e = 1.0 / 512.0;
-    vec4 sL = texture2D(Texture, uv - vec2(e, 0.0));
-    vec4 sR = texture2D(Texture, uv + vec2(e, 0.0));
-    vec4 sB = texture2D(Texture, uv - vec2(0.0, e));
-    vec4 sT = texture2D(Texture, uv + vec2(0.0, e));
-    float hL = length(sL.rgb) * 0.45 + sL.a;
-    float hR = length(sR.rgb) * 0.45 + sR.a;
-    float hB = length(sB.rgb) * 0.45 + sB.a;
-    float hT = length(sT.rgb) * 0.45 + sT.a;
-    vec3 N = normalize(vec3((hL - hR) * 2.4, (hB - hT) * 2.4, 0.48));
-
-    // Upper-left key light gives billowing fluid ridges crisp 3D relief.
-    vec3 L = normalize(vec3(-0.55, -0.65, 0.52));
-    float ndl = clamp(dot(N, L), 0.0, 1.0);
-    float rim = pow(1.0 - clamp(N.z, 0.0, 1.0), 2.0);
-    float relief = 0.58 + 0.65 * ndl + 0.25 * rim;
-
-    // All 12 dynamic point lights illuminate swirling gas wisps from within.
-    vec3 dyn = vec3(0.0);
-    for (int i = 0; i < 12; i++) {
-        vec2 dp = LightPos[i].xy - canvas;
-        float r = LightPos[i].z;
-        float fall = clamp(1.0 - length(dp) / max(r, 1.0), 0.0, 1.0);
-        dyn += LightColor[i] * (fall * fall);
-    }
-    dyn = dyn / (1.0 + dyn * 0.85);
-
-    // Translucent layered fluid shading: preserves crisp internal vortex curls
-    // and colour gradients instead of clipping into flat white cutouts.
-    float smoke_a = 1.0 - exp(-d.a * 0.72);
-    vec3 hue = d.rgb / max(plasma_lum, 0.18);
-    vec3 smoke_tint = mix(vec3(0.24, 0.28, 0.36), clamp(hue, 0.0, 1.0) * 0.65 + vec3(0.14), clamp(plasma_lum * 0.85, 0.0, 0.75));
-    vec3 smoke_col = smoke_tint * relief + (smoke_tint * 0.55 + vec3(0.25)) * dyn * (0.65 + 0.45 * rim);
-
-    // Filmic-compressed plasma glow: deep fiery/spectral filaments on the arms,
-    // warm golden-white spine only at the sharpest high-energy vortex cores.
-    vec3 plasma_rich = d.rgb / (1.0 + d.rgb * 0.42);
-    vec3 hot_spine = vec3(1.0, 0.92, 0.75) * smoothstep(1.35, 3.2, plasma_lum) * 0.85;
-    vec3 plasma_col = (plasma_rich * 1.25 + hot_spine) * (0.78 + 0.35 * relief);
-    float plasma_a = clamp(1.0 - exp(-plasma_lum * 1.15), 0.0, 0.94);
-
-    float out_a = clamp(max(smoke_a * 0.62, plasma_a * 0.90) * color.a, 0.0, 0.95);
-    if (out_a < 0.004) {
-        discard;
-    }
-    vec3 out_rgb = mix(smoke_col, smoke_col * 0.25 + plasma_col, clamp(plasma_a * 1.1, 0.0, 1.0));
-    gl_FragColor = vec4(out_rgb, out_a);
-}"#;
-
 /// The final blit with post effects (port addition): shockwave rings that
 /// bend both the scene and bloom (with a slight colour split at the ring),
 /// linear-space bloom addition with calibrated ACES filmic tone mapping,
@@ -1247,8 +1176,6 @@ pub struct Canvas {
     lit: Material,
     shield: Material,
     gravity: Material,
-    gas_mat: Material,
-    gpu_fluid: RefCell<crate::gpu_fluid::GpuFluid>,
     post: Material,
     /// The next blit's shockwaves and grading (None: the plain blit).
     post_fx: RefCell<Option<(Vec<Wave>, Grade)>>,
@@ -1376,24 +1303,6 @@ impl Canvas {
             },
         )
         .expect("gravity shader");
-        let gas_mat = load_material(
-            ShaderSource::Glsl {
-                vertex: LIT_VERTEX,
-                fragment: GAS_FIELD_FRAGMENT,
-            },
-            MaterialParams {
-                pipeline_params: pipeline(BlendFactor::OneMinusValue(BlendValue::SourceAlpha)),
-                uniforms: vec![
-                    UniformDesc::new("NdcToCanvas", UniformType::Float4),
-                    UniformDesc::new("NdcOffset", UniformType::Float2),
-                    UniformDesc::new("LightPos", UniformType::Float3).array(MAX_LIGHTS),
-                    UniformDesc::new("LightColor", UniformType::Float3).array(MAX_LIGHTS),
-                ],
-                ..Default::default()
-            },
-        )
-        .expect("gas shader");
-        let gpu_fluid = RefCell::new(crate::gpu_fluid::GpuFluid::new());
         let post = load_material(
             ShaderSource::Glsl { vertex: DEFAULT_VERTEX, fragment: POST_FRAGMENT },
             MaterialParams {
@@ -1452,8 +1361,6 @@ impl Canvas {
             lit,
             shield,
             gravity,
-            gas_mat,
-            gpu_fluid,
             post,
             post_fx: RefCell::new(None),
             lighting_on: Cell::new(false),
@@ -1898,86 +1805,6 @@ impl Canvas {
                 vertices: g_verts,
                 indices,
                 texture: Some(self.white.clone()),
-            });
-        }
-    }
-
-    /// Advances the high-resolution GPU Navier-Stokes fluid solver (`Gas Physics`)
-    /// from any queued game splats and fixed steps. Call before `begin()` so its
-    /// offscreen RGBA16F passes never nest inside the main frame pass.
-    pub fn step_fluid(&self, queue: &mut crate::gas::GasQueue) {
-        let (clear, steps, splats) = queue.take();
-        if clear || steps > 0 || !splats.is_empty() {
-            self.gpu_fluid.borrow_mut().step(clear, steps, &splats);
-        }
-    }
-
-    /// Renders the 512x512 GPU Navier-Stokes fluid-gas field across the visible
-    /// playfield with 3D fluid normals, 12-light illumination, and HDR plasma
-    /// filaments feeding directly into the 5-level pyramid bloom.
-    pub fn draw_gas_field(
-        &self,
-        ship_world: Vec2,
-        cam_offset: Vec2,
-        view_half: Vec2,
-        z: f32,
-    ) {
-        let fluid = self.gpu_fluid.borrow();
-        if !fluid.is_active() {
-            return;
-        }
-        let dye_tex = fluid.dye_texture().clone();
-        drop(fluid);
-
-        let centre = vec2(CANVAS_W * 0.5, CANVAS_H * 0.5);
-        let pad = view_half + Vec2::splat(24.0);
-        let x0 = centre.x - pad.x;
-        let x1 = centre.x + pad.x;
-        let y0 = centre.y - pad.y;
-        let y1 = centre.y + pad.y;
-        let to_uv = |cx: f32, cy: f32| {
-            let w = ship_world + (vec2(cx, cy) - centre - cam_offset);
-            (w.x / 1024.0, w.y / 1024.0)
-        };
-        let (u00, v00) = to_uv(x0, y0);
-        let (u10, v10) = to_uv(x1, y0);
-        let (u11, v11) = to_uv(x1, y1);
-        let (u01, v01) = to_uv(x0, y1);
-        let verts = vec![
-            Vertex::new(x0, y0, z, u00, v00, WHITE),
-            Vertex::new(x1, y0, z, u10, v10, WHITE),
-            Vertex::new(x1, y1, z, u11, v11, WHITE),
-            Vertex::new(x0, y1, z, u01, v01, WHITE),
-        ];
-        let indices = vec![0, 1, 2, 0, 2, 3];
-
-        let (m, offset) = ndc_to_canvas(view_w(), self.zoom.get());
-        self.gas_mat.set_uniform("NdcToCanvas", m);
-        self.gas_mat.set_uniform("NdcOffset", offset);
-        let lights = self.lights.borrow();
-        let mut pos = [Vec3::ZERO; MAX_LIGHTS];
-        let mut color = [Vec3::ZERO; MAX_LIGHTS];
-        for (i, l) in lights.iter().enumerate() {
-            pos[i] = vec3(l.pos.x, l.pos.y, l.radius);
-            color[i] = l.color;
-        }
-        self.gas_mat.set_uniform_array("LightPos", &pos);
-        self.gas_mat.set_uniform_array("LightColor", &color);
-
-        gl_use_material(&self.gas_mat);
-        draw_mesh(&Mesh {
-            vertices: verts.clone(),
-            indices: indices.clone(),
-            texture: Some(dye_tex.clone()),
-        });
-        gl_use_default_material();
-
-        // Feed HDR luminous plasma filaments into the 5-level bloom pyramid.
-        if self.glowing.get() && self.bloom_on.get() {
-            self.record(Mesh {
-                vertices: verts,
-                indices,
-                texture: Some(dye_tex),
             });
         }
     }
