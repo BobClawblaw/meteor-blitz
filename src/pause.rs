@@ -59,6 +59,59 @@ enum Phase {
     Closing(Action, f32),
 }
 
+/// Port addition: Options > Particle style.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ParticleStyle {
+    /// Original sprite/point systems (`systems.dat`).
+    Classic,
+    /// Layered Newtonian fire, sparks, debris, and smoke carrying shot momentum.
+    Physics,
+    /// Full high-resolution GPU Navier-Stokes fluid-gas simulation replacing
+    /// explosion and flame clouds with swirling plasma filaments and wakes.
+    GasPhysics,
+}
+
+impl ParticleStyle {
+    pub fn cycle(self, forward: bool) -> ParticleStyle {
+        match (self, forward) {
+            (ParticleStyle::Classic, true) | (ParticleStyle::GasPhysics, false) => ParticleStyle::Physics,
+            (ParticleStyle::Physics, true) | (ParticleStyle::Classic, false) => ParticleStyle::GasPhysics,
+            (ParticleStyle::GasPhysics, true) | (ParticleStyle::Physics, false) => ParticleStyle::Classic,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            ParticleStyle::Classic => "Classic",
+            ParticleStyle::Physics => "Physics",
+            ParticleStyle::GasPhysics => "Gas Physics",
+        }
+    }
+
+    pub fn as_key(self) -> &'static str {
+        match self {
+            ParticleStyle::Classic => "classic",
+            ParticleStyle::Physics => "physics",
+            ParticleStyle::GasPhysics => "gas",
+        }
+    }
+
+    pub fn from_key(v: &str) -> Option<ParticleStyle> {
+        if v.eq_ignore_ascii_case("classic") {
+            Some(ParticleStyle::Classic)
+        } else if v.eq_ignore_ascii_case("physics") {
+            Some(ParticleStyle::Physics)
+        } else if v.eq_ignore_ascii_case("gas")
+            || v.eq_ignore_ascii_case("gas_physics")
+            || v.eq_ignore_ascii_case("super")
+        {
+            Some(ParticleStyle::GasPhysics)
+        } else {
+            None
+        }
+    }
+}
+
 /// NSUserDefaults settings exposed by the pause popup.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Settings {
@@ -105,10 +158,8 @@ pub struct Settings {
     /// Port addition: Options > Colour assist: shape marks on ice (diamond)
     /// and fire (triangle) rocks, so their element reads without colour.
     pub colour_assist: bool,
-    /// Port addition: Options > Particle style: Physics (layered fire,
-    /// sparks, debris and smoke carrying the shot's momentum) instead of the
-    /// original's sprite systems (Classic).
-    pub physics_particles: bool,
+    /// Port addition: Options > Particle style (`Classic`, `Physics`, or `Gas Physics`).
+    pub particles: ParticleStyle,
     /// Options > Button icons: 0 follows the connected pad, 1 Xbox,
     /// 2 PlayStation, 3 Nintendo (`icons`).
     pub button_icons: u8,
@@ -141,7 +192,7 @@ impl Default for Settings {
             hud_scale: 1.0,
             reduce_flashes: false,
             colour_assist: false,
-            physics_particles: true,
+            particles: ParticleStyle::Physics,
             button_icons: crate::icons::AUTO,
             rumble: true,
         }
@@ -208,9 +259,15 @@ impl Settings {
                 "hud_scale" => s.hud_scale = value.parse().unwrap_or(s.hud_scale).clamp(1.0, MAX_HUD_SCALE),
                 "reduce_flashes" => s.reduce_flashes = parse_bool(value, s.reduce_flashes),
                 "colour_assist" => s.colour_assist = parse_bool(value, s.colour_assist),
-                "particles" => s.physics_particles = value.eq_ignore_ascii_case("physics"),
+                "particles" => s.particles = ParticleStyle::from_key(value).unwrap_or(s.particles),
                 // The key before the style was renamed.
-                "formation" => s.physics_particles = parse_bool(value, s.physics_particles),
+                "formation" => {
+                    s.particles = if parse_bool(value, s.particles != ParticleStyle::Classic) {
+                        ParticleStyle::Physics
+                    } else {
+                        ParticleStyle::Classic
+                    };
+                }
                 "button_icons" => s.button_icons = value.parse().unwrap_or(s.button_icons).min(3),
                 "rumble" => s.rumble = parse_bool(value, s.rumble),
                 "resolution" => {
@@ -250,7 +307,7 @@ impl Settings {
             self.hud_scale,
             self.reduce_flashes as u8,
             self.colour_assist as u8,
-            if self.physics_particles { "physics" } else { "classic" },
+            self.particles.as_key(),
             self.button_icons,
             self.rumble as u8,
         )
@@ -1287,7 +1344,7 @@ mod tests {
             hud_scale: 1.25,
             reduce_flashes: true,
             colour_assist: true,
-            physics_particles: true,
+            particles: ParticleStyle::GasPhysics,
             button_icons: 2,
             rumble: false,
         };

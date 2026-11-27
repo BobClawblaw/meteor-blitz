@@ -206,7 +206,7 @@ impl Options {
                 Row::Bind(_) => self.pad_column = right,
                 Row::FrameRate => settings.fps = cycle(&FPS_CAPS, settings.fps, right),
                 Row::Resolution => settings.resolution = cycle_resolution(settings.resolution, right),
-                Row::Particles => settings.physics_particles = !settings.physics_particles,
+                Row::Particles => settings.particles = settings.particles.cycle(right),
                 Row::ButtonIcons => settings.button_icons = cycle_icons(settings.button_icons, right),
                 Row::Vibration => settings.rumble = !settings.rumble,
                 _ => {}
@@ -273,7 +273,7 @@ impl Options {
             Row::Widescreen => settings.widescreen = !settings.widescreen,
             Row::Bloom => settings.bloom = !settings.bloom,
             Row::VisualFx => settings.visual_fx = !settings.visual_fx,
-            Row::Particles => settings.physics_particles = !settings.physics_particles,
+            Row::Particles => settings.particles = settings.particles.cycle(true),
             Row::FrameRate => settings.fps = cycle(&FPS_CAPS, settings.fps, true),
             Row::Resolution => settings.resolution = cycle_resolution(settings.resolution, true),
             Row::Tutorial => settings.tutorial = !settings.tutorial,
@@ -377,12 +377,7 @@ impl Options {
                 Row::Bloom => on_off(font, settings.bloom, y, white),
                 Row::VisualFx => on_off(font, settings.visual_fx, y, white),
                 Row::Particles => {
-                    let style = if settings.physics_particles {
-                        "Physics"
-                    } else {
-                        "Classic"
-                    };
-                    font.text(style, VALUE_X, y, ROW_SCALE, Align::Right, white)
+                    font.text(settings.particles.label(), VALUE_X, y, ROW_SCALE, Align::Right, white)
                 }
                 Row::FrameRate => {
                     let fps = if settings.fps == 0 { "Unlimited".to_owned() } else { settings.fps.to_string() };

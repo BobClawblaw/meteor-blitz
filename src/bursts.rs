@@ -237,54 +237,65 @@ impl Bursts {
     /// `life` seconds; `shot` is the velocity of the shot that did it
     /// (zero for bombs and rams), which every part of it carries a share of.
     pub fn blast(&mut self, pos: Vec2, shot: Vec2, radius: f32, life: f32, look: Look) {
+        self.blast_inner(pos, shot, radius, life, look, false);
+    }
+
+    /// Crisp sparks and tumbling debris chips only (no fire/smoke puffs), used
+    /// in Gas Physics mode where the GPU fluid simulation renders all fire and gas.
+    pub fn blast_sparks(&mut self, pos: Vec2, shot: Vec2, radius: f32, life: f32, look: Look) {
+        self.blast_inner(pos, shot, radius, life, look, true);
+    }
+
+    fn blast_inner(&mut self, pos: Vec2, shot: Vec2, radius: f32, life: f32, look: Look, sparks_only: bool) {
         let r = radius;
         let heat = look.heat;
-        // Tight hot flash wisps (the swirling fireball & smoke volume now come
-        // from the real-time toroidal fluid `GasField`, avoiding round blobs).
-        for _ in 0..(2.0 + (2.0 + r / 14.0) * heat) as usize {
-            let d = self.dir();
-            let vel = d * self.range(0.8, 2.6) * r + capped(shot * CARRY_FIRE, MAX_CARRY);
-            let start = pos + d * self.range(0.0, 0.18) * r;
-            let size = (self.range(0.08, 0.16) * r, self.range(0.22, 0.42) * r);
-            let life = self.range(0.18, 0.34) * (0.8 + r / 180.0);
-            let mut p = Self::particle(Kind::Fire, start, vel, life, size, &look);
-            p.alpha = self.range(0.45, 0.78);
-            self.push(p);
-        }
-        // Sparks: fast white-hot streaks advected by the fluid's eddies.
-        for _ in 0..(14.0 + (16.0 + r * 1.1) * heat) as usize {
-            let d = self.dir();
-            let vel = d * self.range(3.2, 9.5) * (25.0 + r) + capped(shot * CARRY_SPARK, MAX_CARRY);
-            let life = self.range(0.28, 0.78);
-            let mut p = Self::particle(Kind::Spark, pos, vel, life, (self.range(0.6, 1.35), 0.0), &look);
-            p.alpha = self.range(0.65, 1.0);
-            self.push(p);
-        }
-        // Debris: tumbling chips swept by blast & fluid vortices.
-        if let Some(colour) = look.debris {
-            for _ in 0..(5.0 + r / 3.5) as usize {
+        // Fire: a cluster of puffs thrown out a little and swelling.
+        if !sparks_only {
+            for _ in 0..(3.0 + (4.0 + r / 5.0) * heat) as usize {
                 let d = self.dir();
-                let vel = d * self.range(1.1, 4.8) * (20.0 + r) + capped(shot * CARRY_DEBRIS, MAX_CARRY);
-                let half = self.range(0.7, 1.45) * (1.0 + r / 60.0);
-                let life = self.range(0.75, 1.45);
-                let mut p = Self::particle(Kind::Debris, pos + d * r * 0.2, vel, life, (half, half * self.range(0.5, 0.9)), &look);
-                p.angle = self.rand() * std::f32::consts::TAU;
-                p.spin = self.range(-15.0, 15.0);
-                p.colour = colour * self.range(0.55, 0.9);
+                let vel = d * self.range(0.6, 2.2) * r + capped(shot * CARRY_FIRE, MAX_CARRY);
+                let start = pos + d * self.range(0.0, 0.25) * r;
+                let size = (self.range(0.15, 0.3) * r, self.range(0.45, 0.75) * r);
+                let life = self.range(0.35, 0.6) * (0.8 + r / 150.0);
+                let mut p = Self::particle(Kind::Fire, start, vel, life, size, &look);
+                p.alpha = self.range(0.6, 1.0);
                 self.push(p);
             }
         }
-        // Light accent smoke wisps (subtle detail on top of the fluid smoke).
-        if look.opacity > 0.0 {
-            for _ in 0..(2.0 + r * 0.08) as usize {
+        // Sparks: fast, flying on with the shot.
+        for _ in 0..(10.0 + (12.0 + r * 0.9) * heat) as usize {
+            let d = self.dir();
+            let vel = d * self.range(3.0, 9.0) * (25.0 + r) + capped(shot * CARRY_SPARK, MAX_CARRY);
+            let life = self.range(0.25, 0.7);
+            let mut p = Self::particle(Kind::Spark, pos, vel, life, (self.range(0.6, 1.3), 0.0), &look);
+            p.alpha = self.range(0.6, 1.0);
+            self.push(p);
+        }
+        // Debris: tumbling chips.
+        if let Some(colour) = look.debris {
+            for _ in 0..(4.0 + r / 4.0) as usize {
                 let d = self.dir();
-                let vel = d * self.range(0.4, 1.6) * r + capped(shot * CARRY_SMOKE, MAX_CARRY);
-                let start = pos + d * self.range(0.0, 0.3) * r;
-                let size = (self.range(0.10, 0.18) * r, self.range(0.28, 0.48) * r);
-                let mut p = Self::particle(Kind::Smoke, start, vel, life * self.range(0.9, 1.5), size, &look);
-                p.age = -self.range(0.04, 0.14);
+                let vel = d * self.range(1.0, 4.5) * (20.0 + r) + capped(shot * CARRY_DEBRIS, MAX_CARRY);
+                let half = self.range(0.7, 1.4) * (1.0 + r / 60.0);
+                let life = self.range(0.7, 1.4);
+                let mut p = Self::particle(Kind::Debris, pos + d * r * 0.2, vel, life, (half, half * self.range(0.5, 0.9)), &look);
+                p.angle = self.rand() * std::f32::consts::TAU;
+                p.spin = self.range(-14.0, 14.0);
+                p.colour = colour * self.range(0.5, 0.85);
+                self.push(p);
+            }
+        }
+        // Smoke: rising out of the fire as it dies, swelling and lingering.
+        if !sparks_only && look.opacity > 0.0 {
+            for _ in 0..(8.0 + r * 0.5) as usize {
+                let d = self.dir();
+                let vel = d * self.range(0.3, 1.6) * r + capped(shot * CARRY_SMOKE, MAX_CARRY);
+                let start = pos + d * self.range(0.0, 0.35) * r;
+                let size = (self.range(0.15, 0.25) * r, self.range(0.5, 0.9) * r);
+                let mut p = Self::particle(Kind::Smoke, start, vel, life * self.range(1.2, 2.0), size, &look);
+                p.age = -self.range(0.04, 0.16);
                 p.colour = look.smoke * self.range(0.8, 1.1);
-                p.alpha = look.opacity * self.range(0.25, 0.45);
+                p.alpha = look.opacity * self.range(0.5, 1.0);
                 self.push(p);
             }
         }
@@ -293,6 +304,15 @@ impl Bursts {
     /// A shot striking something at `pos` going `shot`: sparks flying on
     /// along it, a few ricocheting back, a flash, chips and a puff of smoke.
     pub fn impact(&mut self, pos: Vec2, shot: Vec2, look: Look) {
+        self.impact_inner(pos, shot, look, false);
+    }
+
+    /// Crisp impact sparks and chips only (no smoke/fire puffs), for Gas Physics mode.
+    pub fn impact_sparks(&mut self, pos: Vec2, shot: Vec2, look: Look) {
+        self.impact_inner(pos, shot, look, true);
+    }
+
+    fn impact_inner(&mut self, pos: Vec2, shot: Vec2, look: Look, sparks_only: bool) {
         let speed = shot.length();
         let along = if speed > 1e-3 { shot / speed } else { vec2(0.0, -1.0) };
         let heat = look.heat;
@@ -311,9 +331,11 @@ impl Bursts {
             let p = Self::particle(Kind::Spark, pos, vel, life, (0.6, 0.0), &look);
             self.push(p);
         }
-        let mut flash = Self::particle(Kind::Fire, pos, shot * 0.05, 0.12, (2.5, 7.0 * (0.5 + heat)), &look);
-        flash.alpha = 0.6 + 0.4 * heat;
-        self.push(flash);
+        if !sparks_only {
+            let mut flash = Self::particle(Kind::Fire, pos, shot * 0.05, 0.12, (2.5, 7.0 * (0.5 + heat)), &look);
+            flash.alpha = 0.6 + 0.4 * heat;
+            self.push(flash);
+        }
         if let Some(colour) = look.debris {
             for _ in 0..3 {
                 let d = Vec2::from_angle(std::f32::consts::PI + self.range(-1.2, 1.2)).rotate(along);
@@ -325,7 +347,7 @@ impl Bursts {
                 self.push(p);
             }
         }
-        if look.opacity > 0.0 {
+        if !sparks_only && look.opacity > 0.0 {
             for _ in 0..4 {
                 let vel = shot * self.range(0.05, 0.2) + self.dir() * self.range(10.0, 40.0);
                 let mut p = Self::particle(Kind::Smoke, pos, vel, self.range(0.4, 0.8), (2.0, self.range(6.0, 10.0)), &look);

@@ -12,6 +12,7 @@ mod depot;
 mod enemies;
 mod gas;
 mod gfx;
+mod gpu_fluid;
 mod gravity;
 mod hud;
 mod icons;
@@ -1582,7 +1583,15 @@ async fn main() {
                     g.hud_scale = settings.hud_scale;
                     g.reduce_flashes = settings.reduce_flashes;
                     g.colour_assist = settings.colour_assist;
-                    g.physics_particles = settings.physics_particles || std::env::var_os("MB_PHYSICS").is_some();
+                    g.particles = if std::env::var_os("MB_GAS").is_some() {
+                        pause::ParticleStyle::GasPhysics
+                    } else if std::env::var_os("MB_PHYSICS").is_some() {
+                        pause::ParticleStyle::Physics
+                    } else if std::env::var_os("MB_CLASSIC").is_some() {
+                        pause::ParticleStyle::Classic
+                    } else {
+                        settings.particles
+                    };
                     g.update(dt);
                     for id in g.sounds.drain(..) {
                         play_effect(id, settings.effects);
@@ -1744,6 +1753,11 @@ async fn main() {
 
         gfx::set_widescreen(settings.widescreen);
         gfx::set_render_height(settings.resolution.map_or(0, |(_, h)| h));
+        if matches!(screen, Screen::Game) {
+            if let Some(g) = game.as_mut() {
+                canvas.step_fluid(&mut g.fluid);
+            }
+        }
         canvas.begin();
         // The glow comes from the world's emitters; a popup hides them.
         canvas.set_bloom(settings.bloom && pause.is_none());

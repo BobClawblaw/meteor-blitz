@@ -928,113 +928,74 @@ void main() {
     gl_FragColor = vec4(col, clamp(intensity * color.a, 0.0, 1.0));
 }"#;
 
-/// Dual-phase flow-advected volumetric FBM gas shader (port addition): turns
-/// the 128x128 toroidal fluid simulation into razor-sharp, billowing, swirling
-/// 4K smoke plumes and incandescent turbulent plasma with 3D self-shadowing
-/// and illumination from all 12 dynamic point lights.
+/// 512x512 GPU Navier-Stokes fluid-gas display shader (`Gas Physics`): renders
+/// the RGBA16F HDR plasma & smoke field directly with central-difference 3D
+/// fluid relief normals, key-light specular sheen, and all 12 dynamic point
+/// lights. Sharpness comes from real 512x512 MacCormack advection and curl
+/// vorticity confinement — zero fake noise stamps or blurry blobs.
 const GAS_FIELD_FRAGMENT: &str = r#"#version 100
 precision highp float;
 varying highp vec2 uv;
 varying lowp vec4 color;
 varying highp vec2 canvas;
 uniform sampler2D Texture;
-uniform sampler2D HeatVel;
-uniform sampler2D Glow;
-uniform float Time;
 uniform vec3 LightPos[12];
 uniform vec3 LightColor[12];
 
-float hash21(vec2 p) {
-    p = fract(p * vec2(127.1, 311.7));
-    p += dot(p, p + 34.5);
-    return fract(p.x * p.y);
-}
-
-float vnoise(vec2 p) {
-    vec2 i = floor(p);
-    vec2 f = fract(p);
-    f = f * f * (3.0 - 2.0 * f);
-    float a = hash21(i);
-    float b = hash21(i + vec2(1.0, 0.0));
-    float c = hash21(i + vec2(0.0, 1.0));
-    float d = hash21(i + vec2(1.0, 1.0));
-    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
-}
-
-float fbm(vec2 p) {
-    float v = 0.0;
-    float a = 0.54;
-    for (int i = 0; i < 3; i++) {
-        v += a * vnoise(p);
-        p = vec2(p.x * 1.62 - p.y * 1.18, p.x * 1.18 + p.y * 1.62) + vec2(7.3, 13.1);
-        a *= 0.48;
-    }
-    return v;
-}
-
 void main() {
-    vec4 dye0 = texture2D(Texture, uv);
-    vec4 hv0 = texture2D(HeatVel, uv);
-    vec4 glow0 = texture2D(Glow, uv);
-    if (dye0.a < 0.004 && hv0.r < 0.004 && glow0.a < 0.004) {
+    vec4 d = texture2D(Texture, uv);
+    float plasma_lum = max(d.r, max(d.g, d.b));
+    if (plasma_lum < 0.004 && d.a < 0.004) {
         discard;
     }
 
-    // Dual-phase flow advection so fine gas tendrils continuously stream along
-    // the live Navier-Stokes velocity field without stretching or snapping.
-    vec2 vel = (hv0.gb * 2.0 - 1.0) * 1.35;
-    float p0 = fract(Time * 0.34);
-    float p1 = fract(Time * 0.34 + 0.5);
-    float blend = abs(2.0 * p0 - 1.0);
-    vec2 base_p = uv * 24.0;
-    float n0 = fbm(base_p - vel * p0 * 1.15);
-    float n1 = fbm(base_p - vel * p1 * 1.15 + vec2(4.1, 2.7));
-    float turb = mix(n0, n1, blend);
+    // 3D volumetric fluid normal from 512x512 central differences.
+    const float e = 1.0 / 512.0;
+    vec4 sL = texture2D(Texture, uv - vec2(e, 0.0));
+    vec4 sR = texture2D(Texture, uv + vec2(e, 0.0));
+    vec4 sB = texture2D(Texture, uv - vec2(0.0, e));
+    vec4 sT = texture2D(Texture, uv + vec2(0.0, e));
+    float hL = length(sL.rgb) * 0.45 + sL.a;
+    float hR = length(sR.rgb) * 0.45 + sR.a;
+    float hB = length(sB.rgb) * 0.45 + sB.a;
+    float hT = length(sT.rgb) * 0.45 + sT.a;
+    vec3 N = normalize(vec3((hL - hR) * 2.4, (hB - hT) * 2.4, 0.48));
 
-    float m0 = fbm(base_p * 1.35 + vec2(11.4, 5.2) - vel * p0 * 1.35);
-    float m1 = fbm(base_p * 1.35 + vec2(15.5, 7.9) - vel * p1 * 1.35);
-    float turb2 = mix(m0, m1, blend);
+    // Upper-left key light gives billowing fluid ridges crisp 3D relief.
+    vec3 L = normalize(vec3(-0.55, -0.65, 0.52));
+    float ndl = clamp(dot(N, L), 0.0, 1.0);
+    float rim = pow(1.0 - clamp(N.z, 0.0, 1.0), 2.0);
+    float relief = 0.58 + 0.65 * ndl + 0.25 * rim;
 
-    // Curl-weighted UV warp carves organic wisps & Kelvin-Helmholtz billows.
-    float curl_boost = 0.55 + 0.85 * hv0.a;
-    vec2 warp = vec2(turb - 0.5, turb2 - 0.5) * (0.0085 * curl_boost);
-    vec2 uv_w = uv + warp;
-
-    vec4 dye = texture2D(Texture, uv_w);
-    vec4 hv = texture2D(HeatVel, uv_w);
-    vec4 glow = texture2D(Glow, uv_w);
-
-    // Carve soft gossamer filaments on thin edges while keeping cores volumetric.
-    float wispy = mix(0.46, 1.62, turb);
-    float density = clamp(dye.a * wispy * 1.15, 0.0, 0.96);
-    float heat = hv.r;
-
-    // 3D volumetric self-shadowing along upper-left key light direction.
-    float d_key = texture2D(Texture, uv_w + vec2(-0.008, -0.010)).a;
-    float self_shadow = clamp(0.68 + (dye.a - d_key) * 1.55 + (turb - 0.5) * 0.32, 0.34, 1.42);
-
-    // All 12 dynamic point lights illuminate billowing smoke from within.
+    // All 12 dynamic point lights illuminate swirling gas wisps from within.
     vec3 dyn = vec3(0.0);
     for (int i = 0; i < 12; i++) {
-        vec2 d = LightPos[i].xy - canvas;
+        vec2 dp = LightPos[i].xy - canvas;
         float r = LightPos[i].z;
-        float fall = clamp(1.0 - length(d) / max(r, 1.0), 0.0, 1.0);
+        float fall = clamp(1.0 - length(dp) / max(r, 1.0), 0.0, 1.0);
         dyn += LightColor[i] * (fall * fall);
     }
-    dyn = dyn / (1.0 + dyn * 0.8);
+    dyn = dyn / (1.0 + dyn * 0.85);
 
-    vec3 smoke_col = dye.rgb * self_shadow + (dye.rgb * 0.85 + vec3(0.22)) * dyn * (0.75 + 0.55 * turb);
+    // Translucent layered fluid shading: preserves crisp internal vortex curls
+    // and colour gradients instead of clipping into flat white cutouts.
+    float smoke_a = 1.0 - exp(-d.a * 0.72);
+    vec3 hue = d.rgb / max(plasma_lum, 0.18);
+    vec3 smoke_tint = mix(vec3(0.24, 0.28, 0.36), clamp(hue, 0.0, 1.0) * 0.65 + vec3(0.14), clamp(plasma_lum * 0.85, 0.0, 0.75));
+    vec3 smoke_col = smoke_tint * relief + (smoke_tint * 0.55 + vec3(0.25)) * dyn * (0.65 + 0.45 * rim);
 
-    // Turbulent incandescent fire & plasma filaments.
-    float fire_shape = clamp(glow.a * mix(0.55, 1.65, turb * 0.65 + turb2 * 0.35), 0.0, 1.0);
-    vec3 fire_col = glow.rgb * (1.25 + 0.95 * turb2);
+    // Filmic-compressed plasma glow: deep fiery/spectral filaments on the arms,
+    // warm golden-white spine only at the sharpest high-energy vortex cores.
+    vec3 plasma_rich = d.rgb / (1.0 + d.rgb * 0.42);
+    vec3 hot_spine = vec3(1.0, 0.92, 0.75) * smoothstep(1.35, 3.2, plasma_lum) * 0.85;
+    vec3 plasma_col = (plasma_rich * 1.25 + hot_spine) * (0.78 + 0.35 * relief);
+    float plasma_a = clamp(1.0 - exp(-plasma_lum * 1.15), 0.0, 0.94);
 
-    // Combine volumetric lit smoke with blazing plasma core.
-    float out_a = clamp(max(density * 0.82, fire_shape * 0.95) * color.a, 0.0, 0.98);
-    if (out_a < 0.003) {
+    float out_a = clamp(max(smoke_a * 0.62, plasma_a * 0.90) * color.a, 0.0, 0.95);
+    if (out_a < 0.004) {
         discard;
     }
-    vec3 out_rgb = mix(smoke_col, smoke_col * 0.45 + fire_col * 1.45, clamp(fire_shape * 1.35 + heat * 0.5, 0.0, 1.0));
+    vec3 out_rgb = mix(smoke_col, smoke_col * 0.25 + plasma_col, clamp(plasma_a * 1.1, 0.0, 1.0));
     gl_FragColor = vec4(out_rgb, out_a);
 }"#;
 
@@ -1287,10 +1248,7 @@ pub struct Canvas {
     shield: Material,
     gravity: Material,
     gas_mat: Material,
-    gas_dye: Texture2D,
-    gas_hv: Texture2D,
-    gas_glow: Texture2D,
-    gas_bufs: RefCell<(Vec<u8>, Vec<u8>, Vec<u8>)>,
+    gpu_fluid: RefCell<crate::gpu_fluid::GpuFluid>,
     post: Material,
     /// The next blit's shockwaves and grading (None: the plain blit).
     post_fx: RefCell<Option<(Vec<Wave>, Grade)>>,
@@ -1425,9 +1383,7 @@ impl Canvas {
             },
             MaterialParams {
                 pipeline_params: pipeline(BlendFactor::OneMinusValue(BlendValue::SourceAlpha)),
-                textures: vec!["HeatVel".to_owned(), "Glow".to_owned()],
                 uniforms: vec![
-                    UniformDesc::new("Time", UniformType::Float1),
                     UniformDesc::new("NdcToCanvas", UniformType::Float4),
                     UniformDesc::new("NdcOffset", UniformType::Float2),
                     UniformDesc::new("LightPos", UniformType::Float3).array(MAX_LIGHTS),
@@ -1437,36 +1393,7 @@ impl Canvas {
             },
         )
         .expect("gas shader");
-        let make_gas_tex = || {
-            use macroquad::miniquad::{
-                MipmapFilterMode, TextureAccess, TextureFormat, TextureKind, TextureParams,
-                TextureSource, TextureWrap,
-            };
-            let n = crate::gas::N as u32;
-            let zero = vec![0u8; (n * n * 4) as usize];
-            let gl = unsafe { get_internal_gl() };
-            let id = gl.quad_context.new_texture(
-                TextureAccess::Static,
-                TextureSource::Bytes(&zero),
-                TextureParams {
-                    kind: TextureKind::Texture2D,
-                    format: TextureFormat::RGBA8,
-                    wrap: TextureWrap::Repeat,
-                    min_filter: FilterMode::Linear,
-                    mag_filter: FilterMode::Linear,
-                    mipmap_filter: MipmapFilterMode::None,
-                    width: n,
-                    height: n,
-                    allocate_mipmaps: false,
-                    sample_count: 0,
-                },
-            );
-            Texture2D::from_miniquad_texture(id)
-        };
-        let gas_dye = make_gas_tex();
-        let gas_hv = make_gas_tex();
-        let gas_glow = make_gas_tex();
-        let gas_bytes = crate::gas::N * crate::gas::N * 4;
+        let gpu_fluid = RefCell::new(crate::gpu_fluid::GpuFluid::new());
         let post = load_material(
             ShaderSource::Glsl { vertex: DEFAULT_VERTEX, fragment: POST_FRAGMENT },
             MaterialParams {
@@ -1526,10 +1453,7 @@ impl Canvas {
             shield,
             gravity,
             gas_mat,
-            gas_dye,
-            gas_hv,
-            gas_glow,
-            gas_bufs: RefCell::new((vec![0; gas_bytes], vec![0; gas_bytes], vec![0; gas_bytes])),
+            gpu_fluid,
             post,
             post_fx: RefCell::new(None),
             lighting_on: Cell::new(false),
@@ -1978,30 +1902,33 @@ impl Canvas {
         }
     }
 
-    /// Uploads the toroidal fluid gas grid and renders it across the entire
-    /// visible playfield as dual-phase FBM-turbulent volumetric smoke & fire,
-    /// feeding incandescent plasma regions straight into the bloom pyramid.
+    /// Advances the high-resolution GPU Navier-Stokes fluid solver (`Gas Physics`)
+    /// from any queued game splats and fixed steps. Call before `begin()` so its
+    /// offscreen RGBA16F passes never nest inside the main frame pass.
+    pub fn step_fluid(&self, queue: &mut crate::gas::GasQueue) {
+        let (clear, steps, splats) = queue.take();
+        if clear || steps > 0 || !splats.is_empty() {
+            self.gpu_fluid.borrow_mut().step(clear, steps, &splats);
+        }
+    }
+
+    /// Renders the 512x512 GPU Navier-Stokes fluid-gas field across the visible
+    /// playfield with 3D fluid normals, 12-light illumination, and HDR plasma
+    /// filaments feeding directly into the 5-level pyramid bloom.
     pub fn draw_gas_field(
         &self,
-        gas: &crate::gas::GasField,
         ship_world: Vec2,
         cam_offset: Vec2,
         view_half: Vec2,
         z: f32,
-        time: f32,
     ) {
-        if !gas.is_active() {
+        let fluid = self.gpu_fluid.borrow();
+        if !fluid.is_active() {
             return;
         }
-        let n = crate::gas::N as u32;
-        {
-            let mut bufs = self.gas_bufs.borrow_mut();
-            let (dye, hv, glow) = &mut *bufs;
-            gas.pack(dye, hv, glow);
-            self.gas_dye.update_from_bytes(n, n, dye);
-            self.gas_hv.update_from_bytes(n, n, hv);
-            self.gas_glow.update_from_bytes(n, n, glow);
-        }
+        let dye_tex = fluid.dye_texture().clone();
+        drop(fluid);
+
         let centre = vec2(CANVAS_W * 0.5, CANVAS_H * 0.5);
         let pad = view_half + Vec2::splat(24.0);
         let x0 = centre.x - pad.x;
@@ -2025,9 +1952,6 @@ impl Canvas {
         let indices = vec![0, 1, 2, 0, 2, 3];
 
         let (m, offset) = ndc_to_canvas(view_w(), self.zoom.get());
-        self.gas_mat.set_texture("HeatVel", self.gas_hv.clone());
-        self.gas_mat.set_texture("Glow", self.gas_glow.clone());
-        self.gas_mat.set_uniform("Time", time);
         self.gas_mat.set_uniform("NdcToCanvas", m);
         self.gas_mat.set_uniform("NdcOffset", offset);
         let lights = self.lights.borrow();
@@ -2044,16 +1968,16 @@ impl Canvas {
         draw_mesh(&Mesh {
             vertices: verts.clone(),
             indices: indices.clone(),
-            texture: Some(self.gas_dye.clone()),
+            texture: Some(dye_tex.clone()),
         });
         gl_use_default_material();
 
-        // Feed incandescent plasma regions directly into the 5-level bloom pyramid.
+        // Feed HDR luminous plasma filaments into the 5-level bloom pyramid.
         if self.glowing.get() && self.bloom_on.get() {
             self.record(Mesh {
                 vertices: verts,
                 indices,
-                texture: Some(self.gas_glow.clone()),
+                texture: Some(dye_tex),
             });
         }
     }
