@@ -1,16 +1,13 @@
 #!/usr/bin/env python3
 """Build the 8x art set (the desktop default) directly from the originals.
 
-- Sprites (`original/sprites/`): edge-bled RGB upscaled with two-pass
-  Real-ESRGAN (`realesrgan-x4plus`) downsampled to exact 8x via Lanczos, plus
-  hybrid alpha upscaling (`realesrgan-x4plus-anime` for hard silhouettes blended
-  with smooth bicubic for soft glows/shadows). Replaces the previous xBR 4x+2x
-  chain, which caused onion-ring alpha banding and painterly smearing on the
-  game's pre-rendered 3D sprites.
-- UI (`assets/ui/`) and bitmap font (`ngage.png`): edge-bled RGB upscaled with
-  `realesrgan-x4plus-anime` (sharp chrome text, bevels, and silhouettes) brought
-  to 8x via Lanczos, with hybrid alpha (and `rsvg-convert` at 128 px for
-  `github.png` when available). The font's glyph rectangles are scaled by 8.
+- Sprites (`original/sprites/`), UI (`assets/ui/`), and bitmap font (`ngage.png`):
+  edge-bled, reflect-padded RGB upscaled with Real-ESRGAN (`realesrgan-x4plus`,
+  single 4x pass downsampled/upsampled cleanly to exact 8x via Lanczos), with
+  smooth Bicubic alpha (no neural alpha warping, double halos, or edge bars).
+  Neutral monochrome art (chrome labels, white fonts) is desaturated after
+  upscaling to eliminate RGB chroma noise, and pure-white alpha-masked sheets
+  keep pure white RGB. `github.png` is rendered directly from SVG at 128 px.
 - Terrain and fog: 4096x4096 from the 512x512 originals, through
   upscale4x's `terrain` (two-pass padded Real-ESRGAN x4plus with seam closure).
 - Normal maps: built from the 8x terrain by tools/normalmaps.py's `normal_map`,
@@ -86,9 +83,14 @@ def bleed_rgb(rgba: np.ndarray, iters: int = 16) -> np.ndarray:
     return np.clip(np.round(out), 0, 255).astype(np.uint8)
 
 
-def pad_edge(im: Image.Image, pad: int) -> Image.Image:
+def pad_reflect(im: Image.Image, pad: int) -> Image.Image:
+    """Reflect-pad RGB before Real-ESRGAN so border features (like planet cubes
+    and bevelled icons) never stretch into artificial edge bars."""
     arr = np.asarray(im.convert("RGB"))
-    padded = np.pad(arr, ((pad, pad), (pad, pad), (0, 0)), mode="edge")
+    if arr.shape[0] > pad and arr.shape[1] > pad:
+        padded = np.pad(arr, ((pad, pad), (pad, pad), (0, 0)), mode="reflect")
+    else:
+        padded = np.pad(arr, ((pad, pad), (pad, pad), (0, 0)), mode="edge")
     return Image.fromarray(padded, "RGB")
 
 
@@ -138,25 +140,20 @@ def upscale_batch(
     files: list[Path],
     dst_dir: Path,
     esrgan: Path,
-    model: str,
-    two_pass: bool,
-    force_sharp_alpha: bool = False,
+    model: str = "realesrgan-x4plus",
     label: str = "asset",
 ) -> None:
-    """Batch-upscale a list of PNGs to 8x with edge-bled RGB and clean alpha."""
+    """Batch-upscale a list of PNGs to 8x with reflect-padded Real-ESRGAN x4plus
+    RGB and clean Bicubic alpha (zero neural alpha warping or edge bars)."""
     dst_dir.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
         rgb_in = tmp / "rgb_in"
         rgb_4x = tmp / "rgb_4x"
-        rgb_p2_in = tmp / "rgb_p2_in"
-        rgb_16x = tmp / "rgb_16x"
-        alpha_in = tmp / "alpha_in"
-        alpha_4x = tmp / "alpha_4x"
         rgb_in.mkdir()
-        alpha_in.mkdir()
 
-        meta: dict[str, tuple[Path, tuple[int, int], bool, np.ndarray | None, float]] = {}
+        # name -> (src_path, (w, h), has_alpha, a_arr, is_mono, is_pure_white)
+        meta: dict[str, tuple[Path, tuple[int, int], bool, np.ndarray | None, bool, bool]] = {}
         tiny_files: list[Path] = []
 
         for p in files:
@@ -164,84 +161,107 @@ def upscale_batch(
             has_alpha = im.mode in ("RGBA", "LA", "PA") or "transparency" in im.info
             im = im.convert("RGBA")
             w, h = im.size
-            if max(w, h) <= TINY_MAX:
+            if min(w, h) <= 10 or max(w, h) <= TINY_MAX:
                 tiny_files.append(p)
                 continue
             arr = np.asarray(im)
-            bled = Image.fromarray(bleed_rgb(arr, 16), "RGB")
-            pad_edge(bled, PAD).save(rgb_in / p.name)
-            a_arr = None
-            sf = 0.0
-            if has_alpha:
-                a_arr = clean_alpha_noise(arr[..., 3])
-                sf = soft_fraction(a_arr)
-                if force_sharp_alpha or sf < 0.45:
-                    pad_edge(Image.fromarray(a_arr, "L").convert("RGB"), PAD).save(alpha_in / p.name)
-            meta[p.name] = (p, (w, h), has_alpha, a_arr, sf)
+            vis = arr[..., 3] > 10 if has_alpha else np.ones((h, w), dtype=bool)
+            if vis.any():
+                r = arr[vis, 0].astype(np.int32)
+                g = arr[vis, 1].astype(np.int32)
+                b = arr[vis, 2].astype(np.int32)
+                max_chroma = int(max(np.abs(r - g).max(), np.abs(g - b).max(), np.abs(r - b).max()))
+                is_mono = max_chroma <= 12
+                is_pure_white = has_alpha and int(min(r.min(), g.min(), b.min())) >= 245
+            else:
+                is_mono = False
+                is_pure_white = False
 
-        if meta:
-            print(f"{label}: pass 1 ({model}) on {len(meta)} RGB files...", flush=True)
+            a_arr = clean_alpha_noise(arr[..., 3]) if has_alpha else None
+            if not is_pure_white:
+                bled = Image.fromarray(bleed_rgb(arr, 16), "RGB")
+                pad_reflect(bled, PAD).save(rgb_in / p.name)
+            meta[p.name] = (p, (w, h), has_alpha, a_arr, is_mono, is_pure_white)
+
+        esrgan_jobs = list(rgb_in.glob("*.png"))
+        if esrgan_jobs:
+            print(f"{label}: {model} on {len(esrgan_jobs)} RGB files...", flush=True)
             run_esrgan_dir(rgb_in, rgb_4x, esrgan, model)
 
-            if two_pass:
-                rgb_p2_in.mkdir()
-                for name, (_, (w, h), _, _, _) in meta.items():
-                    im4 = Image.open(rgb_4x / name).convert("RGB")
-                    cropped = im4.crop((PAD * 4, PAD * 4, (PAD + w) * 4, (PAD + h) * 4))
-                    pad_edge(cropped, PAD).save(rgb_p2_in / name)
-                print(f"{label}: pass 2 ({model}) on {len(meta)} RGB files...", flush=True)
-                run_esrgan_dir(rgb_p2_in, rgb_16x, esrgan, model)
-
-            alpha_jobs = list(alpha_in.glob("*.png"))
-            if alpha_jobs:
-                print(f"{label}: alpha pass (realesrgan-x4plus-anime) on {len(alpha_jobs)} files...", flush=True)
-                run_esrgan_dir(alpha_in, alpha_4x, esrgan, "realesrgan-x4plus-anime")
-
-            for name, (src_path, (w, h), has_alpha, a_arr, sf) in sorted(meta.items()):
-                if two_pass:
-                    im16 = Image.open(rgb_16x / name).convert("RGB")
-                    rgb_crop = im16.crop((PAD * 4, PAD * 4, (PAD + w * 4) * 4, (PAD + h * 4) * 4))
-                else:
-                    im4 = Image.open(rgb_4x / name).convert("RGB")
-                    rgb_crop = im4.crop((PAD * 4, PAD * 4, (PAD + w) * 4, (PAD + h) * 4))
+        for name, (src_path, (w, h), has_alpha, a_arr, is_mono, is_pure_white) in sorted(meta.items()):
+            if is_pure_white:
+                rgb8 = Image.new("RGB", (w * 8, h * 8), (255, 255, 255))
+            else:
+                im4 = Image.open(rgb_4x / name).convert("RGB")
+                rgb_crop = im4.crop((PAD * 4, PAD * 4, (PAD + w) * 4, (PAD + h) * 4))
                 rgb8 = rgb_crop.resize((w * 8, h * 8), Image.LANCZOS)
+                if is_mono:
+                    lum = rgb8.convert("L")
+                    rgb8 = Image.merge("RGB", (lum, lum, lum))
 
-                if has_alpha and a_arr is not None:
-                    a_soft = np.asarray(
-                        Image.fromarray(a_arr, "L").resize((w * 8, h * 8), Image.BICUBIC),
+            if has_alpha and a_arr is not None:
+                if is_pure_white:
+                    # Pure-white packed font/caption sheets (ngage.png, captions.png)
+                    # have 1 px row gaps; Bilinear + smoothstep keeps strokes crisp,
+                    # and masking out source-empty rows prevents cross-row bleed.
+                    a_lin = np.asarray(
+                        Image.fromarray(a_arr, "L").resize((w * 8, h * 8), Image.BILINEAR),
                         dtype=np.float32,
-                    )
-                    sharp_path = alpha_4x / name
-                    if sharp_path.exists():
-                        a4 = Image.open(sharp_path).convert("L")
-                        a4_crop = a4.crop((PAD * 4, PAD * 4, (PAD + w) * 4, (PAD + h) * 4))
-                        a_sharp = np.asarray(a4_crop.resize((w * 8, h * 8), Image.BICUBIC), dtype=np.float32)
-                        if force_sharp_alpha:
-                            a_mix = a_sharp
-                        else:
-                            t = float(np.clip((sf - 0.15) / 0.30, 0.0, 1.0))
-                            a_mix = a_sharp * (1.0 - t) + a_soft * t
-                    else:
-                        a_mix = a_soft
-                    a8 = Image.fromarray(np.clip(np.round(a_mix), 0, 255).astype(np.uint8), "L")
-                    out = rgb8.convert("RGBA")
-                    out.putalpha(a8)
+                    ) / 255.0
+                    t = np.clip((a_lin - 0.25) / (0.75 - 0.25), 0.0, 1.0)
+                    a_crisp = t * t * (3.0 - 2.0 * t)
+                    # Zero out any upscaled row/column whose entire 1x source row/column was empty.
+                    empty_rows = np.where(a_arr.max(axis=1) == 0)[0]
+                    for ry in empty_rows:
+                        a_crisp[ry * 8:(ry + 1) * 8, :] = 0.0
+                    a8 = Image.fromarray(np.clip(np.round(a_crisp * 255.0), 0, 255).astype(np.uint8), "L")
                 else:
-                    out = rgb8
-                out.save(dst_dir / name, optimize=True)
+                    a8 = Image.fromarray(a_arr, "L").resize((w * 8, h * 8), Image.BICUBIC)
+                out = rgb8.convert("RGBA")
+                out.putalpha(a8)
+            else:
+                out = rgb8
+            out.save(dst_dir / name, optimize=True)
 
         for p in tiny_files:
             im = Image.open(p).convert("RGBA")
             w, h = im.size
-            out = im.resize((w * 8, h * 8), Image.LANCZOS)
+            arr = np.asarray(im)
+            vis = arr[..., 3] > 10
+            if vis.any() and int(arr[vis, :3].min()) >= 245:
+                rgb8 = Image.new("RGB", (w * 8, h * 8), (255, 255, 255))
+                a8 = Image.fromarray(arr[..., 3], "L").resize((w * 8, h * 8), Image.BICUBIC)
+                out = rgb8.convert("RGBA")
+                out.putalpha(a8)
+            else:
+                # Edge-bleed RGB before Lanczos so tiny sprites never get dark fringes.
+                bled = Image.fromarray(bleed_rgb(arr, 8), "RGB").resize((w * 8, h * 8), Image.LANCZOS)
+                a8 = Image.fromarray(arr[..., 3], "L").resize((w * 8, h * 8), Image.BICUBIC)
+                out = bled.convert("RGBA")
+                out.putalpha(a8)
             out.save(dst_dir / p.name, optimize=True)
 
-        print(f"{label}: wrote {len(files)} files to {dst_dir.relative_to(ROOT)}", flush=True)
+        # Fidelity guard: compare every output downsampled back to 1x vs original.
+        worst = []
+        for p in files:
+            orig = Image.open(p).convert("RGBA")
+            res = Image.open(dst_dir / p.name).convert("RGBA")
+            down = res.resize(orig.size, Image.BOX)
+            s = np.asarray(orig, dtype=np.float32)
+            d = np.asarray(down, dtype=np.float32)
+            sp = s[..., :3] * (s[..., 3:4] / 255.0)
+            dp = d[..., :3] * (d[..., 3:4] / 255.0)
+            rgb_mae = float(np.abs(sp - dp).mean())
+            a_mae = float(np.abs(s[..., 3] - d[..., 3]).mean())
+            worst.append((rgb_mae + a_mae, rgb_mae, a_mae, p.name))
+        worst.sort(reverse=True)
+        top = ", ".join(f"{n}({r:.1f}/{a:.1f})" for _, r, a, n in worst[:3])
+        print(f"{label}: wrote {len(files)} files to {dst_dir.relative_to(ROOT)} [max rgb/a MAE: {top}]", flush=True)
 
 
 def upscale_ui(esrgan: Path) -> None:
     files = [p for p in sorted((ROOT / "assets" / "ui").glob("*.png")) if p.name != "github.png"]
-    upscale_batch(files, OUT / "ui", esrgan, "realesrgan-x4plus-anime", two_pass=False, label="ui")
+    upscale_batch(files, OUT / "ui", esrgan, "realesrgan-x4plus", label="ui")
     # Render github.png directly from the SVG at 128x128 (8x of 16 px) if possible.
     rsvg = shutil.which("rsvg-convert")
     svg = ROOT / "tools" / "github-mark.svg"
@@ -250,25 +270,17 @@ def upscale_ui(esrgan: Path) -> None:
         subprocess.run([rsvg, "-w", "128", "-h", "128", "-o", str(dst), str(svg)], check=True)
         print("ui: rendered github.png from SVG (128x128)", flush=True)
     else:
-        upscale_batch([ROOT / "assets" / "ui" / "github.png"], OUT / "ui", esrgan, "realesrgan-x4plus-anime", two_pass=False, label="ui-github")
+        upscale_batch([ROOT / "assets" / "ui" / "github.png"], OUT / "ui", esrgan, "realesrgan-x4plus", label="ui-github")
 
 
 def upscale_sprites(esrgan: Path) -> None:
     files = sorted((ROOT / "original" / "sprites").glob("*.png"))
-    upscale_batch(files, OUT / "sprites", esrgan, "realesrgan-x4plus", two_pass=True, label="sprites")
+    upscale_batch(files, OUT / "sprites", esrgan, "realesrgan-x4plus", label="sprites")
 
 
 def upscale_font(esrgan: Path) -> None:
     src = ROOT / "assets" / "ui" / "ngage.png"
-    upscale_batch(
-        [src],
-        OUT,
-        esrgan,
-        "realesrgan-x4plus-anime",
-        two_pass=False,
-        force_sharp_alpha=True,
-        label="font",
-    )
+    upscale_batch([src], OUT, esrgan, "realesrgan-x4plus", label="font")
     dat = (ROOT / "original" / "app" / "ngage.dat").read_bytes()
     count = int.from_bytes(dat[0:2], "little")
     out = bytearray(dat[0:2])
