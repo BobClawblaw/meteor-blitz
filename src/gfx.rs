@@ -852,6 +852,82 @@ void main() {
     gl_FragColor = vec4(rgb, t.a * color.a);
 }"#;
 
+/// Procedural hexagonal Fresnel energy shield (port addition): razor-sharp
+/// rotating honeycomb lattice, bright cyan Fresnel rim, and sweeping energy
+/// pulse, blended additively.
+const SHIELD_FRAGMENT: &str = r#"#version 100
+precision highp float;
+varying lowp vec4 color;
+varying lowp vec2 uv;
+uniform float Time;
+
+float hex_edge(vec2 p) {
+    p = abs(p);
+    float d = max(dot(p, normalize(vec2(1.0, 1.7320508))), p.x);
+    return d;
+}
+
+float hex_grid(vec2 uv_p) {
+    vec2 r = vec2(1.0, 1.7320508);
+    vec2 h = r * 0.5;
+    vec2 a = mod(uv_p, r) - h;
+    vec2 b = mod(uv_p - h, r) - h;
+    vec2 gv = dot(a, a) < dot(b, b) ? a : b;
+    float d = 0.5 - hex_edge(gv);
+    return smoothstep(0.08, 0.015, d);
+}
+
+void main() {
+    vec2 p = uv * 2.0 - 1.0;
+    float r = length(p);
+    if (r > 1.0) {
+        discard;
+    }
+    // Slight spherical projection onto the bubble so hexes curve over the dome.
+    float z = sqrt(max(0.02, 1.0 - r * r));
+    vec2 sph = p / (0.65 + 0.55 * z);
+    float ang = Time * 0.45;
+    float cs = cos(ang);
+    float sn = sin(ang);
+    vec2 rot_p = vec2(sph.x * cs - sph.y * sn, sph.x * sn + sph.y * cs);
+    float hex = hex_grid(rot_p * 3.4);
+    float rim = pow(clamp(r, 0.0, 1.0), 3.6) * smoothstep(1.0, 0.87, r);
+    float inner_rim = pow(clamp(r, 0.0, 1.0), 1.8) * smoothstep(1.0, 0.82, r);
+    float sweep = 0.7 + 0.3 * sin(atan(p.y, p.x) * 3.0 - Time * 5.2 + r * 4.0);
+    float energy = (rim * 1.15 + hex * inner_rim * 0.62 + inner_rim * 0.14) * sweep;
+    vec3 col = mix(vec3(0.18, 0.78, 1.0), vec3(0.78, 0.98, 1.0), clamp(rim * 0.9 + hex * 0.4, 0.0, 1.0));
+    gl_FragColor = vec4(col, clamp(energy * color.a, 0.0, 1.0));
+}"#;
+
+/// Procedural gravity gun tractor beam (port addition): animated cyan-violet
+/// energy chevrons flowing toward the ship, glowing plasma filament core,
+/// and feathered cone falloff. `uv.x` runs 0..1 along the beam, `uv.y` 0..1
+/// across the cone width.
+const GRAVITY_FRAGMENT: &str = r#"#version 100
+precision highp float;
+varying lowp vec4 color;
+varying lowp vec2 uv;
+uniform float Time;
+uniform float Gripped;
+
+void main() {
+    float u = uv.x;
+    float v = uv.y * 2.0 - 1.0;
+    float av = abs(v);
+    float edge = pow(clamp(1.0 - av, 0.0, 1.0), 1.8);
+    // Flowing energy rings: faster and tighter when gripping an enemy.
+    float speed = mix(2.4, 4.4, Gripped);
+    float freq = mix(5.0, 7.5, Gripped);
+    float wave = sin((u * freq + Time * speed - av * 0.65) * 6.2831853);
+    float rings = smoothstep(0.15, 0.95, wave) * edge;
+    float core = exp(-av * av * 18.0) * (0.65 + 0.35 * sin(u * 14.0 + Time * 9.0));
+    float fade_ends = smoothstep(0.0, 0.08, u) * smoothstep(1.0, 0.12, u);
+    float intensity = (edge * 0.24 + rings * 0.48 + core * 0.75) * fade_ends;
+    vec3 col = mix(vec3(0.32, 0.68, 1.0), vec3(0.72, 0.92, 1.0), clamp(core + rings * 0.45, 0.0, 1.0));
+    col = mix(col, vec3(0.65, 0.42, 1.0), (1.0 - core) * 0.32 * Gripped);
+    gl_FragColor = vec4(col, clamp(intensity * color.a, 0.0, 1.0));
+}"#;
+
 /// The final blit with post effects (port addition): shockwave rings that
 /// bend both the scene and bloom (with a slight colour split at the ring),
 /// linear-space bloom addition with calibrated ACES filmic tone mapping,
@@ -1098,6 +1174,8 @@ pub struct Canvas {
     additive: Material,
     flash: Material,
     lit: Material,
+    shield: Material,
+    gravity: Material,
     post: Material,
     /// The next blit's shockwaves and grading (None: the plain blit).
     post_fx: RefCell<Option<(Vec<Wave>, Grade)>>,
@@ -1198,6 +1276,33 @@ impl Canvas {
             },
         )
         .expect("lit shader");
+        let shield = load_material(
+            ShaderSource::Glsl {
+                vertex: DEFAULT_VERTEX,
+                fragment: SHIELD_FRAGMENT,
+            },
+            MaterialParams {
+                pipeline_params: pipeline(BlendFactor::One),
+                uniforms: vec![UniformDesc::new("Time", UniformType::Float1)],
+                ..Default::default()
+            },
+        )
+        .expect("shield shader");
+        let gravity = load_material(
+            ShaderSource::Glsl {
+                vertex: DEFAULT_VERTEX,
+                fragment: GRAVITY_FRAGMENT,
+            },
+            MaterialParams {
+                pipeline_params: pipeline(BlendFactor::One),
+                uniforms: vec![
+                    UniformDesc::new("Time", UniformType::Float1),
+                    UniformDesc::new("Gripped", UniformType::Float1),
+                ],
+                ..Default::default()
+            },
+        )
+        .expect("gravity shader");
         let post = load_material(
             ShaderSource::Glsl { vertex: DEFAULT_VERTEX, fragment: POST_FRAGMENT },
             MaterialParams {
@@ -1254,6 +1359,8 @@ impl Canvas {
             additive,
             flash,
             lit,
+            shield,
+            gravity,
             post,
             post_fx: RefCell::new(None),
             lighting_on: Cell::new(false),
@@ -1604,6 +1711,102 @@ impl Canvas {
         gl_use_material(&self.backdrop_material);
         draw_mesh(&mesh);
         gl_use_default_material();
+    }
+
+    /// Draws the procedural hexagonal Fresnel energy shield bubble around
+    /// `center` and feeds a matching cyan glow quad to the bloom pyramid.
+    pub fn draw_energy_shield(
+        &self,
+        center: Vec2,
+        radius: f32,
+        z: f32,
+        time: f32,
+        alpha: f32,
+        bloom_tex: &Texture2D,
+    ) {
+        let c = Color::new(1.0, 1.0, 1.0, alpha.clamp(0.0, 1.0));
+        let verts = vec![
+            Vertex::new(center.x - radius, center.y - radius, z, 0.0, 0.0, c),
+            Vertex::new(center.x + radius, center.y - radius, z, 1.0, 0.0, c),
+            Vertex::new(center.x + radius, center.y + radius, z, 1.0, 1.0, c),
+            Vertex::new(center.x - radius, center.y + radius, z, 0.0, 1.0, c),
+        ];
+        let indices = vec![0, 1, 2, 0, 2, 3];
+        self.shield.set_uniform("Time", time);
+        gl_use_material(&self.shield);
+        draw_mesh(&Mesh {
+            vertices: verts,
+            indices: indices.clone(),
+            texture: Some(self.white.clone()),
+        });
+        gl_use_default_material();
+        if self.glowing.get() && self.bloom_on.get() {
+            let glow_c = Color::new(0.28, 0.88, 1.0, (alpha * 0.42).clamp(0.0, 1.0));
+            let r = radius * 1.05;
+            let g_verts = vec![
+                Vertex::new(center.x - r, center.y - r, z, 0.0, 0.0, glow_c),
+                Vertex::new(center.x + r, center.y - r, z, 1.0, 0.0, glow_c),
+                Vertex::new(center.x + r, center.y + r, z, 1.0, 1.0, glow_c),
+                Vertex::new(center.x - r, center.y + r, z, 0.0, 1.0, glow_c),
+            ];
+            self.record(Mesh {
+                vertices: g_verts,
+                indices,
+                texture: Some(bloom_tex.clone()),
+            });
+        }
+    }
+
+    /// Draws the procedural tractor-beam cone for the gravity gun and feeds
+    /// its core glow to the bloom pyramid.
+    pub fn draw_gravity_beam(
+        &self,
+        ship: Vec2,
+        tip: Vec2,
+        side: Vec2,
+        start_w: f32,
+        end_w: f32,
+        z: f32,
+        time: f32,
+        gripped: bool,
+    ) {
+        let c = Color::new(1.0, 1.0, 1.0, if gripped { 0.95 } else { 0.78 });
+        let verts = vec![
+            Vertex::new(ship.x - side.x * start_w, ship.y - side.y * start_w, z, 0.0, 0.0, c),
+            Vertex::new(tip.x - side.x * end_w, tip.y - side.y * end_w, z, 1.0, 0.0, c),
+            Vertex::new(tip.x + side.x * end_w, tip.y + side.y * end_w, z, 1.0, 1.0, c),
+            Vertex::new(ship.x + side.x * start_w, ship.y + side.y * start_w, z, 0.0, 1.0, c),
+        ];
+        let indices = vec![0, 1, 2, 0, 2, 3];
+        self.gravity.set_uniform("Time", time);
+        self.gravity.set_uniform("Gripped", if gripped { 1.0f32 } else { 0.0 });
+        gl_use_material(&self.gravity);
+        draw_mesh(&Mesh {
+            vertices: verts,
+            indices: indices.clone(),
+            texture: Some(self.white.clone()),
+        });
+        gl_use_default_material();
+        if self.glowing.get() && self.bloom_on.get() {
+            let head = if gripped {
+                Color::new(0.45, 0.75, 1.0, 0.55)
+            } else {
+                Color::new(0.35, 0.80, 1.0, 0.42)
+            };
+            let tail = Color::new(0.45, 0.65, 1.0, 0.0);
+            let gw = end_w * 0.45;
+            let g_verts = vec![
+                Vertex::new(ship.x - side.x * 2.0, ship.y - side.y * 2.0, z, 0.0, 0.0, head),
+                Vertex::new(tip.x - side.x * gw, tip.y - side.y * gw, z, 1.0, 0.0, tail),
+                Vertex::new(tip.x + side.x * gw, tip.y + side.y * gw, z, 1.0, 1.0, tail),
+                Vertex::new(ship.x + side.x * 2.0, ship.y + side.y * 2.0, z, 0.0, 1.0, head),
+            ];
+            self.record(Mesh {
+                vertices: g_verts,
+                indices,
+                texture: Some(self.white.clone()),
+            });
+        }
     }
 
     /// Coloured triangles, textured or plain, alpha-blended or additive

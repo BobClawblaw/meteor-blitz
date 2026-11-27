@@ -20,7 +20,7 @@ use macroquad::miniquad::{
 };
 use macroquad::prelude::*;
 
-use crate::gfx::Canvas;
+use crate::gfx::{Canvas, Light};
 
 /// How an explosion or impact looks.
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -387,13 +387,20 @@ impl Bursts {
     }
 
     /// Draws everything at depth `z`, `to_screen` mapping world positions
-    /// to the canvas, `dot` the soft round sprite and `pixel` the size of a
-    /// screen pixel in canvas units: smoke and debris blended, then fire and
-    /// sparks added over them and handed to the bloom. Chips and sparks
-    /// thinner than a pixel draw a pixel wide and fade by what they would
-    /// cover, so at low resolutions (the web build) they do not alias into
-    /// broken horizontal and vertical slivers.
-    pub fn draw(&self, canvas: &Canvas, z: f32, to_screen: impl Fn(Vec2) -> Vec2, dot: &Texture2D, pixel: f32) {
+    /// to the canvas, `dot` the soft round sprite, `pixel` the size of a
+    /// screen pixel in canvas units, and `lights` the frame's dynamic point
+    /// lights illuminating billowing smoke from within. Smoke and debris are
+    /// alpha-blended; fire and hot-tipped sparks are added over them and
+    /// handed to the bloom pyramid.
+    pub fn draw(
+        &self,
+        canvas: &Canvas,
+        z: f32,
+        to_screen: impl Fn(Vec2) -> Vec2,
+        dot: &Texture2D,
+        pixel: f32,
+        lights: &[Light],
+    ) {
         if self.parts.is_empty() {
             return;
         }
@@ -404,7 +411,19 @@ impl Bursts {
             let grow = 1.0 - (1.0 - u) * (1.0 - u);
             let radius = p.size.0 + (p.size.1 - p.size.0) * grow;
             let alpha = p.alpha * (u / 0.15).min(1.0) * (1.0 - u).powf(1.5) * 0.8;
-            batch.puff(to_screen(p.pos), radius, colour(p.colour, alpha));
+            let screen = to_screen(p.pos);
+            // Dynamic explosions and weapons illuminate nearby smoke from within.
+            let mut glow = Vec3::ZERO;
+            for l in lights {
+                let d2 = l.pos.distance_squared(screen);
+                let r = l.radius.max(1.0);
+                if d2 < r * r {
+                    let fall = 1.0 - d2.sqrt() / r;
+                    glow += l.color * fall * fall;
+                }
+            }
+            let lit = (p.colour + glow * 0.78).min(Vec3::ONE);
+            batch.puff(screen, radius, colour(lit, alpha));
             batch.flush_if_full(Some(dot), None);
         }
         batch.flush(Some(dot), None);
@@ -437,7 +456,8 @@ impl Bursts {
                 let tail = head - p.vel * STREAK_TIME;
                 let half = p.size.0.max(pixel * 0.75);
                 let alpha = p.alpha * (1.0 - u) * p.size.0 / half;
-                batch.streak(tail, head, half, colour(heat, alpha));
+                let tip = heat.lerp(Vec3::ONE, 0.55 * (1.0 - u));
+                batch.streak_grad(tail, head, half, colour(heat * 0.65, alpha * 0.35), colour(tip, alpha));
             }
             batch.flush_if_full(Some(dot), Some(canvas));
         }
@@ -478,13 +498,23 @@ impl Batch {
         self.quad([p + vec2(-r, -r), p + vec2(r, -r), p + vec2(r, r), p + vec2(-r, r)], c);
     }
 
-    /// A soft capsule from `tail` to `head`, `half` wide each side.
-    fn streak(&mut self, tail: Vec2, head: Vec2, half: f32, c: Color) {
+    /// A soft capsule from `tail` to `head`, `half` wide each side, fading
+    /// from `tail_col` to a hotter `head_col`.
+    fn streak_grad(&mut self, tail: Vec2, head: Vec2, half: f32, tail_col: Color, head_col: Color) {
         let d = head - tail;
         let along = d.normalize_or(vec2(1.0, 0.0)) * half;
         let side = vec2(-along.y, along.x);
         let (t, h) = (tail - along, head + along);
-        self.quad([t - side, h - side, h + side, t + side], c);
+        let base = self.verts.len() as u16;
+        for (p, u, v, c) in [
+            (t - side, 0.0, 0.0, tail_col),
+            (h - side, 1.0, 0.0, head_col),
+            (h + side, 1.0, 1.0, head_col),
+            (t + side, 0.0, 1.0, tail_col),
+        ] {
+            self.verts.push(Vertex::new(p.x, p.y, self.z, u, v, c));
+        }
+        self.indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
     }
 
     /// A solid chip: a quad `size` (half-extents) turned to `angle`.

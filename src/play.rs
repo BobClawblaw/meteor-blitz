@@ -3027,6 +3027,19 @@ impl Play {
         };
         let side = vec2(-dir.y, dir.x);
         let tip = ship + dir * len;
+        if self.fx {
+            canvas.draw_gravity_beam(
+                ship + dir * 4.0,
+                tip,
+                side,
+                3.5,
+                spread.max(10.0),
+                self.z,
+                self.elapsed,
+                gripped.is_some(),
+            );
+            return;
+        }
         let verts = vec![
             Vertex::new(ship.x, ship.y, self.z, 0.0, 0.0, white),
             Vertex::new(
@@ -3608,36 +3621,91 @@ impl Play {
         if self.physics_particles {
             // One screen pixel on the play plane, in canvas units.
             let pixel = self.zoom / crate::gfx::pixel_scale().max(0.5);
-            self.gas.draw(canvas, self.z, |p| self.to_screen(p), &assets.soft_dot, pixel);
+            let lights = self.frame_lights.borrow();
+            self.gas.draw(canvas, self.z, |p| self.to_screen(p), &assets.soft_dot, pixel, &lights);
         }
         let soft = self.fx.then_some(&assets.soft_dot);
         self.effects
             .draw(canvas, &assets.spark, soft, self.z, |p| self.to_screen(p));
     }
 
-    /// Port addition: the engine trail, boost streaks, and streaks behind
-    /// enemies the gravity gun threw, all additive.
+    /// Port addition: tapered plasma engine ribbon, weapon muzzle flashes,
+    /// boost warp streaks, and streaks behind enemies the gravity gun threw,
+    /// all additive and fed into the bloom pyramid.
     fn draw_ship_fx(&self, canvas: &Canvas, assets: &PlayAssets) {
-        let mut verts = Vec::new();
-        let mut indices: Vec<u16> = Vec::new();
-        let mut quad = |verts: &mut Vec<Vertex>, c: Vec2, h: f32, color: Color| {
-            let n = verts.len() as u16;
-            for (x, y, u, v) in [(-1.0, -1.0, 0.0, 0.0), (1.0, -1.0, 1.0, 0.0), (1.0, 1.0, 1.0, 1.0), (-1.0, 1.0, 0.0, 1.0)] {
-                verts.push(Vertex::new(c.x + x * h, c.y + y * h, self.z, u, v, color));
-            }
-            indices.extend_from_slice(&[n, n + 1, n + 2, n, n + 2, n + 3]);
-        };
-        // The trail: older samples smaller and fainter, and only while
-        // moving (a still ship would pile it into a blob).
-        let n = self.trail.len().max(1) as f32;
-        for (i, &(pos, speed)) in self.trail.iter().enumerate().skip(1) {
-            let k = 1.0 - i as f32 / n;
-            let a = 0.45 * k * (speed / TRAIL_FULL_SPEED).min(1.0) * self.ship.alpha;
-            if a > 0.01 {
-                quad(&mut verts, self.to_screen(pos), 3.0 + 6.0 * k, Color::new(0.35, 1.0, 0.5, a));
+        // Tapered plasma afterburner ribbon (outer emerald sheath + hot cyan-white core).
+        if self.trail.len() >= 2 && !matches!(self.ship.life, Life::Dead(_)) {
+            let n = self.trail.len() as f32;
+            let ribbon = |width: f32, col: Vec3, alpha_scale: f32| {
+                let mut verts = Vec::new();
+                let mut indices: Vec<u16> = Vec::new();
+                for i in 0..self.trail.len() - 1 {
+                    let (p0, s0) = self.trail[i];
+                    let (p1, s1) = self.trail[i + 1];
+                    let a0 = self.to_screen(p0);
+                    let a1 = self.to_screen(p1);
+                    let seg = a1 - a0;
+                    if seg.length_squared() < 0.01 || seg.length_squared() > 90.0 * 90.0 {
+                        continue;
+                    }
+                    let k0 = 1.0 - i as f32 / n;
+                    let k1 = 1.0 - (i + 1) as f32 / n;
+                    let al0 = alpha_scale * k0 * k0 * (s0 / TRAIL_FULL_SPEED).min(1.0) * self.ship.alpha;
+                    let al1 = alpha_scale * k1 * k1 * (s1 / TRAIL_FULL_SPEED).min(1.0) * self.ship.alpha;
+                    if al0 < 0.005 && al1 < 0.005 {
+                        continue;
+                    }
+                    let side = seg.perp().normalize();
+                    let w0 = width * k0;
+                    let w1 = width * k1;
+                    let c0 = Color::new(col.x, col.y, col.z, al0);
+                    let c1 = Color::new(col.x, col.y, col.z, al1);
+                    let base = verts.len() as u16;
+                    // Sample the centre column (u=0.5) of soft_dot so the ribbon
+                    // is continuous along its length and softly feathered across.
+                    verts.push(Vertex::new(a0.x - side.x * w0, a0.y - side.y * w0, self.z, 0.5, 0.0, c0));
+                    verts.push(Vertex::new(a0.x + side.x * w0, a0.y + side.y * w0, self.z, 0.5, 1.0, c0));
+                    verts.push(Vertex::new(a1.x + side.x * w1, a1.y + side.y * w1, self.z, 0.5, 1.0, c1));
+                    verts.push(Vertex::new(a1.x - side.x * w1, a1.y - side.y * w1, self.z, 0.5, 0.0, c1));
+                    indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+                }
+                canvas.draw_triangles(verts, indices, Some(&assets.soft_dot), true);
+            };
+            let boost_k = if self.ship.invincible > 0.0 { 1.45 } else { 1.0 };
+            ribbon(7.5 * boost_k, vec3(0.22, 1.0, 0.45), 0.52);
+            ribbon(3.2 * boost_k, vec3(0.75, 1.0, 0.92), 0.65);
+        }
+
+        // Brief weapon muzzle flash at the ship's nose whenever a fresh shot leaves.
+        if !matches!(self.ship.life, Life::Dead(_)) {
+            let newest = self
+                .ship
+                .bullets
+                .iter()
+                .filter_map(|b| {
+                    let f = b.flown();
+                    (f < 28.0).then_some((f, b.weapon))
+                })
+                .min_by(|a, b| a.0.total_cmp(&b.0));
+            if let Some((flown, weapon)) = newest {
+                let k = (1.0 - flown / 28.0).clamp(0.0, 1.0) * self.ship.alpha;
+                let muzzle = self.to_screen(self.view_ship()) + self.ship.aim_dir * MUZZLE;
+                let (col, r) = match weapon {
+                    Weapon::Cannon => (vec3(0.45, 1.0, 0.55), 11.0),
+                    Weapon::Fire => (vec3(1.0, 0.68, 0.22), 14.0),
+                    Weapon::Laser => (vec3(0.48, 0.85, 1.0), 13.0),
+                };
+                let c = Color::new(col.x, col.y, col.z, 0.72 * k);
+                let h = r * (0.65 + 0.35 * k);
+                let verts = vec![
+                    Vertex::new(muzzle.x - h, muzzle.y - h, self.z, 0.0, 0.0, c),
+                    Vertex::new(muzzle.x + h, muzzle.y - h, self.z, 1.0, 0.0, c),
+                    Vertex::new(muzzle.x + h, muzzle.y + h, self.z, 1.0, 1.0, c),
+                    Vertex::new(muzzle.x - h, muzzle.y + h, self.z, 0.0, 1.0, c),
+                ];
+                canvas.draw_triangles(verts, vec![0, 1, 2, 0, 2, 3], Some(&assets.soft_dot), true);
             }
         }
-        canvas.draw_triangles(verts, indices, Some(&assets.spark), true);
 
         // Streaks: boost lines behind the ship, and thrown enemies.
         let mut verts = Vec::new();
@@ -3658,10 +3726,16 @@ impl Play {
             if back != Vec2::ZERO {
                 let p = self.to_screen(self.view_ship());
                 let side = back.perp();
-                // Uneven speed lines, longest at the centre.
-                for (off, len) in [(-9.0, 34.0), (-4.5, 52.0), (0.0, 70.0), (5.0, 46.0), (10.0, 30.0)] {
+                // Uneven warp speed lines, longest and brightest at the centre.
+                for (off, len, w) in [
+                    (-11.0, 32.0, 1.4),
+                    (-6.0, 54.0, 1.8),
+                    (0.0, 78.0, 2.4),
+                    (6.0, 50.0, 1.8),
+                    (11.0, 34.0, 1.4),
+                ] {
                     let start = p + side * off + back * 6.0;
-                    line(start, start + back * len * k, 1.5, Color::new(0.6, 1.0, 0.7, 0.35 * k));
+                    line(start, start + back * len * k, w, Color::new(0.55, 1.0, 0.80, 0.48 * k));
                 }
             }
         }
@@ -3695,7 +3769,8 @@ impl Play {
         canvas.draw_triangles(verts, indices, None, true);
     }
 
-    /// Port addition: a soft pulse around the shield while it is up.
+    /// Port addition: procedural hexagonal Fresnel energy shield bubble while
+    /// the shield is up.
     fn draw_shield_rim(&self, canvas: &Canvas, assets: &PlayAssets) {
         let ship = &self.ship;
         let up = match ship.life {
@@ -3708,22 +3783,19 @@ impl Play {
             return;
         }
         let p = self.to_screen(self.view_ship());
-        let pulse = 0.5 + 0.5 * (self.elapsed * 6.0).sin();
+        let pulse = 0.5 + 0.5 * (self.elapsed * 5.0).sin();
         let (w, _) = tex_size(&assets.shield);
-        let h = w * (0.55 + 0.05 * pulse);
-        let color = Color::new(0.4, 0.9, 1.0, (0.15 + 0.2 * pulse) * up * ship.alpha);
-        let n = 0u16;
-        let verts: Vec<Vertex> = [(-1.0, -1.0, 0.0, 0.0), (1.0, -1.0, 1.0, 0.0), (1.0, 1.0, 1.0, 1.0), (-1.0, 1.0, 0.0, 1.0)]
-            .iter()
-            .map(|&(x, y, u, v)| Vertex::new(p.x + x * h, p.y + y * h, self.z, u, v, color))
-            .collect();
-        canvas.draw_triangles(verts, vec![n, n + 1, n + 2, n, n + 2, n + 3], Some(&assets.shield), true);
+        let radius = w * (0.58 + 0.04 * pulse);
+        canvas.draw_energy_shield(p, radius, self.z, self.elapsed, up * ship.alpha, &assets.shield);
     }
 
-    /// Burn marks on the play plane, in one batch.
+    /// Burn marks on the play plane, with glowing cooling embers on fresh
+    /// scorches before they settle into dark char.
     fn draw_scorches(&self, canvas: &Canvas, assets: &PlayAssets) {
         let mut verts = Vec::with_capacity(self.scorches.len() * 4);
         let mut indices: Vec<u16> = Vec::with_capacity(self.scorches.len() * 6);
+        let mut ember_verts: Vec<Vertex> = Vec::new();
+        let mut ember_indices: Vec<u16> = Vec::new();
         for s in &self.scorches {
             let fade = ((SCORCH_LIFE - s.age) / SCORCH_FADE).min(1.0);
             let c = self.to_screen(s.pos);
@@ -3736,8 +3808,25 @@ impl Play {
                 verts.push(Vertex::new(p.x, p.y, self.z, u, v, color));
             }
             indices.extend_from_slice(&[n, n + 1, n + 2, n, n + 2, n + 3]);
+            // Fresh scorches glow with cooling molten embers for 3.5 seconds.
+            if s.age < 3.5 {
+                let t = 1.0 - s.age / 3.5;
+                let heat = t * t;
+                let ember_c = Color::new(1.0, 0.25 + 0.45 * heat, 0.05 * heat, 0.65 * heat);
+                let eh = h * (0.52 + 0.22 * heat);
+                let en = ember_verts.len() as u16;
+                for (x, y, u, v) in [(-1.0, -1.0, 0.0, 0.0), (1.0, -1.0, 1.0, 0.0), (1.0, 1.0, 1.0, 1.0), (-1.0, 1.0, 0.0, 1.0)] {
+                    ember_verts.push(Vertex::new(c.x + x * eh, c.y + y * eh, self.z, u, v, ember_c));
+                }
+                ember_indices.extend_from_slice(&[en, en + 1, en + 2, en, en + 2, en + 3]);
+            }
         }
         canvas.draw_triangles(verts, indices, Some(&assets.scorch), false);
+        if !ember_verts.is_empty() {
+            canvas.set_glowing(true);
+            canvas.draw_triangles(ember_verts, ember_indices, Some(&assets.soft_dot), true);
+            canvas.set_glowing(false);
+        }
     }
 
     fn draw_ship(&self, canvas: &Canvas, assets: &PlayAssets) {
