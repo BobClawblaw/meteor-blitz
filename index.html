@@ -17,10 +17,21 @@
       #loading .bar { width: min(360px, 70vw); height: 6px; background: #1c1f2e; border-radius: 3px; overflow: hidden; }
       #loading .fill { width: 0%; height: 100%; background: linear-gradient(90deg, #4fd27a, #8be3ff); transition: width 0.15s; }
       #loading.error { color: #ff9a9a; }
+      #review-link {
+        position: fixed; right: 12px; bottom: 10px; z-index: 20;
+        padding: 5px 11px; border-radius: 999px;
+        background: rgba(10, 14, 26, 0.72);
+        border: 1px solid rgba(94, 234, 212, 0.35);
+        color: #cbd5e1; font: 600 12px/1.2 system-ui, sans-serif; letter-spacing: 0.03em;
+        text-decoration: none; backdrop-filter: blur(8px);
+        opacity: 0.55; transition: opacity 0.18s, color 0.18s, border-color 0.18s;
+      }
+      #review-link:hover { opacity: 1; color: #ffffff; border-color: #38bdf8; }
     </style>
   </head>
   <body>
     <canvas id="glcanvas" width="1280" height="720" tabindex="0"></canvas>
+    <a id="review-link" href="./review.html" target="_blank" rel="noopener">v1.2.0 Graphics Review ↗</a>
     <div id="loading">
       <div class="title">METEOR BLITZ</div>
       <div class="bar"><div class="fill"></div></div>

@@ -1,0 +1,773 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Meteor Blitz v1.2.0 — Graphics Overhaul Review</title>
+  <link rel="icon" type="image/png" href="./assets/icon/icon-64.png" />
+  <style>
+    :root {
+      --bg: #070912;
+      --bg-card: rgba(15, 20, 34, 0.78);
+      --bg-card-solid: #0f1422;
+      --border: rgba(125, 160, 220, 0.16);
+      --border-strong: rgba(94, 234, 212, 0.35);
+      --text: #e6ecfa;
+      --muted: #94a3b8;
+      --cyan: #38bdf8;
+      --teal: #5eead4;
+      --amber: #fb923c;
+      --red: #f87171;
+      --green: #4ade80;
+      --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+      --sans: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; background: var(--bg); color: var(--text); font-family: var(--sans); }
+    body {
+      margin: 0;
+      background:
+        radial-gradient(ellipse 80% 50% at 20% 0%, rgba(56, 189, 248, 0.12), transparent 60%),
+        radial-gradient(ellipse 70% 50% at 85% 15%, rgba(251, 146, 60, 0.10), transparent 60%),
+        radial-gradient(ellipse 90% 60% at 50% 100%, rgba(139, 92, 246, 0.10), transparent 65%),
+        var(--bg);
+      line-height: 1.65;
+    }
+    a { color: var(--cyan); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    code {
+      font-family: var(--mono);
+      font-size: 0.87em;
+      background: rgba(148, 163, 184, 0.14);
+      padding: 0.12em 0.42em;
+      border-radius: 5px;
+      color: #dbeafe;
+    }
+    /* Sticky top bar */
+    nav {
+      position: sticky; top: 0; z-index: 50;
+      backdrop-filter: blur(14px);
+      -webkit-backdrop-filter: blur(14px);
+      background: rgba(7, 9, 18, 0.82);
+      border-bottom: 1px solid var(--border);
+    }
+    .nav-inner {
+      max-width: 1220px; margin: 0 auto; padding: 12px 24px;
+      display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap;
+    }
+    .brand {
+      display: flex; align-items: center; gap: 10px;
+      font-weight: 800; letter-spacing: 0.08em; color: #f8fafc; font-size: 15px;
+    }
+    .brand img { width: 26px; height: 26px; border-radius: 6px; }
+    .badge {
+      font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+      padding: 2px 8px; border-radius: 999px;
+      background: rgba(56, 189, 248, 0.16); color: var(--cyan); border: 1px solid rgba(56, 189, 248, 0.35);
+    }
+    .nav-links { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; font-size: 14px; }
+    .nav-links a { color: var(--muted); font-weight: 500; }
+    .nav-links a:hover { color: #fff; text-decoration: none; }
+    .btn {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 8px 16px; border-radius: 8px; font-weight: 600; font-size: 14px;
+      transition: transform 0.15s, box-shadow 0.15s, background 0.15s;
+    }
+    .btn-primary {
+      background: linear-gradient(135deg, #0ea5e9, #22d3ee);
+      color: #04101d !important;
+      box-shadow: 0 4px 20px rgba(56, 189, 248, 0.35);
+    }
+    .btn-primary:hover { transform: translateY(-1px); text-decoration: none; box-shadow: 0 6px 24px rgba(56, 189, 248, 0.5); }
+    .btn-secondary {
+      background: rgba(255, 255, 255, 0.06);
+      color: #e2e8f0 !important;
+      border: 1px solid var(--border);
+    }
+    .btn-secondary:hover { background: rgba(255, 255, 255, 0.12); text-decoration: none; }
+
+    /* Container & sections */
+    main { max-width: 1220px; margin: 0 auto; padding: 0 24px 96px; }
+    header.hero { padding: 64px 0 40px; text-align: center; }
+    .eyebrow {
+      display: inline-block; font-size: 12px; font-weight: 700; letter-spacing: 0.14em;
+      text-transform: uppercase; color: var(--teal); margin-bottom: 14px;
+    }
+    h1 {
+      font-size: clamp(32px, 5vw, 54px); line-height: 1.1; margin: 0 auto 20px; max-width: 920px;
+      font-weight: 850; letter-spacing: -0.02em;
+      background: linear-gradient(180deg, #ffffff 30%, #94a3b8 100%);
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    }
+    .lead {
+      font-size: clamp(16px, 1.8vw, 19px); color: var(--muted); max-width: 780px; margin: 0 auto 28px;
+    }
+    .hero-actions { display: flex; justify-content: center; gap: 12px; flex-wrap: wrap; margin-bottom: 42px; }
+
+    /* Stat strip */
+    .stats {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 14px;
+      margin-bottom: 56px;
+    }
+    .stat {
+      background: var(--bg-card); border: 1px solid var(--border); border-radius: 14px;
+      padding: 18px 20px; text-align: left;
+    }
+    .stat .val { font-size: 26px; font-weight: 800; color: #fff; letter-spacing: -0.02em; }
+    .stat .val span { color: var(--teal); }
+    .stat .lbl { font-size: 13px; color: var(--muted); margin-top: 4px; }
+
+    section { margin-top: 72px; }
+    h2 {
+      font-size: clamp(24px, 3vw, 34px); margin: 0 0 10px; font-weight: 800; letter-spacing: -0.015em;
+      color: #f8fafc;
+    }
+    .section-sub { color: var(--muted); margin: 0 0 28px; max-width: 820px; font-size: 16px; }
+
+    /* Interactive Before/After Slider */
+    .compare-grid { display: grid; gap: 36px; }
+    .compare-card {
+      background: var(--bg-card); border: 1px solid var(--border); border-radius: 16px;
+      overflow: hidden; box-shadow: 0 20px 50px rgba(0, 0, 0, 0.45);
+    }
+    .compare-stage {
+      position: relative; width: 100%; aspect-ratio: 16 / 9; overflow: hidden;
+      cursor: ew-resize; user-select: none; -webkit-user-select: none; touch-action: pan-y;
+      background: #04060c;
+    }
+    .compare-stage.square { aspect-ratio: 1 / 1; }
+    .compare-stage img {
+      position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; pointer-events: none;
+      display: block;
+    }
+    .compare-before {
+      position: absolute; inset: 0; overflow: hidden; width: 50%;
+      border-right: 2px solid rgba(255, 255, 255, 0.92);
+      box-shadow: 4px 0 24px rgba(0, 0, 0, 0.7);
+    }
+    .compare-before img {
+      width: 100%; height: 100%; max-width: none;
+    }
+    .compare-handle {
+      position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+      width: 40px; height: 40px; border-radius: 50%;
+      background: rgba(7, 11, 22, 0.92);
+      border: 2px solid #fff;
+      box-shadow: 0 0 20px rgba(56, 189, 248, 0.75);
+      display: flex; align-items: center; justify-content: center;
+      color: #fff; font-weight: 800; font-size: 14px; pointer-events: none;
+    }
+    .pill {
+      position: absolute; top: 14px; z-index: 4;
+      padding: 4px 11px; border-radius: 999px; font-size: 12px; font-weight: 700; letter-spacing: 0.04em;
+      backdrop-filter: blur(8px); pointer-events: none;
+    }
+    .pill-left { left: 14px; background: rgba(248, 113, 113, 0.22); color: #fecaca; border: 1px solid rgba(248, 113, 113, 0.5); }
+    .pill-right { right: 14px; background: rgba(74, 222, 128, 0.22); color: #bbf7d0; border: 1px solid rgba(74, 222, 128, 0.5); }
+    .compare-meta { padding: 18px 22px; }
+    .compare-meta h3 { margin: 0 0 6px; font-size: 18px; color: #fff; }
+    .compare-meta p { margin: 0; color: var(--muted); font-size: 14.5px; }
+
+    /* Sprite zoom grid */
+    .sprite-grid {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px;
+    }
+
+    /* Engineering critique cards */
+    .issue-list { display: grid; gap: 24px; }
+    .issue {
+      background: var(--bg-card); border: 1px solid var(--border); border-radius: 16px;
+      padding: 26px 28px;
+    }
+    .issue-head {
+      display: flex; align-items: baseline; justify-content: space-between; gap: 14px; flex-wrap: wrap;
+      margin-bottom: 14px;
+    }
+    .issue-num {
+      font-family: var(--mono); font-size: 12px; font-weight: 700; color: var(--amber);
+      letter-spacing: 0.08em; text-transform: uppercase;
+    }
+    .issue h3 { margin: 4px 0 0; font-size: 21px; color: #fff; }
+    .commit-tag {
+      font-family: var(--mono); font-size: 12px; padding: 3px 9px; border-radius: 6px;
+      background: rgba(56, 189, 248, 0.12); color: var(--cyan); border: 1px solid rgba(56, 189, 248, 0.25);
+    }
+    .vs-grid {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 18px;
+      margin-top: 14px;
+    }
+    .vs-box {
+      border-radius: 12px; padding: 16px 18px; font-size: 14.5px;
+    }
+    .vs-bad {
+      background: rgba(248, 113, 113, 0.07);
+      border: 1px solid rgba(248, 113, 113, 0.24);
+    }
+    .vs-good {
+      background: rgba(74, 222, 128, 0.07);
+      border: 1px solid rgba(74, 222, 128, 0.26);
+    }
+    .vs-label {
+      font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.1em;
+      margin-bottom: 8px; display: block;
+    }
+    .vs-bad .vs-label { color: var(--red); }
+    .vs-good .vs-label { color: var(--green); }
+    .vs-box ul { margin: 0; padding-left: 18px; color: #cbd5e1; }
+    .vs-box li { margin-bottom: 6px; }
+    .vs-box li:last-child { margin-bottom: 0; }
+
+    /* Showcase gallery */
+    .gallery {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 20px;
+    }
+    .shot-card {
+      background: var(--bg-card); border: 1px solid var(--border); border-radius: 14px;
+      overflow: hidden;
+    }
+    .shot-card img { width: 100%; aspect-ratio: 16 / 9; object-fit: cover; display: block; }
+    .shot-card .cap { padding: 14px 16px; }
+    .shot-card h4 { margin: 0 0 4px; font-size: 15px; color: #fff; }
+    .shot-card p { margin: 0; font-size: 13.5px; color: var(--muted); }
+
+    /* Benchmark table */
+    table {
+      width: 100%; border-collapse: collapse; background: var(--bg-card);
+      border: 1px solid var(--border); border-radius: 14px; overflow: hidden; font-size: 14.5px;
+    }
+    th, td { padding: 13px 16px; text-align: left; border-bottom: 1px solid var(--border); }
+    th { background: rgba(255, 255, 255, 0.04); color: #cbd5e1; font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; }
+    tr:last-child td { border-bottom: none; }
+    td.num { font-family: var(--mono); color: var(--teal); font-weight: 600; }
+
+    footer {
+      max-width: 1220px; margin: 0 auto; padding: 32px 24px 56px;
+      border-top: 1px solid var(--border); color: var(--muted); font-size: 13.5px;
+      display: flex; justify-content: space-between; flex-wrap: wrap; gap: 14px;
+    }
+  </style>
+</head>
+<body>
+  <nav>
+    <div class="nav-inner">
+      <div class="brand">
+        <img src="./assets/icon/icon-64.png" alt="Meteor Blitz icon" />
+        <span>METEOR BLITZ</span>
+        <span class="badge">v1.2.0 Review</span>
+      </div>
+      <div class="nav-links">
+        <a href="#comparisons">Before / After</a>
+        <a href="#sprites">Sprite Anatomy</a>
+        <a href="#review">Engineering Review</a>
+        <a href="#showcase">Showcase</a>
+        <a href="#benchmarks">4K Perf</a>
+        <a class="btn btn-secondary" href="https://github.com/BobClawblaw/meteor-blitz/releases/tag/v1.2.0">Download v1.2.0</a>
+        <a class="btn btn-primary" href="./index.html">Play in Browser →</a>
+      </div>
+    </div>
+  </nav>
+
+  <main>
+    <header class="hero">
+      <span class="eyebrow">Graphics Architecture Post-Mortem · v1.1.3 vs v1.2.0</span>
+      <h1>Why the Original 8× Oversampling Looked Flat — And How We Rebuilt the Renderer</h1>
+      <p class="lead">
+        The previous 8× port checked the resolution box on paper, yet still looked blurry, flat, and banded at 1080p and 4K.
+        Here is a line-by-line engineering review of every visual flaw in Claude's v1.1.3 graphics implementation — and the art, shader, lighting, and post-processing overhaul we built for v1.2.0.
+      </p>
+      <div class="hero-actions">
+        <a class="btn btn-primary" href="./index.html">Play v1.2.0 in Browser</a>
+        <a class="btn btn-secondary" href="https://github.com/BobClawblaw/meteor-blitz/releases/tag/v1.2.0">macOS Universal DMG &amp; Release Notes</a>
+        <a class="btn btn-secondary" href="https://github.com/BobClawblaw/meteor-blitz">View Source on GitHub</a>
+      </div>
+      <div class="stats">
+        <div class="stat">
+          <div class="val">0.75–0.84 <span>ms</span></div>
+          <div class="lbl">Average draw time at 4K (3840×2160, zoom 1.5, live fluid gas + all FX — ~521 fps uncapped)</div>
+        </div>
+        <div class="stat">
+          <div class="val">534 <span>assets</span></div>
+          <div class="lbl">Sprites, UI &amp; font rebuilt via edge-bled Real-ESRGAN (zero xBR onion rings)</div>
+        </div>
+        <div class="stat">
+          <div class="val">5-mip <span>ACES</span></div>
+          <div class="lbl">Progressive pyramid bloom distorted by shockwaves + filmic highlight roll-off</div>
+        </div>
+        <div class="stat">
+          <div class="val">0 B <span>extra VRAM</span></div>
+          <div class="lbl">Per-pixel 3D dome + bump sprite normals &amp; 12 dynamic specular point lights</div>
+        </div>
+      </div>
+    </header>
+
+    <section id="comparisons">
+      <h2>Interactive Before / After (1920×1080)</h2>
+      <p class="section-sub">
+        Drag any handle left or right. Every pair below was captured at the exact same simulation frame, drift vector, and resolution (`1920×1080`) on v1.1.3 vs v1.2.0.
+      </p>
+      <div class="compare-grid">
+
+        <div class="compare-card">
+          <div class="compare-stage" data-compare>
+            <img src="./docs/review/after_menu.webp" alt="v1.2.0 Main Menu" loading="lazy" />
+            <div class="compare-before">
+              <img src="./docs/review/before_menu.webp" alt="v1.1.3 Main Menu" loading="lazy" />
+            </div>
+            <span class="pill pill-left">Before · v1.1.3 (Claude xBR)</span>
+            <span class="pill pill-right">After · v1.2.0 (Real-ESRGAN + Starfield)</span>
+            <div class="compare-handle">⇄</div>
+          </div>
+          <div class="compare-meta">
+            <h3>Main Menu — Chrome Typography, Silhouette &amp; Cosmic Depth</h3>
+            <p>
+              In v1.1.3, chaining <code>xBR 4× → xBR 2×</code> jagged the black starfighter wing edges in <code>horizon.png</code>, rounded off the chrome bevels of <code>METEOR BLITZ</code>, and smeared button typography.
+              In v1.2.0, edge-bled <code>realesrgan-x4plus-anime</code> restores razor-sharp chrome &amp; glossy UI while a 3-layer procedural twinkling starfield adds real depth behind the red/purple nebula.
+            </p>
+          </div>
+        </div>
+
+        <div class="compare-card">
+          <div class="compare-stage" data-compare>
+            <img src="./docs/review/after_world1.webp" alt="v1.2.0 World 1 Earth" loading="lazy" />
+            <div class="compare-before">
+              <img src="./docs/review/before_world1.webp" alt="v1.1.3 World 1 Earth" loading="lazy" />
+            </div>
+            <span class="pill pill-left">Before · v1.1.3</span>
+            <span class="pill pill-right">After · v1.2.0</span>
+            <div class="compare-handle">⇄</div>
+          </div>
+          <div class="compare-meta">
+            <h3>World 1 (Earth) — Cloud Drop Shadows, Ocean Specular &amp; Atmospheric Limb</h3>
+            <p>
+              v1.1.3 flat-mixed clouds directly over dark navy terrain, so clouds looked painted onto the ground and the ship's light left a chalky green smudge.
+              v1.2.0 casts parallax cloud shadows onto the continents and oceans below, adds sunlit + dynamic ocean speculars, scatters ship/weapon light cleanly through translucent clouds, and wraps the sphere in sapphire Fresnel atmosphere.
+            </p>
+          </div>
+        </div>
+
+        <div class="compare-card">
+          <div class="compare-stage" data-compare>
+            <img src="./docs/review/after_world2.webp" alt="v1.2.0 World 2 Lava & Ice" loading="lazy" />
+            <div class="compare-before">
+              <img src="./docs/review/before_world2.webp" alt="v1.1.3 World 2 Lava & Ice" loading="lazy" />
+            </div>
+            <span class="pill pill-left">Before · v1.1.3</span>
+            <span class="pill pill-right">After · v1.2.0</span>
+            <div class="compare-handle">⇄</div>
+          </div>
+          <div class="compare-meta">
+            <h3>World 2 (Lava) — Pulsing Magma, Glacial 3D Ice Asteroids &amp; Drop Shadows</h3>
+            <p>
+              Notice how the exact same ice asteroids transform from blobby, flat-shaded xBR smudges into crystalline 3D glacial rock with sharp bump relief, cyan Fresnel rims, and parallax drop shadows floating above glowing incandescent lava fissures — while the HUD font switches from jagged <code>Nearest</code> xBR to crisp linear Real-ESRGAN typography.
+            </p>
+          </div>
+        </div>
+
+        <div class="compare-card">
+          <div class="compare-stage" data-compare>
+            <img src="./docs/review/after_world6.webp" alt="v1.2.0 World 6 Deep Space" loading="lazy" />
+            <div class="compare-before">
+              <img src="./docs/review/before_world6.webp" alt="v1.1.3 World 6 Deep Space" loading="lazy" />
+            </div>
+            <span class="pill pill-left">Before · v1.1.3</span>
+            <span class="pill pill-right">After · v1.2.0</span>
+            <div class="compare-handle">⇄</div>
+          </div>
+          <div class="compare-meta">
+            <h3>World 6 (Deep Space) — Sculpted 3D Asteroids &amp; Procedural Parallax Starfield</h3>
+            <p>
+              Real-ESRGAN two-pass upscaling combined with per-pixel luminance-bump normals turns muddy brown blobs into rugged, cratered 3D asteroids catching directional light, backed by crisp sub-pixel twinkling stars with diffraction spikes scrolling at three independent parallax depths.
+            </p>
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+    <section id="sprites">
+      <h2>Sprite Anatomy: What xBR Actually Did to the 8× Assets</h2>
+      <p class="section-sub">
+        The single biggest visual mistake in v1.1.3 was feeding pre-rendered, anti-aliased 3D sprites through a pixel-art filter (<code>ffmpeg -vf xbr=n=4</code> followed by <code>xbr=n=2</code>) — including running xBR on the alpha channel without edge-bleeding RGB. Drag across each 512×512 close-up below.
+      </p>
+      <div class="sprite-grid">
+        <div class="compare-card">
+          <div class="compare-stage square" data-compare>
+            <img src="./docs/review/sprite_after_ship.webp" alt="v1.2.0 ship.5.png" loading="lazy" />
+            <div class="compare-before"><img src="./docs/review/sprite_before_ship.webp" alt="v1.1.3 ship.5.png" loading="lazy" /></div>
+            <span class="pill pill-left">xBR 4×+2×</span>
+            <span class="pill pill-right">Real-ESRGAN</span>
+            <div class="compare-handle">⇄</div>
+          </div>
+          <div class="compare-meta">
+            <h3><code>ship.5.png</code></h3>
+            <p>xBR quantized the soft thruster glow into concentric polygonal onion-ring bands and muddied the metallic wings. Edge-bleed + hybrid alpha completely removes the banding.</p>
+          </div>
+        </div>
+
+        <div class="compare-card">
+          <div class="compare-stage square" data-compare>
+            <img src="./docs/review/sprite_after_rock.webp" alt="v1.2.0 rock1.1.png" loading="lazy" />
+            <div class="compare-before"><img src="./docs/review/sprite_before_rock.webp" alt="v1.1.3 rock1.1.png" loading="lazy" /></div>
+            <span class="pill pill-left">xBR 4×+2×</span>
+            <span class="pill pill-right">Real-ESRGAN</span>
+            <div class="compare-handle">⇄</div>
+          </div>
+          <div class="compare-meta">
+            <h3><code>rock1.1.png</code></h3>
+            <p>xBR turned natural rocky crags into cartoon oil-paint blobs with horizontal stair-stepped outer fringes. Two-pass <code>realesrgan-x4plus</code> recovers authentic mineral grain and clean ridges.</p>
+          </div>
+        </div>
+
+        <div class="compare-card">
+          <div class="compare-stage square" data-compare>
+            <img src="./docs/review/sprite_after_freeze.webp" alt="v1.2.0 freeze1.1.png" loading="lazy" />
+            <div class="compare-before"><img src="./docs/review/sprite_before_freeze.webp" alt="v1.1.3 freeze1.1.png" loading="lazy" /></div>
+            <span class="pill pill-left">xBR 4×+2×</span>
+            <span class="pill pill-right">Real-ESRGAN</span>
+            <div class="compare-handle">⇄</div>
+          </div>
+          <div class="compare-meta">
+            <h3><code>freeze1.1.png</code></h3>
+            <p>Eliminates blocky watercolor patches and stepped silhouette noise, producing translucent luminous ice ready for our per-pixel crystalline specular shader.</p>
+          </div>
+        </div>
+
+        <div class="compare-card">
+          <div class="compare-stage square" data-compare>
+            <img src="./docs/review/sprite_after_boss.webp" alt="v1.2.0 bossInside.1.png" loading="lazy" />
+            <div class="compare-before"><img src="./docs/review/sprite_before_boss.webp" alt="v1.1.3 bossInside.1.png" loading="lazy" /></div>
+            <span class="pill pill-left">xBR 4×+2×</span>
+            <span class="pill pill-right">Real-ESRGAN</span>
+            <div class="compare-handle">⇄</div>
+          </div>
+          <div class="compare-meta">
+            <h3><code>bossInside.1.png</code></h3>
+            <p>Removes the polygonal shadow rings and smeared metallic claws around the boss core, yielding crisp armor plates and a smooth glowing core.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="review">
+      <h2>Detailed Engineering Review: What Claude Did Wrong vs. What We Fixed</h2>
+      <p class="section-sub">
+        Even though v1.1.3 shipped 241 MB of "8× oversampled" assets, visual quality is only as strong as the weakest stage of the pipeline. Below are the six concrete defects we found by auditing the assets, shaders, and frame captures — and how each was fixed.
+      </p>
+
+      <div class="issue-list">
+        <article class="issue">
+          <div class="issue-head">
+            <div>
+              <span class="issue-num">Defect 01 · Asset Pipeline</span>
+              <h3>Wrong Upscaler for 3D Art (xBR Chaining + Banded Alpha + No RGB Edge Bleed)</h3>
+            </div>
+            <span class="commit-tag">commit 59fa68d</span>
+          </div>
+          <div class="vs-grid">
+            <div class="vs-box vs-bad">
+              <span class="vs-label">What Claude's v1.1.3 Did Wrong</span>
+              <ul>
+                <li>Used Real-ESRGAN only for terrain, then lazily ran <strong>pixel-art <code>xBR 4×</code> followed by <code>xBR 2×</code></strong> on all 346 sprites, 188 UI textures, and the font.</li>
+                <li>Meteor Blitz's sprites are <em>pre-rendered, anti-aliased 3D assets</em> — not 16-bit indexed pixel art. xBR collapses subtle shading gradients into flat posterized watercolor blobs.</li>
+                <li>Ran xBR directly on the alpha channel, turning smooth outer glows/shadows (<code>ship.5</code>, <code>bossInside</code>) into ugly stepped onion rings.</li>
+                <li>Never bled RGB colors into transparent pixels before upscaling, allowing dark/grey background values to contaminate alpha borders.</li>
+              </ul>
+            </div>
+            <div class="vs-box vs-good">
+              <span class="vs-label">How v1.2.0 Fixed It</span>
+              <ul>
+                <li>Rewrote <code>tools/upscale8x.py</code> to upscale directly from originals using <strong>16-pass RGB edge-bleeding</strong> (<code>bleed_rgb</code>) + 16 px edge-replicated padding.</li>
+                <li>Batch-processed all 3D sprites with two-pass <code>realesrgan-x4plus</code> → exact 8× Lanczos; UI art and font with <code>realesrgan-x4plus-anime</code> (crisp chrome/vector edges); SVG-direct 128×128 for <code>github.png</code>; clean Lanczos for <code>≤12 px</code> HUD icons (<code>shipCounter</code>, <code>bombCounter</code>).</li>
+                <li>Implemented <strong>hybrid alpha</strong>: computes each sprite's semi-transparent pixel fraction and blends sharp <code>realesrgan-x4plus-anime</code> silhouettes with smooth bicubic feathered glows — zero onion rings and zero stray noise.</li>
+              </ul>
+            </div>
+          </div>
+        </article>
+
+        <article class="issue">
+          <div class="issue-head">
+            <div>
+              <span class="issue-num">Defect 02 · Texture Sampling &amp; Typography</span>
+              <h3>Zero Mipmaps on 8× Sprites/UI, Nearest Font Filtering &amp; 1× Pause Font</h3>
+            </div>
+            <span class="commit-tag">commit 59fa68d</span>
+          </div>
+          <div class="vs-grid">
+            <div class="vs-box vs-bad">
+              <span class="vs-label">What Claude's v1.1.3 Did Wrong</span>
+              <ul>
+                <li><code>load_terrain</code> created trilinear mipmaps through miniquad, but <code>load_sprite</code> and <code>load_ui</code> still called plain macroquad <code>load_texture</code> (no mip levels). At 1080p/720p or 1.5× zoom, 1024×1024 rock sprites minified 4–8× per pixel, shimmering and aliasing.</li>
+                <li><code>hud::Font::new</code> forced <code>FilterMode::Nearest</code> even on the 8× HD atlas, amplifying jagged glyph edges.</li>
+                <li><code>load_pause_assets</code> hardcoded the blurry 1× <code>assets/ui/ngage.png</code> even when running at 4K HD, and decoded hundreds of 8× sprite/UI PNGs single-threaded at startup.</li>
+              </ul>
+            </div>
+            <div class="vs-box vs-good">
+              <span class="vs-label">How v1.2.0 Fixed It</span>
+              <ul>
+                <li>Unified texture upload in <code>load_mipmapped</code> with <strong>trilinear mipmaps</strong> and <code>TextureWrap::Clamp</code> for all single-frame HD sprites and UI, while explicitly excluding packed multi-frame atlases (<code>rock4A</code>, <code>freeze4</code>, <code>cinder4</code>, <code>shyGuyFrames</code>, <code>bigBonus</code>, <code>ngage</code>) so adjacent frames never bleed across mip boundaries.</li>
+                <li>Added parallel multi-threaded PNG predecoding (<code>predecode_hd_assets</code> + <code>clear_predecoded</code>) so startup stays fast without holding duplicate CPU image buffers.</li>
+                <li>Defaulted HD font filtering to smooth <code>FilterMode::Linear</code> and switched pause popups to the HD font whenever <code>asset_scale() &gt; 1.0</code> (preserving 1× nearest/linear when <code>MB_HD=0</code>).</li>
+              </ul>
+            </div>
+          </div>
+        </article>
+
+        <article class="issue">
+          <div class="issue-head">
+            <div>
+              <span class="issue-num">Defect 03 · Bloom &amp; Tone Mapping</span>
+              <h3>Single-Level Boxy Bloom, Clamped Strength Bug, Hard White Clipping &amp; Banding</h3>
+            </div>
+            <span class="commit-tag">commit 634f38f</span>
+          </div>
+          <div class="vs-grid">
+            <div class="vs-box vs-bad">
+              <span class="vs-label">What Claude's v1.1.3 Did Wrong</span>
+              <ul>
+                <li>Used a single 1/4-res buffer with two tight 9-tap passes — giving narrow, boxy halos that lacked both sharp inner cores and wide atmospheric falloff.</li>
+                <li>Contained a silent bug at <code>src/gfx.rs:1027</code>: <code>(BLOOM_STRENGTH * 255.0) as u8</code> saturated <code>1.25 * 255 = 318.75</code> down to <code>255</code> (1.0), silently discarding 20% of intended bloom strength.</li>
+                <li>Composited bloom <em>after</em> <code>POST_FRAGMENT</code>, so shockwaves distorted the scene underneath while the glow stayed frozen in place.</li>
+                <li>No tone mapping and no dithering: overlapping lasers and explosions hard-clipped into harsh flat white polygons, and dark space/vignettes showed 8-bit banding.</li>
+              </ul>
+            </div>
+            <div class="vs-box vs-good">
+              <span class="vs-label">How v1.2.0 Fixed It</span>
+              <ul>
+                <li>Built a <strong>5-level progressive bloom pyramid</strong> (half-res down to 1/32-res) using a 13-tap energy-preserving Jim Jimenez downsample and additive 9-tap tent-filter upsample.</li>
+                <li>Bound the bloom texture directly into <code>POST_FRAGMENT</code> with a true float <code>BloomStrength</code> uniform so shockwaves physically bend both the scene and glow together.</li>
+                <li>Added linear-space bloom summation + calibrated <strong>Narkowicz ACES filmic tone mapping</strong> (keeping midtones punchy while rolling blazing explosions into incandescent gold/orange/cyan cores) + 1-LSB gradient dithering.</li>
+              </ul>
+            </div>
+          </div>
+        </article>
+
+        <article class="issue">
+          <div class="issue-head">
+            <div>
+              <span class="issue-num">Defect 04 · Lighting &amp; 3D Depth</span>
+              <h3>Flat Uniform Sprite Tinting, Unlit Ship &amp; Zero Ground Shadows</h3>
+            </div>
+            <span class="commit-tag">commit d37c6fb</span>
+          </div>
+          <div class="vs-grid">
+            <div class="vs-box vs-bad">
+              <span class="vs-label">What Claude's v1.1.3 Did Wrong</span>
+              <ul>
+                <li><code>LIT_FRAGMENT</code> was literally one line: <code>t.rgb * color.rgb * 2.0</code>. Every rock, enemy, and boss was tinted by a single flat RGB sum calculated on CPU at the sprite's center — zero directional relief, zero specular sheen, zero rim light.</li>
+                <li>The player's ship was drawn after <code>canvas.lighting(false)</code>, completely ignoring nearby blasts and lasers, while depot/power-up text labels were accidentally drawn inside <code>lighting(true)</code> (doubling their brightness).</li>
+                <li>Entities hovered 100 units above the planet surface with zero drop shadows, making rocks look pasted flat onto the backdrop.</li>
+              </ul>
+            </div>
+            <div class="vs-box vs-good">
+              <span class="vs-label">How v1.2.0 Fixed It</span>
+              <ul>
+                <li>Added single-batch <strong>parallax-offset ground drop shadows</strong> (<code>Play::draw_shadows</code>) onto planet worlds (Worlds 1–5), casting soft altitude-separated shadows along the inverse key light.</li>
+                <li>Replaced flat tinting with a <strong>per-pixel PBR-inspired sprite shader</strong> requiring <strong>0 bytes of extra normal-map VRAM</strong>: encodes sprite rotation <code>(cos, sin)</code> and <code>SpriteMat</code> in vertex colour, derives rotated 3D dome + clamped 4-tap luminance-bump normals per pixel, and shades with key light, hemisphere fill, all 12 dynamic point lights (diffuse + Blinn-Phong specular), material-specific Fresnel rims, crystalline ice glints, metallic hull sheen, and incandescent molten fissures on fire rocks.</li>
+                <li>Lit the player ship hull cleanly and moved text labels / boss health bars outside the lit pass.</li>
+              </ul>
+            </div>
+          </div>
+        </article>
+
+        <article class="issue">
+          <div class="issue-head">
+            <div>
+              <span class="issue-num">Defect 05 · Planet &amp; Space Backdrops</span>
+              <h3>Flat Clouds, Dull Unlit Lava, Lowp UV Precision &amp; Static Space</h3>
+            </div>
+            <span class="commit-tag">commit 4e83224</span>
+          </div>
+          <div class="vs-grid">
+            <div class="vs-box vs-bad">
+              <span class="vs-label">What Claude's v1.1.3 Did Wrong</span>
+              <ul>
+                <li><code>BACKDROP_VERTEX</code>/<code>FRAGMENT</code> declared <code>varying lowp vec2 uv</code>, risking UV quantization jitter on scrolling 4K textures on GLES/WebGL.</li>
+                <li>Clouds flat-blended over continents with zero shadow cast underneath, and explosions washed them out into flat tinted smudges.</li>
+                <li>World 2's lava cracks were flat, static dull red with zero heat glow; oceans had zero specular reflection; the curved planet had no atmospheric Fresnel rim; and space/menus lacked crisp star depth.</li>
+              </ul>
+            </div>
+            <div class="vs-box vs-good">
+              <span class="vs-label">How v1.2.0 Fixed It</span>
+              <ul>
+                <li>Upgraded UVs to <code>highp</code> and added world-aware surface materials (<code>WorldStyle</code> + <code>Time</code> + <code>view_ndc</code>).</li>
+                <li>Added <strong>parallax cloud drop shadows</strong> (Worlds 1 &amp; 3), sunlit + explosion-lit <strong>ocean specular glints</strong>, animated <strong>pulsing incandescent lava fissures</strong> on World 2, deeper crater relief on Worlds 4 &amp; 5, per-world <strong>atmospheric Fresnel limb haze</strong>, and natural light scattering through clouds/fog.</li>
+                <li>Added a <strong>3-layer procedural twinkling parallax starfield</strong> with realistic star temperatures and diffraction spikes across World 6, Survival, and the menus.</li>
+              </ul>
+            </div>
+          </div>
+        </article>
+
+        <article class="issue">
+          <div class="issue-head">
+            <div>
+              <span class="issue-num">Defect 06 · Combat VFX &amp; Fluid Gas Simulation</span>
+              <h3>Blurry Cotton-Ball Puffs, Primitive White-Triangle Gravity Gun &amp; Static Shield</h3>
+            </div>
+            <span class="commit-tag">commits 588236a · fluid gas</span>
+          </div>
+          <div class="vs-grid">
+            <div class="vs-box vs-bad">
+              <span class="vs-label">What Claude's v1.1.3 Did Wrong</span>
+              <ul>
+                <li>Claude's earlier attempts at gas particles were rejected as faint, grainy, or "pathetic puffs", falling back to overlapping circular Gaussian dots (<code>soft_dot</code>) that read as blurry orange cotton balls and ignored nearby explosion lights.</li>
+                <li>The gravity gun cone was one untextured flat white-to-transparent triangle; the shield rim just drew the static shield sprite scaled up slightly.</li>
+                <li>The ship's engine trail was a sparse sequence of square <code>spark</code> dots; weapons had no muzzle flash; fresh explosion scorches were flat dark stamps.</li>
+              </ul>
+            </div>
+            <div class="vs-box vs-good">
+              <span class="vs-label">How v1.2.0 Fixed It</span>
+              <ul>
+                <li>Built a genuine <strong>real-time 2D toroidal Navier-Stokes fluid gas solver</strong> (<code>src/gas.rs</code>: 128×128 periodic grid matching the 1024×1024 wrapping world, vorticity confinement for Kelvin-Helmholtz eddies, incompressible pressure projection, and semi-Lagrangian advection) — enabled by default.</li>
+                <li>Rendered at 4K through a <strong>dual-phase flow-advected FBM volumetric shader</strong> (<code>GAS_FIELD_FRAGMENT</code>) with 3D self-shadowing, illumination from all 12 dynamic point lights, and incandescent plasma fed directly into the 5-level bloom pyramid. Ship hulls, shots, flamethrowers, explosions, and the gravity gun vortex physically stir, part, and swirl the gas, while sparks and debris in <code>src/bursts.rs</code> advect through the live fluid velocity field.</li>
+                <li>Wrote procedural GLSL shaders for the <strong>spherical rotating hexagonal Fresnel shield</strong> (<code>SHIELD_FRAGMENT</code>) and <strong>pulsing cyan-violet tractor beam</strong> (<code>GRAVITY_FRAGMENT</code>), replaced dotted trails with a continuous tapered plasma afterburner ribbon, added weapon muzzle flashes, and gave fresh scorches glowing cooling-ember cores.</li>
+              </ul>
+            </div>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section id="showcase">
+      <h2>v1.2.0 Visual Showcase (1920×1080)</h2>
+      <p class="section-sub">
+        All shader upgrades run natively on macOS, Windows, Linux, and directly inside the browser WebGL build. Classic 480×320 emulator fidelity remains intact via <code>MB_WIDE=0 MB_HD=0 MB_RENDER_SCALE=1 MB_BLOOM=0 MB_FX_OFF=1</code>.
+      </p>
+      <div class="gallery">
+        <div class="shot-card">
+          <img src="./docs/review/showcase_shield.webp" alt="Hex Fresnel Shield & Plasma Ribbon" loading="lazy" />
+          <div class="cap">
+            <h4>Hexagonal Fresnel Shield &amp; Plasma Ribbon</h4>
+            <p>Spherical honeycomb deflector shader + continuous two-layer emerald-cyan afterburner over Earth's shadowed clouds.</p>
+          </div>
+        </div>
+        <div class="shot-card">
+          <img src="./docs/review/showcase_combat.webp" alt="Tractor Beam & 3D Asteroids" loading="lazy" />
+          <div class="cap">
+            <h4>Tractor Beam, Shockwave &amp; 3D Asteroids</h4>
+            <p>Animated cyan-violet gravity beam gripping a rock beside a sculpted 3D cratered asteroid casting its shadow onto the planet.</p>
+          </div>
+        </div>
+        <div class="shot-card">
+          <img src="./docs/review/showcase_fire.webp" alt="Molten Fire Asteroid" loading="lazy" />
+          <div class="cap">
+            <h4>Volcanic Fire Asteroid &amp; Emerald Planet</h4>
+            <p>Per-pixel molten emissive fissures glowing inside a fire rock over World 3's cloud-shadowed emerald surface.</p>
+          </div>
+        </div>
+        <div class="shot-card">
+          <img src="./docs/review/showcase_craters.webp" alt="Real-Time Navier-Stokes Fluid Gas" loading="lazy" />
+          <div class="cap">
+            <h4>Real-Time Navier-Stokes Fluid Gas &amp; Vortices</h4>
+            <p>Incompressible 2D toroidal gas simulation rendered via dual-phase flow-advected FBM turbulence — blasts roll into swirling volumetric smoke &amp; plasma clouds stirred by your ship's wake.</p>
+          </div>
+        </div>
+        <div class="shot-card">
+          <img src="./docs/review/showcase_lasers.webp" alt="Deep Space Triple Lasers" loading="lazy" />
+          <div class="cap">
+            <h4>Deep Space Starfield &amp; Triple Lasers</h4>
+            <p>Three-layer twinkling parallax stars with diffraction spikes lit by ACES-mapped cyan laser bolts.</p>
+          </div>
+        </div>
+        <div class="shot-card">
+          <img src="./docs/review/showcase_pause.webp" alt="HD Pause Overlay" loading="lazy" />
+          <div class="cap">
+            <h4>4K-Crisp HD Pause &amp; Upgrade UI</h4>
+            <p>Real-ESRGAN Anime UI, glowing slider pegs, and smooth linear HD typography over the live playfield.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="benchmarks">
+      <h2>4K Performance &amp; Verification</h2>
+      <p class="section-sub">
+        Measured on Apple Silicon (macOS release build) at native 4K (`3840×2160`) with `MB_ZOOM=1.5`, Physics particles, 5-level pyramid bloom, ACES post-FX, per-pixel PBR sprite lighting, ground shadows, and 8× Real-ESRGAN textures + mipmaps.
+      </p>
+      <table>
+        <thead>
+          <tr>
+            <th>Metric</th>
+            <th>v1.1.3 Baseline</th>
+            <th>v1.2.0 Overhaul</th>
+            <th>Notes</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>4K Draw CPU / Submit (avg)</td>
+            <td class="num">1.09–1.25 ms</td>
+            <td class="num">0.75–0.84 ms</td>
+            <td>Faster despite live 128×128 Navier-Stokes fluid gas + richer shaders</td>
+          </tr>
+          <tr>
+            <td>4K Uncapped Frame Rate</td>
+            <td class="num">60 fps (capped)</td>
+            <td class="num">521.4 fps</td>
+            <td><code>MB_RESOLUTION=3840x2160 MB_START=4.1 MB_ZOOM=1.5 MB_PHYSICS=1 MB_FPS=0</code></td>
+          </tr>
+          <tr>
+            <td>8× Art Verification</td>
+            <td class="num">xBR 4× + xBR 2×</td>
+            <td class="num">534 / 534 exact 8×</td>
+            <td>346 sprites (115 MB) + 188 UI (64 MB) + HD font (172 KB), oxipng-compressed</td>
+          </tr>
+          <tr>
+            <td>Unit &amp; Fidelity Suite</td>
+            <td class="num">38 / 38 pass</td>
+            <td class="num">39 / 39 pass (0 warnings)</td>
+            <td>Classic 480×320 retro mode (<code>MB_HD=0 MB_FX_OFF=1 MB_BLOOM=0</code>) preserved</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+  </main>
+
+  <footer>
+    <div>Meteor Blitz v1.2.0 · Free non-commercial fan port of Alley Labs' 2009 iOS classic.</div>
+    <div>
+      <a href="./index.html">Play in Browser</a> ·
+      <a href="https://github.com/BobClawblaw/meteor-blitz">GitHub Repo</a> ·
+      <a href="https://github.com/BobClawblaw/meteor-blitz/releases/tag/v1.2.0">v1.2.0 Release</a>
+    </div>
+  </footer>
+
+  <script>
+    document.querySelectorAll("[data-compare]").forEach((stage) => {
+      const before = stage.querySelector(".compare-before");
+      const beforeImg = before.querySelector("img");
+      const handle = stage.querySelector(".compare-handle");
+      let pct = 50;
+      let dragging = false;
+
+      function syncWidth() {
+        beforeImg.style.width = stage.clientWidth + "px";
+        beforeImg.style.height = stage.clientHeight + "px";
+      }
+      function setPct(p) {
+        pct = Math.max(0, Math.min(100, p));
+        before.style.width = pct + "%";
+        handle.style.left = pct + "%";
+      }
+      function updateFromClientX(clientX) {
+        const rect = stage.getBoundingClientRect();
+        setPct(((clientX - rect.left) / rect.width) * 100);
+      }
+
+      syncWidth();
+      setPct(50);
+      window.addEventListener("resize", syncWidth);
+
+      stage.addEventListener("pointerdown", (e) => {
+        dragging = true;
+        stage.setPointerCapture(e.pointerId);
+        updateFromClientX(e.clientX);
+      });
+      stage.addEventListener("pointermove", (e) => {
+        if (dragging) updateFromClientX(e.clientX);
+      });
+      stage.addEventListener("pointerup", () => { dragging = false; });
+      stage.addEventListener("pointercancel", () => { dragging = false; });
+    });
+  </script>
+</body>
+</html>

@@ -2,7 +2,7 @@
 
 A love letter to Alley Labs' *Meteor Blitz* (iOS, 2009), given away freely and remade in Rust through AI-assisted reverse engineering. The game logic, tuning, waves and bosses are translated from the decompiled ARMv6 binary of the original 1.4 release, and the art, music and sound come from its app bundle. On top of that faithful core, the presentation is rebuilt for today's machines: widescreen, high refresh rates, dynamic lighting, post-processing and rebindable controls. One Rust + macroquad codebase runs on macOS, Windows, Linux (including the Steam Deck) and the web (WASM).
 
-**Play it in your browser: https://bobclawblaw.github.io/meteor-blitz/** (keyboard, mouse, a game controller, or touch on a phone or tablet), or download the macOS, Windows and Linux builds from [Releases](https://github.com/BobClawblaw/meteor-blitz/releases).
+**Play it in your browser: https://bobclawblaw.github.io/meteor-blitz/** (keyboard, mouse, a game controller, or touch on a phone or tablet), read the **[v1.2.0 Interactive Graphics Overhaul Review](https://bobclawblaw.github.io/meteor-blitz/review.html)**, or download the native builds from [Releases](https://github.com/BobClawblaw/meteor-blitz/releases).
 
 ![Gameplay](screenshots/gameplay.png)
 
