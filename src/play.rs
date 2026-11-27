@@ -783,6 +783,45 @@ impl Carry {
     };
 }
 
+/// Edge-triggered gameplay presses latched once per render frame in
+/// `Play::update` and drained on the next 60 Hz simulation step. Without
+/// latching, running above 60 Hz (120/144/240/Unlimited FPS) drops presses on
+/// every render frame where `accumulator < STEP`, and a slow frame running two
+/// steps double-triggers a single press.
+#[derive(Default, Clone, Copy, Debug, PartialEq, Eq)]
+struct PendingInput {
+    switch_weapon: bool,
+    bomb: bool,
+    boost: bool,
+    fire_press: bool,
+    gravity: bool,
+    tutorial_quit: bool,
+}
+
+impl PendingInput {
+    fn latch(&mut self, other: PendingInput) {
+        self.switch_weapon |= other.switch_weapon;
+        self.bomb |= other.bomb;
+        self.boost |= other.boost;
+        self.fire_press |= other.fire_press;
+        self.gravity |= other.gravity;
+        self.tutorial_quit |= other.tutorial_quit;
+    }
+
+    fn take_controls(&mut self) -> PendingInput {
+        let out = PendingInput {
+            tutorial_quit: false,
+            ..*self
+        };
+        self.switch_weapon = false;
+        self.bomb = false;
+        self.boost = false;
+        self.fire_press = false;
+        self.gravity = false;
+        out
+    }
+}
+
 pub struct Play {
     pub world: usize,
     pub stage: usize,
@@ -798,6 +837,7 @@ pub struct Play {
     /// Background offset: the planet scrolls with the ship's motion.
     scroll: Vec2,
     accumulator: f32,
+    pending: PendingInput,
     field: Field,
     script: Script,
     pub score: u64,
@@ -1200,6 +1240,7 @@ impl Play {
             },
             scroll: Vec2::ZERO,
             accumulator: 0.0,
+            pending: PendingInput::default(),
             field: Field::new(assets.rocks[0].frame_counts()),
             script: if world == SURVIVAL {
                 Script::survival()
@@ -1400,6 +1441,7 @@ impl Play {
         };
         self.scroll = Vec2::ZERO;
         self.accumulator = 0.0;
+        self.pending = PendingInput::default();
         self.field = Field::new(assets.rocks[0].frame_counts());
         self.script = Script::arcade(world, stage);
         self.pickups = Rings::default();
@@ -1763,6 +1805,7 @@ impl Play {
     }
 
     pub fn update_visuals(&mut self, dt: f32) {
+        self.pending = PendingInput::default();
         self.accumulator += dt;
         while self.accumulator >= STEP {
             self.accumulator -= STEP;
@@ -1787,7 +1830,52 @@ impl Play {
         });
     }
 
+    /// Polls one-frame edge-triggered inputs once per render frame so high-FPS
+    /// modes (120/144/240/Unlimited) never drop button presses between 60 Hz
+    /// simulation ticks.
+    fn poll_frame_inputs(&mut self) {
+        match self.state {
+            State::Entering => {
+                // Allow weapon switches queued during the stage fade-in, while
+                // ignoring bomb/boost/fire presses until play begins.
+                self.pending.switch_weapon |= bindings::pressed(Action::SwitchWeapon);
+                self.pending.bomb = false;
+                self.pending.boost = false;
+                self.pending.fire_press = false;
+                self.pending.gravity = false;
+                self.pending.tutorial_quit = false;
+            }
+            State::Ready => {
+                let alive = !matches!(self.ship.life, Life::Dead(_));
+                let quit_key = is_key_pressed(KeyCode::Escape) || bindings::pressed(Action::Pause);
+                let tutorial_quit = self.tutorial.is_some()
+                    && ((is_mouse_button_pressed(MouseButton::Left)
+                        && tutorial::QUIT_RECT.contains(Canvas::mouse()))
+                        || (quit_key && !self.can_pause()));
+                if alive {
+                    self.pending.latch(PendingInput {
+                        switch_weapon: bindings::pressed(Action::SwitchWeapon),
+                        bomb: bindings::pressed(Action::Bomb),
+                        boost: bindings::pressed(Action::Boost),
+                        fire_press: bindings::key_pressed(Action::Fire),
+                        gravity: bindings::pressed(Action::Gravity),
+                        tutorial_quit,
+                    });
+                } else {
+                    self.pending = PendingInput {
+                        tutorial_quit: self.pending.tutorial_quit || tutorial_quit,
+                        ..PendingInput::default()
+                    };
+                }
+            }
+            State::Over { .. } => {
+                self.pending = PendingInput::default();
+            }
+        }
+    }
+
     pub fn update(&mut self, dt: f32) {
+        self.poll_frame_inputs();
         self.accumulator += dt;
         while self.accumulator >= STEP {
             self.accumulator -= STEP;
@@ -1906,11 +1994,8 @@ impl Play {
             || !get_keys_down().is_empty()
             || pad::any_down();
         // The Quit button; Esc or the pad's Start stand in for it until
-        // the pause button unlocks.
-        let quit_key = is_key_pressed(KeyCode::Escape) || bindings::pressed(Action::Pause);
-        let quit = (is_mouse_button_pressed(MouseButton::Left)
-            && tutorial::QUIT_RECT.contains(Canvas::mouse()))
-            || (quit_key && !self.can_pause());
+        // the pause button unlocks (latched once per render frame).
+        let quit = std::mem::take(&mut self.pending.tutorial_quit);
         let field = tutorial::Field {
             normal_rocks: self.field.rocks_of(Element::Normal),
             ice_rocks: self.field.rocks_of(Element::Ice),
@@ -2728,9 +2813,12 @@ impl Play {
         } else {
             self.ship.vel *= DRAG / (dt + DRAG);
         }
+        // Drain edge-triggered presses latched per render frame so high-FPS
+        // modes never drop inputs and multi-step slow frames never double-fire.
+        let input = self.pending.take_controls();
+
         // The original's switch-weapon button (Q, the wheel, X or Y).
-        let switch = bindings::pressed(Action::SwitchWeapon);
-        if switch && self.allowed(Tutorial::can_switch_weapon) {
+        if input.switch_weapon && self.allowed(Tutorial::can_switch_weapon) {
             self.ship.switch_weapon();
             if let Some(t) = &mut self.tutorial {
                 t.using_switch_weapon();
@@ -2741,7 +2829,7 @@ impl Play {
         let auto_bomb = self
             .auto_bomb
             .is_some_and(|t| self.elapsed >= t && self.elapsed - dt < t);
-        let bomb = touch::take_bomb() | auto_bomb | bindings::pressed(Action::Bomb);
+        let bomb = touch::take_bomb() | auto_bomb | input.bomb;
         if bomb && self.allowed(Tutorial::can_bomb) {
             self.bomb();
             if let Some(t) = &mut self.tutorial {
@@ -2752,7 +2840,7 @@ impl Play {
         let auto_boost = self
             .auto_boost
             .is_some_and(|t| self.elapsed >= t && self.elapsed - dt < t);
-        let boost = touch::take_boost() | auto_boost | bindings::pressed(Action::Boost);
+        let boost = touch::take_boost() | auto_boost | input.boost;
         if boost && self.ship.can_boost() && self.allowed(Tutorial::can_boost) {
             self.ship.boost(dt);
             self.camera.shake(0.75, 7.5);
@@ -2797,7 +2885,7 @@ impl Play {
             if touch::take_gun() {
                 self.activate_gun();
             }
-        } else if can_fire && bindings::key_down(Action::Fire) && !touch::shown() {
+        } else if can_fire && (bindings::key_down(Action::Fire) || input.fire_press) && !touch::shown() {
             // Keyboard and mouse fire toward the cursor.
             let dir = (self.mouse() - self.to_screen(self.view_ship())).normalize_or_zero();
             if dir != Vec2::ZERO {
@@ -2805,25 +2893,25 @@ impl Play {
             }
             // GameScreen::updateStateReady: a second press within 0.3 s of
             // the last (or the gravity binding) reaches out with the gun.
-            if bindings::key_pressed(Action::Fire) {
+            if input.fire_press {
                 if self.since_press < DOUBLE_PRESS {
                     self.activate_gun();
                 }
                 self.since_press = 0.0;
             }
-            if bindings::pressed(Action::Gravity) {
+            if input.gravity {
                 self.activate_gun();
             }
         } else if let Some(dir) = self.pad_aim().filter(|_| can_fire) {
             // The right stick is the original's fire wheel: aim and shoot.
             // The fire binding (RT) fires along the last aim.
             self.ship.shoot(dt, dir);
-            if bindings::pressed(Action::Gravity) {
+            if input.gravity {
                 self.activate_gun();
             }
         } else {
             self.ship.hold_fire();
-            if bindings::pressed(Action::Gravity) {
+            if input.gravity {
                 self.activate_gun();
             }
             // Letting go of fire throws what the gun holds; holding the
@@ -3910,5 +3998,27 @@ mod tests {
             vec2(300.0, 0.0),
             "a jump is drawn where it landed"
         );
+    }
+
+    #[test]
+    fn pending_input_survives_substep_frames_and_fires_once_on_slow_frame() {
+        let mut p = PendingInput::default();
+        // High-FPS sub-step frames (e.g. 500 fps): press on frame 1, idle on
+        // frames 2..8, then consumed on the 60 Hz simulation step.
+        p.latch(PendingInput {
+            switch_weapon: true,
+            bomb: true,
+            ..PendingInput::default()
+        });
+        for _ in 0..7 {
+            p.latch(PendingInput::default());
+        }
+        let first = p.take_controls();
+        assert!(first.switch_weapon);
+        assert!(first.bomb);
+        // A second 60 Hz step inside the same slow frame must not double-fire.
+        let second = p.take_controls();
+        assert!(!second.switch_weapon);
+        assert!(!second.bomb);
     }
 }
