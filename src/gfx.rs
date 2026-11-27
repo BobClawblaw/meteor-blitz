@@ -64,75 +64,106 @@ pub fn set_render_height(height: u32) {
     RENDER_HEIGHT.store(height, Ordering::Relaxed);
 }
 
-/// macOS window frames are in points and include the title bar; the
-/// backing scale turns points into pixels. Returns the title bar height in
-/// points so a requested content size can be converted to a frame size.
-#[cfg(target_os = "macos")]
-fn title_bar_height() -> f32 {
-    use objc2::runtime::AnyObject;
-    use objc2::{class, msg_send};
-    use objc2_foundation::NSRect;
-    unsafe {
-        let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
-        if app.is_null() {
-            return 0.0;
-        }
-        let mut window: *mut AnyObject = msg_send![app, mainWindow];
-        if window.is_null() {
-            window = msg_send![app, keyWindow];
-        }
-        if window.is_null() {
-            let windows: *mut AnyObject = msg_send![app, windows];
-            let count: usize = msg_send![windows, count];
-            if count > 0 {
-                window = msg_send![windows, objectAtIndex: 0usize];
-            }
-        }
-        if window.is_null() {
-            return 0.0;
-        }
-        let frame: NSRect = msg_send![window, frame];
-        let content: NSRect = msg_send![window, contentLayoutRect];
-        (frame.size.height - content.size.height).max(0.0) as f32
-    }
+/// Logical window size in points, read directly from miniquad so it always
+/// matches `set_default_camera()`'s `pixel_perfect_projection_matrix` even
+/// before macroquad's cached `resize_event` runs.
+fn window_size_pts() -> (f32, f32) {
+    let (pw, ph) = macroquad::miniquad::window::screen_size();
+    let dpi = macroquad::miniquad::window::dpi_scale().max(0.5);
+    ((pw / dpi).max(1.0), (ph / dpi).max(1.0))
 }
 
-/// The display's backing scale. The window's own `backingScaleFactor` is
-/// still 1 before the window is shown, which made startup resolution
-/// changes half-size; NSScreen reports the real scale at that point.
-#[cfg(target_os = "macos")]
-fn display_scale() -> f32 {
-    use objc2::runtime::AnyObject;
-    use objc2::{class, msg_send};
-    unsafe {
-        let screen: *mut AnyObject = msg_send![class!(NSScreen), mainScreen];
-        if screen.is_null() {
-            return screen_dpi_scale();
-        }
-        let scale: f64 = msg_send![screen, backingScaleFactor];
-        if scale > 0.0 {
-            scale as f32
-        } else {
-            screen_dpi_scale()
-        }
-    }
+/// Scales a requested window content size `(req_w, req_h)` in points down
+/// uniformly if needed so the frame (including `title` bar) fits inside the
+/// display's visible area `(max_w, max_h)` without distorting the aspect ratio.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn fit_window_in_frame(req_w: f32, req_h: f32, max_w: f32, max_h: f32, title: f32) -> (f32, f32) {
+    let avail_w = max_w.max(64.0);
+    let avail_h = (max_h - title).max(64.0);
+    let k = (avail_w / req_w.max(1.0)).min(avail_h / req_h.max(1.0)).min(1.0);
+    ((req_w * k).round().max(1.0), (req_h * k).round().max(1.0))
 }
 
-/// Sets the window to a physical resolution. macOS window frames are in
-/// points, so the physical size is divided by the backing scale and the
-/// title bar is added; Windows and X11 take client pixels directly.
+/// Sets the window to a physical resolution. On macOS, converts to points using
+/// the window's actual screen `backingScaleFactor`, clamps uniformly to that
+/// screen's `visibleFrame` (preventing oversized windows from spilling across
+/// monitors or pillar-boxing when e.g. 4K is selected on a 1080p display), and
+/// centres it immediately without animation.
 pub fn set_window_resolution(width: u32, height: u32) {
     #[cfg(target_os = "macos")]
-    let scale = display_scale();
+    {
+        use objc2::runtime::{AnyObject, Bool};
+        use objc2::{class, msg_send};
+        use objc2_foundation::{NSPoint, NSRect, NSSize};
+        unsafe {
+            let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
+            let mut window: *mut AnyObject = std::ptr::null_mut();
+            if !app.is_null() {
+                window = msg_send![app, mainWindow];
+                if window.is_null() {
+                    window = msg_send![app, keyWindow];
+                }
+                if window.is_null() {
+                    let windows: *mut AnyObject = msg_send![app, windows];
+                    let count: usize = msg_send![windows, count];
+                    if count > 0 {
+                        window = msg_send![windows, objectAtIndex: 0usize];
+                    }
+                }
+            }
+            let mut screen: *mut AnyObject = if !window.is_null() {
+                msg_send![window, screen]
+            } else {
+                std::ptr::null_mut()
+            };
+            if screen.is_null() {
+                screen = msg_send![class!(NSScreen), mainScreen];
+            }
+            let scale: f32 = if !screen.is_null() {
+                let s: f64 = msg_send![screen, backingScaleFactor];
+                if s > 0.0 { s as f32 } else { screen_dpi_scale().max(1.0) }
+            } else {
+                screen_dpi_scale().max(1.0)
+            };
+            let title: f32 = if !window.is_null() {
+                let frame: NSRect = msg_send![window, frame];
+                let content: NSRect = msg_send![window, contentLayoutRect];
+                (frame.size.height - content.size.height).max(0.0) as f32
+            } else {
+                0.0
+            };
+            let req_w = width as f32 / scale;
+            let req_h = height as f32 / scale;
+            if !window.is_null() && !screen.is_null() {
+                let visible: NSRect = msg_send![screen, visibleFrame];
+                let (cw, ch) = fit_window_in_frame(
+                    req_w,
+                    req_h,
+                    visible.size.width as f32,
+                    visible.size.height as f32,
+                    title,
+                );
+                let fw = cw as f64;
+                let fh = (ch + title).round() as f64;
+                let new_frame = NSRect {
+                    origin: NSPoint {
+                        x: visible.origin.x + ((visible.size.width - fw) * 0.5).floor(),
+                        y: visible.origin.y + ((visible.size.height - fh) * 0.5).floor(),
+                    },
+                    size: NSSize { width: fw, height: fh },
+                };
+                let () = msg_send![window, setFrame: new_frame, display: Bool::YES, animate: Bool::NO];
+                return;
+            }
+            let w = req_w.round().max(1.0) as u32;
+            let h = (req_h + title).round().max(1.0) as u32;
+            macroquad::miniquad::window::set_window_size(w, h);
+        }
+    }
     #[cfg(not(target_os = "macos"))]
-    let scale = 1.0;
-    #[cfg(target_os = "macos")]
-    let title = title_bar_height();
-    #[cfg(not(target_os = "macos"))]
-    let title = 0.0;
-    let width = (width as f32 / scale).round().max(1.0) as u32;
-    let height = (height as f32 / scale + title).round().max(1.0) as u32;
-    macroquad::miniquad::window::set_window_size(width, height);
+    {
+        macroquad::miniquad::window::set_window_size(width.max(1), height.max(1));
+    }
 }
 
 /// The window's aspect, from 3:2 (the original) to 2.4:1. With widescreen
@@ -142,7 +173,8 @@ fn window_view_w() -> f32 {
     if !WIDESCREEN.load(Ordering::Relaxed) || std::env::var("MB_WIDE").is_ok_and(|v| v == "0") {
         return CANVAS_W;
     }
-    (CANVAS_H * screen_width() / screen_height()).clamp(CANVAS_W, CANVAS_H * MAX_ASPECT).round()
+    let (sw, sh) = window_size_pts();
+    (CANVAS_H * sw / sh).clamp(CANVAS_W, CANVAS_H * MAX_ASPECT).round()
 }
 
 /// Director::initWithView's camera for a view `view_w` wide: the original
@@ -1211,7 +1243,8 @@ fn render_scale(view_w: f32) -> f32 {
     if height > 0 {
         return (height as f32 / CANVAS_H).clamp(1.0, 8.0);
     }
-    let fit = (screen_width() / view_w).min(screen_height() / CANVAS_H);
+    let (pw, ph) = macroquad::miniquad::window::screen_size();
+    let fit = (pw / view_w).min(ph / CANVAS_H);
     fit.clamp(1.0, 8.0)
 }
 
@@ -1462,16 +1495,12 @@ impl Canvas {
 
     /// Where the landscape view lands in the window: the largest fit,
     /// centred.
-    fn placement() -> Rect {
+    pub fn placement() -> Rect {
+        let (sw, sh) = window_size_pts();
         let view_w = view_w();
-        let scale = (screen_width() / view_w).min(screen_height() / CANVAS_H);
+        let scale = (sw / view_w).min(sh / CANVAS_H);
         let (w, h) = (view_w * scale, CANVAS_H * scale);
-        Rect::new(
-            (screen_width() - w) * 0.5,
-            (screen_height() - h) * 0.5,
-            w,
-            h,
-        )
+        Rect::new((sw - w) * 0.5, (sh - h) * 0.5, w, h)
     }
 
     /// Mouse position in canvas coordinates (x runs past 0..480 in a wide
@@ -2039,5 +2068,16 @@ mod backdrop_tests {
             let pace = ground_units_per_unit * ratio;
             assert!((pace - 1.0).abs() < 1e-4, "zoom {} pace {}", zoom, pace);
         }
+    }
+
+    #[test]
+    fn window_fit_preserves_aspect_when_clamped_to_display() {
+        // 4K (3840x2160) on a 1x 1920x1080 display (visible 1920x1055, 28pt title bar):
+        // must clamp uniformly to keep 16:9 instead of becoming 3840x1027!
+        let (w, h) = fit_window_in_frame(3840.0, 2160.0, 1920.0, 1055.0, 28.0);
+        assert!(w <= 1920.0 && h + 28.0 <= 1055.0, "fits display: {w}x{h}");
+        assert!((w / h - 16.0 / 9.0).abs() < 0.01, "keeps 16:9: {w}x{h}");
+        // 4K on a 5K 2x Retina display (req 1920x1080 pt inside 2560x1415 pt): untouched.
+        assert_eq!(fit_window_in_frame(1920.0, 1080.0, 2560.0, 1415.0, 28.0), (1920.0, 1080.0));
     }
 }
