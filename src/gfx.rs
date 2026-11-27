@@ -659,16 +659,197 @@ void main() {
     uv = texcoord;
 }"#;
 
-/// Sprites lit by nearby lights (port addition): the vertex colour's rgb is
-/// 0.5 for unlit and up to 1 for twice as bright.
-const LIT_FRAGMENT: &str = r#"#version 100
-precision mediump float;
+/// Material classes encoded in vertex colour's blue channel when drawing
+/// sprites with the per-pixel PBR-inspired `lit` shader.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SpriteMat {
+    /// Rough rocky asteroid with strong bump relief and warm rim lighting.
+    Rock,
+    /// Crystalline ice asteroid with sharp specular glints and cyan Fresnel rim.
+    Ice,
+    /// Volcanic fire asteroid with glowing molten orange-gold fissures.
+    Fire,
+    /// Metallic starfighter, enemy hull, depot or boss armour.
+    Craft,
+    /// Glowing boss core, golden rings, and energy power-ups.
+    Core,
+}
+
+impl SpriteMat {
+    fn code(self) -> f32 {
+        match self {
+            SpriteMat::Rock => 0.05,
+            SpriteMat::Ice => 0.25,
+            SpriteMat::Fire => 0.45,
+            SpriteMat::Craft => 0.68,
+            SpriteMat::Core => 0.90,
+        }
+    }
+}
+
+/// Encodes a sprite's screen rotation and material class into vertex colour
+/// for `LIT_FRAGMENT` (zero per-sprite uniform switches).
+pub fn lit_color(angle_deg: f32, mat: SpriteMat, alpha: f32) -> Color {
+    let (s, c) = angle_deg.to_radians().sin_cos();
+    Color::new(c * 0.5 + 0.5, s * 0.5 + 0.5, mat.code(), alpha)
+}
+
+/// Per-pixel lit sprite vertex shader: forwards exact play-plane canvas
+/// coordinates so every pixel receives directional point lights and relief.
+const LIT_VERTEX: &str = r#"#version 100
+attribute vec3 position;
+attribute vec2 texcoord;
+attribute vec4 color0;
+varying highp vec2 uv;
 varying lowp vec4 color;
-varying lowp vec2 uv;
+varying highp vec2 canvas;
+uniform mat4 Model;
+uniform mat4 Projection;
+uniform vec4 NdcToCanvas;
+uniform vec2 NdcOffset;
+void main() {
+    gl_Position = Projection * Model * vec4(position, 1);
+    vec2 ndc = gl_Position.xy / gl_Position.w;
+    canvas = vec2(dot(NdcToCanvas.xy, ndc), dot(NdcToCanvas.zw, ndc)) + NdcOffset;
+    color = color0 / 255.0;
+    uv = texcoord;
+}"#;
+
+/// Per-pixel PBR-inspired sprite lighting (port addition): derives a
+/// 3D dome + luminance-bump normal per pixel rotated into screen space,
+/// shades with a key light, soft hemisphere fill, all 12 dynamic point
+/// lights (diffuse + Blinn-Phong specular), material-aware Fresnel rim
+/// lighting (ice glint, metallic sheen), and molten/core self-emissives.
+const LIT_FRAGMENT: &str = r#"#version 100
+precision highp float;
+varying lowp vec4 color;
+varying highp vec2 uv;
+varying highp vec2 canvas;
 uniform sampler2D Texture;
+uniform vec2 AtlasGrid;
+uniform vec3 LightPos[12];
+uniform vec3 LightColor[12];
+
+float luma(vec3 c) {
+    return dot(c, vec3(0.299, 0.587, 0.114));
+}
+
 void main() {
     vec4 t = texture2D(Texture, uv);
-    gl_FragColor = vec4(t.rgb * color.rgb * 2.0, t.a * color.a);
+    if (t.a < 0.004) {
+        discard;
+    }
+    // Reconstruct sprite rotation basis and material class from vertex colour.
+    vec2 rot = color.rg * 2.0 - 1.0;
+    float rlen = max(length(rot), 0.001);
+    float cs = rot.x / rlen;
+    float sn = rot.y / rlen;
+    float mat = color.b;
+
+    // Local coordinates within the sprite (or atlas cell) in [-1, 1].
+    vec2 cell_idx = floor(uv * AtlasGrid);
+    vec2 cell_uv = fract(uv * AtlasGrid);
+    vec2 local = cell_uv * 2.0 - 1.0;
+
+    // Clamped 4-tap luminance gradient inside the sprite's cell for crisp relief.
+    vec2 eps = vec2(0.014);
+    vec2 uv_l = (cell_idx + clamp(cell_uv + vec2(-eps.x, 0.0), 0.01, 0.99)) / AtlasGrid;
+    vec2 uv_r = (cell_idx + clamp(cell_uv + vec2( eps.x, 0.0), 0.01, 0.99)) / AtlasGrid;
+    vec2 uv_u = (cell_idx + clamp(cell_uv + vec2(0.0, -eps.y), 0.01, 0.99)) / AtlasGrid;
+    vec2 uv_d = (cell_idx + clamp(cell_uv + vec2(0.0,  eps.y), 0.01, 0.99)) / AtlasGrid;
+    vec4 sl = texture2D(Texture, uv_l);
+    vec4 sr = texture2D(Texture, uv_r);
+    vec4 su = texture2D(Texture, uv_u);
+    vec4 sd = texture2D(Texture, uv_d);
+    float hl = luma(sl.rgb) * sl.a;
+    float hr = luma(sr.rgb) * sr.a;
+    float hu = luma(su.rgb) * su.a;
+    float hd = luma(sd.rgb) * sd.a;
+
+    // Material parameters: bump strength, specular strength/power, Fresnel rim.
+    float bump_k = 1.65;
+    float spec_k = 0.22;
+    float spec_p = 18.0;
+    vec3 rim_col = vec3(0.55, 0.65, 0.80);
+    float rim_k = 0.22;
+    vec3 emissive = vec3(0.0);
+
+    if (mat > 0.15 && mat < 0.35) {
+        // Ice rock: crystalline specular glints + bright cyan Fresnel rim.
+        bump_k = 2.0;
+        spec_k = 0.72;
+        spec_p = 36.0;
+        rim_col = vec3(0.55, 0.92, 1.0);
+        rim_k = 0.45;
+    } else if (mat >= 0.35 && mat < 0.55) {
+        // Fire rock: rugged volcanic bump + incandescent glowing magma fissures.
+        bump_k = 1.9;
+        spec_k = 0.26;
+        spec_p = 20.0;
+        rim_col = vec3(1.0, 0.45, 0.12);
+        rim_k = 0.36;
+        float hot = smoothstep(0.22, 0.62, t.r - t.b) * smoothstep(0.32, 0.85, t.r);
+        emissive = vec3(1.15, 0.46, 0.08) * hot * 0.72;
+    } else if (mat >= 0.55 && mat < 0.80) {
+        // Metallic craft / ship / enemies / depot.
+        bump_k = 1.35;
+        spec_k = 0.65;
+        spec_p = 32.0;
+        rim_col = vec3(0.65, 0.82, 1.0);
+        rim_k = 0.35;
+    } else if (mat >= 0.80) {
+        // Boss core, rings, power-ups: bright metallic gleam + self-illumination.
+        bump_k = 1.25;
+        spec_k = 0.75;
+        spec_p = 34.0;
+        rim_col = vec3(1.0, 0.82, 0.55);
+        rim_k = 0.38;
+        emissive = t.rgb * smoothstep(0.45, 0.95, luma(t.rgb)) * 0.35;
+    }
+
+    // Feathered outer glow/shadow pixels keep flat smooth normals.
+    float solid = smoothstep(0.25, 0.75, t.a);
+    vec2 local_xy = local * 0.62 + vec2(hl - hr, hu - hd) * bump_k * solid;
+    // Rotate normal XY from sprite local space into screen space.
+    vec2 world_xy = vec2(local_xy.x * cs - local_xy.y * sn, local_xy.x * sn + local_xy.y * cs);
+    float nz = sqrt(max(0.16, 1.0 - clamp(dot(local * 0.62, local * 0.62), 0.0, 0.82)));
+    vec3 n = normalize(vec3(world_xy, nz));
+    vec3 view_dir = vec3(0.0, 0.0, 1.0);
+
+    // Key directional light (upper left) + hemisphere ambient fill.
+    vec3 key = normalize(vec3(-0.45, -0.55, 0.72));
+    float key_diff = max(dot(n, key), 0.0);
+    // Keep original baked shading intact while adding crisp 3D relief.
+    float shade = mix(0.76, 1.22, key_diff);
+    vec3 half_key = normalize(key + view_dir);
+    float key_spec = pow(max(dot(n, half_key), 0.0), spec_p) * spec_k * solid;
+    float fresnel = pow(clamp(1.0 - n.z, 0.0, 1.0), 2.4) * solid;
+
+    // Per-pixel dynamic point lights (explosions, shots, ship).
+    vec3 dyn_diff = vec3(0.0);
+    vec3 dyn_spec = vec3(0.0);
+    for (int i = 0; i < 12; i++) {
+        vec2 d = LightPos[i].xy - canvas;
+        float r = LightPos[i].z;
+        float fall = clamp(1.0 - length(d) / max(r, 1.0), 0.0, 1.0);
+        float att = fall * fall;
+        vec3 l = normalize(vec3(d, 22.0));
+        float ndl = max(dot(n, l), 0.0);
+        // Directional wrap lighting so explosions dramatically rim-light rocks.
+        dyn_diff += LightColor[i] * att * (0.28 + 0.95 * ndl);
+        vec3 h = normalize(l + view_dir);
+        dyn_spec += LightColor[i] * att * pow(max(dot(n, h), 0.0), spec_p);
+    }
+    dyn_diff = dyn_diff / (1.0 + dyn_diff * 0.85);
+    dyn_spec = dyn_spec / (1.0 + dyn_spec);
+
+    vec3 rgb = t.rgb * shade
+        + t.rgb * dyn_diff * 1.45
+        + vec3(0.96, 0.98, 1.0) * key_spec * 0.42
+        + dyn_spec * spec_k * 1.15 * solid
+        + rim_col * fresnel * (rim_k * 0.55 + luma(dyn_diff) * 0.75)
+        + emissive * solid;
+    gl_FragColor = vec4(rgb, t.a * color.a);
 }"#;
 
 /// The final blit with post effects (port addition): shockwave rings that
@@ -1001,11 +1182,18 @@ impl Canvas {
         .expect("backdrop shader");
         let lit = load_material(
             ShaderSource::Glsl {
-                vertex: DEFAULT_VERTEX,
+                vertex: LIT_VERTEX,
                 fragment: LIT_FRAGMENT,
             },
             MaterialParams {
                 pipeline_params: pipeline(BlendFactor::OneMinusValue(BlendValue::SourceAlpha)),
+                uniforms: vec![
+                    UniformDesc::new("AtlasGrid", UniformType::Float2),
+                    UniformDesc::new("NdcToCanvas", UniformType::Float4),
+                    UniformDesc::new("NdcOffset", UniformType::Float2),
+                    UniformDesc::new("LightPos", UniformType::Float3).array(MAX_LIGHTS),
+                    UniformDesc::new("LightColor", UniformType::Float3).array(MAX_LIGHTS),
+                ],
                 ..Default::default()
             },
         )
@@ -1115,11 +1303,34 @@ impl Canvas {
         }
     }
 
-    /// Draws sprites with the lit material until turned off: their vertex
-    /// colour 0.5 is unlit, up to 1 twice as bright.
+    /// Draws sprites with the per-pixel PBR-inspired lit material until turned
+    /// off: vertex colours carry rotation and `SpriteMat` via `lit_color`.
     pub fn lighting(&self, on: bool) {
         self.lighting_on.set(on);
+        if on {
+            let (m, offset) = ndc_to_canvas(view_w(), self.zoom.get());
+            self.lit.set_uniform("AtlasGrid", vec2(1.0, 1.0));
+            self.lit.set_uniform("NdcToCanvas", m);
+            self.lit.set_uniform("NdcOffset", offset);
+            let lights = self.lights.borrow();
+            let mut pos = [Vec3::ZERO; MAX_LIGHTS];
+            let mut color = [Vec3::ZERO; MAX_LIGHTS];
+            for (i, l) in lights.iter().enumerate() {
+                pos[i] = vec3(l.pos.x, l.pos.y, l.radius);
+                color[i] = l.color;
+            }
+            self.lit.set_uniform_array("LightPos", &pos);
+            self.lit.set_uniform_array("LightColor", &color);
+        }
         self.restore_material();
+    }
+
+    /// Sets the atlas grid dimensions `(cols, rows)` for subsequent lit atlas
+    /// sprite draws so per-pixel normals stay inside each cell.
+    pub fn set_sprite_atlas(&self, cols: f32, rows: f32) {
+        if self.lighting_on.get() {
+            self.lit.set_uniform("AtlasGrid", vec2(cols, rows));
+        }
     }
 
     /// Lights and normal map for the next game backdrop (None: unlit, as

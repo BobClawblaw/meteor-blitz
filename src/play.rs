@@ -20,7 +20,10 @@ use crate::depot::{self, Depot};
 use crate::enemies::{wrap_near, Element, Event, Field, Rock, Script, Surface, Weapon};
 use crate::bursts::{Bursts, Look};
 use crate::stats::Tally;
-use crate::gfx::{draw_atlas_sprite, draw_quad, draw_sprite, tex_size, Canvas, Grade, Light, Wave, CANVAS_H, CANVAS_W, MAX_LIGHTS};
+use crate::gfx::{
+    draw_atlas_sprite, draw_quad, draw_sprite, lit_color, tex_size, Canvas, Grade, Light,
+    SpriteMat, Wave, CANVAS_H, CANVAS_W, MAX_LIGHTS,
+};
 use crate::gravity;
 use crate::hud::{self, HudAssets, HudValues, Show};
 use crate::pad;
@@ -1652,19 +1655,99 @@ impl Play {
             .collect()
     }
 
-    /// A sprite's vertex colour: lit by the frame's lights when effects
-    /// are on (the lit material reads 0.5 as unlit), else plain white.
-    fn tint(&self, at: Vec2, alpha: f32) -> Color {
-        if !self.fx {
-            return Color::new(1.0, 1.0, 1.0, alpha);
+    /// A sprite's vertex colour: encodes rotation + material for per-pixel PBR
+    /// lighting when effects are on (and not hit-flashing), else plain white.
+    fn sprite_tint(&self, angle_deg: f32, mat: SpriteMat, alpha: f32, flash: bool) -> Color {
+        if !self.fx || flash {
+            Color::new(1.0, 1.0, 1.0, alpha)
+        } else {
+            lit_color(angle_deg, mat, alpha)
         }
-        let mut light = Vec3::ZERO;
-        for l in self.frame_lights.borrow().iter() {
-            let fall = (1.0 - l.pos.distance(at) / l.radius.max(1.0)).clamp(0.0, 1.0);
-            light += l.color * fall * fall;
+    }
+
+    /// Soft parallax-offset ground drop shadows cast onto planet surfaces
+    /// (Worlds 1-5; omitted in deep space / survival) in a single batch.
+    fn draw_shadows(&self, canvas: &Canvas, assets: &PlayAssets, with_ship: bool) {
+        if self.world >= 5 {
+            return;
         }
-        let c = (Vec3::splat(0.5) + light * 0.5).min(Vec3::ONE);
-        Color::new(c.x, c.y, c.z, alpha)
+        // Cast along the inverse upper-left key light onto the plane below.
+        const SHADOW_OFFSET: Vec2 = vec2(12.0, 15.0);
+        const SHADOW_Z_FRAC: f32 = 0.55;
+        let sz = self.z + BACKGROUND_Z * SHADOW_Z_FRAC;
+        let mut verts: Vec<Vertex> = Vec::new();
+        let mut indices: Vec<u16> = Vec::new();
+        let mut push_shadow = |c: Vec2, radius: f32, alpha: f32| {
+            let a = (alpha * 0.52).clamp(0.0, 0.72);
+            if a <= 0.01 || verts.len() + 4 > crate::gfx::MAX_BATCH_VERTICES {
+                return;
+            }
+            let p = c + SHADOW_OFFSET;
+            let color = Color::new(0.01, 0.015, 0.03, a);
+            let n = verts.len() as u16;
+            for (dx, dy, u, v) in [
+                (-1.0, -1.0, 0.0, 0.0),
+                (1.0, -1.0, 1.0, 0.0),
+                (1.0, 1.0, 1.0, 1.0),
+                (-1.0, 1.0, 0.0, 1.0),
+            ] {
+                verts.push(Vertex::new(p.x + dx * radius, p.y + dy * radius, sz, u, v, color));
+            }
+            indices.extend_from_slice(&[n, n + 1, n + 2, n, n + 2, n + 3]);
+        };
+        let n = self.field.rocks.len();
+        for (i, r) in self.field.rocks.iter().enumerate() {
+            let p = self.at(&self.prev.rocks, n, i, r.pos);
+            push_shadow(p, r.radius() * 1.55, r.alpha);
+        }
+        let n = self.field.depots.len();
+        for (i, d) in self.field.depots.iter().enumerate() {
+            push_shadow(self.at(&self.prev.depots, n, i, d.pos), 30.0, d.alpha);
+        }
+        let n = self.field.mines.len();
+        for (i, m) in self.field.mines.iter().enumerate() {
+            push_shadow(self.at(&self.prev.mines, n, i, m.pos), 18.0, m.alpha);
+        }
+        for t in &self.field.towers {
+            push_shadow(self.to_screen(t.pos), 22.0, t.alpha);
+        }
+        let n = self.field.lobbers.len();
+        for (i, l) in self.field.lobbers.iter().enumerate() {
+            push_shadow(self.at(&self.prev.lobbers, n, i, l.pos), 22.0, l.alpha);
+        }
+        let n = self.field.seekers.len();
+        for (i, k) in self.field.seekers.iter().enumerate() {
+            push_shadow(self.at(&self.prev.seekers, n, i, k.pos), 18.0, k.alpha);
+        }
+        let n = self.field.arrows.len();
+        for (i, a) in self.field.arrows.iter().enumerate() {
+            push_shadow(self.at(&self.prev.arrows, n, i, a.pos), 18.0, a.alpha);
+        }
+        let n = self.field.snakes.len();
+        let segs: usize = self.field.snakes.iter().map(|s| s.segments.len()).sum();
+        let mut first = 0;
+        for (i, sn) in self.field.snakes.iter().enumerate() {
+            for (j, seg) in sn.segments.iter().enumerate() {
+                push_shadow(self.at(&self.prev.segments, segs, first + j, seg.pos), 14.0, seg.alpha);
+            }
+            first += sn.segments.len();
+            push_shadow(self.at(&self.prev.snakes, n, i, sn.pos), 18.0, sn.alpha);
+        }
+        let n = self.field.shy_guys.len();
+        for (i, g) in self.field.shy_guys.iter().enumerate() {
+            push_shadow(self.at(&self.prev.shy_guys, n, i, g.pos), 18.0, g.alpha);
+        }
+        let n = self.field.pieces.len();
+        for (i, p) in self.field.pieces.iter().enumerate() {
+            push_shadow(self.at(&self.prev.pieces, n, i, p.pos), 20.0, p.alpha);
+        }
+        if let Some(b) = &self.field.boss {
+            push_shadow(self.at(&self.prev.boss, 1, 0, b.pos), 46.0, b.alpha);
+        }
+        if with_ship && !matches!(self.ship.life, Life::Dead(_)) {
+            push_shadow(self.to_screen(self.view_ship()), 18.0, self.ship.alpha * 0.9);
+        }
+        canvas.draw_triangles(verts, indices, Some(&assets.soft_dot), false);
     }
 
     fn snapshot(&self) -> Snapshot {
@@ -2884,7 +2967,7 @@ impl Play {
         }
     }
 
-    fn draw_rocks(&self, assets: &PlayAssets) {
+    fn draw_rocks(&self, canvas: &Canvas, assets: &PlayAssets) {
         // EnemyManager::sharedDraw: per element, small to extra large.
         for (e, element) in [Element::Normal, Element::Ice, Element::Fire]
             .into_iter()
@@ -2892,6 +2975,11 @@ impl Play {
         {
             let art = &assets.rocks[e];
             for size in 0..4 {
+                if size == 0 {
+                    canvas.set_sprite_atlas(4.0, 4.0);
+                } else if size == 1 {
+                    canvas.set_sprite_atlas(1.0, 1.0);
+                }
                 for (i, rock) in self
                     .field
                     .rocks
@@ -2903,6 +2991,7 @@ impl Play {
                 }
             }
         }
+        canvas.set_sprite_atlas(1.0, 1.0);
     }
 
     /// GravityGun::draw and CustomSpriteSystem::draw: the reaching cone (or
@@ -3005,7 +3094,11 @@ impl Play {
         for (i, d) in self.field.depots.iter().enumerate() {
             self.draw_depot(canvas, assets, d, i);
         }
-        // Depot::draw: the label, only once the depot has landed.
+        // Depot::draw: the label, drawn unlit once the depot has landed.
+        if !self.field.depots.iter().any(|d| d.active()) {
+            return;
+        }
+        canvas.lighting(false);
         let color = Color::new(1.0, 1.0, 1.0, depot::LABEL_ALPHA);
         let label = &assets.depot_label;
         let n = self.field.depots.len();
@@ -3021,6 +3114,7 @@ impl Play {
                 color,
             );
         }
+        canvas.lighting(self.fx);
     }
 
     /// EnemyManager::draw with indicators on: for every rock, mine, tower,
@@ -3104,7 +3198,7 @@ impl Play {
         let n = self.field.pieces.len();
         for (i, p) in self.field.pieces.iter().enumerate() {
             let s = self.at(&self.prev.pieces, n, i, p.pos);
-            let color = self.tint(s, p.alpha);
+            let color = self.sprite_tint(p.angle, SpriteMat::Craft, p.alpha, p.flash);
             let draw = || draw_sprite(&assets.boss_piece, s.x, s.y, p.angle, self.z + p.z, color);
             if p.flash {
                 canvas.flashing(draw);
@@ -3114,7 +3208,7 @@ impl Play {
         }
         let Some(b) = &self.field.boss else { return };
         let s = self.at(&self.prev.boss, 1, 0, b.pos);
-        let color = self.tint(s, b.alpha);
+        let color = self.sprite_tint(b.angle, SpriteMat::Core, b.alpha, b.flash);
         let tex = &assets.boss[b.frame % assets.boss.len()];
         let draw = || draw_sprite(tex, s.x, s.y, b.angle, self.z + b.z, color);
         if b.flash {
@@ -3123,7 +3217,8 @@ impl Play {
             draw();
         }
         if b.active() {
-            // BossInside::draw: the health bar.
+            // BossInside::draw: the health bar (unlit).
+            canvas.lighting(false);
             let at = s + boss::BAR_OFFSET;
             fill_rect(at, boss::BAR_SIZE, self.z, Color::new(1.0, 1.0, 1.0, 0.25));
             let w = b.health / b.max_health * boss::BAR_SIZE.x;
@@ -3133,12 +3228,13 @@ impl Play {
                 self.z,
                 Color::new(1.0, 0.0, 0.0, 0.5),
             );
+            canvas.lighting(self.fx);
         }
     }
 
     fn draw_depot(&self, canvas: &Canvas, assets: &PlayAssets, d: &Depot, i: usize) {
         let p = self.at(&self.prev.depots, self.field.depots.len(), i, d.pos);
-        let color = self.tint(p, d.alpha);
+        let color = self.sprite_tint(d.angle, SpriteMat::Craft, d.alpha, d.flash);
         let draw = || draw_sprite(&assets.depot, p.x, p.y, d.angle, self.z + d.z, color);
         if d.flash {
             canvas.flashing(draw);
@@ -3150,7 +3246,12 @@ impl Play {
     fn draw_rock(&self, art: &RockArt, rock: &Rock, i: usize) {
         let p = self.at(&self.prev.rocks, self.field.rocks.len(), i, rock.pos);
         let z = self.z + rock.z;
-        let color = self.tint(p, rock.alpha);
+        let mat = match rock.element {
+            Element::Normal => SpriteMat::Rock,
+            Element::Ice => SpriteMat::Ice,
+            Element::Fire => SpriteMat::Fire,
+        };
+        let color = self.sprite_tint(rock.angle, mat, rock.alpha, false);
         match rock.size {
             0 => draw_atlas_sprite(&art.small, 4, 4, rock.frame, p.x, p.y, rock.angle, z, color),
             1 => draw_sprite(
@@ -3246,10 +3347,11 @@ impl Play {
         SCREEN_CENTRE + (Canvas::mouse() - SCREEN_CENTRE) * self.zoom
     }
 
-    /// Everything on the play plane over the backdrop: scorches, rings,
+    /// Everything on the play plane over the backdrop: shadows, scorches, rings,
     /// enemies, shots, the ship (`with_ship`) and particle effects.
     fn draw_world(&self, canvas: &Canvas, assets: &PlayAssets, with_ship: bool) {
         if self.fx {
+            self.draw_shadows(canvas, assets, with_ship);
             self.draw_scorches(canvas, assets);
         }
         canvas.set_glowing(true);
@@ -3266,14 +3368,15 @@ impl Play {
                 c.y,
                 r.angle,
                 self.z,
-                self.tint(p, r.alpha),
+                self.sprite_tint(r.angle, SpriteMat::Core, r.alpha, false),
             );
         }
         // Power-ups, then their labels (BigBonus::draw).
+        canvas.set_sprite_atlas(5.0, 1.0);
         for (i, r) in rings.iter().enumerate() {
             let Some(power) = r.power else { continue };
             let p = self.at(&self.prev.rings, rings.len(), i, r.pos);
-            let color = self.tint(p, r.alpha);
+            let color = self.sprite_tint(r.angle, SpriteMat::Core, r.alpha, false);
             draw_atlas_sprite(
                 &assets.power,
                 5,
@@ -3286,27 +3389,32 @@ impl Play {
                 color,
             );
         }
-        for (i, r) in rings.iter().enumerate() {
-            let Some(power) = r.power else { continue };
-            let p = self.at(&self.prev.rings, rings.len(), i, r.pos);
-            let label = &assets.power_labels[power.frame()];
-            let color = Color::new(1.0, 1.0, 1.0, r.alpha * depot::LABEL_ALPHA);
-            let (label_w, _) = tex_size(label);
-            draw_quad(
-                label,
-                p.x - label_w * 0.5,
-                p.y + POWER_LABEL_DROP,
-                1.0,
-                self.z,
-                color,
-            );
+        canvas.set_sprite_atlas(1.0, 1.0);
+        if rings.iter().any(|r| r.power.is_some()) {
+            canvas.lighting(false);
+            for (i, r) in rings.iter().enumerate() {
+                let Some(power) = r.power else { continue };
+                let p = self.at(&self.prev.rings, rings.len(), i, r.pos);
+                let label = &assets.power_labels[power.frame()];
+                let color = Color::new(1.0, 1.0, 1.0, r.alpha * depot::LABEL_ALPHA);
+                let (label_w, _) = tex_size(label);
+                draw_quad(
+                    label,
+                    p.x - label_w * 0.5,
+                    p.y + POWER_LABEL_DROP,
+                    1.0,
+                    self.z,
+                    color,
+                );
+            }
+            canvas.lighting(self.fx);
         }
-        self.draw_rocks(assets);
+        self.draw_rocks(canvas, assets);
         self.draw_depots(canvas, assets);
         let n = self.field.mines.len();
         for (i, m) in self.field.mines.iter().enumerate() {
             let s = self.at(&self.prev.mines, n, i, m.pos);
-            let color = self.tint(s, m.alpha);
+            let color = self.sprite_tint(m.angle, SpriteMat::Craft, m.alpha, m.flash);
             let draw = || draw_sprite(&assets.mine, s.x, s.y, m.angle, self.z + m.z, color);
             if m.flash {
                 canvas.flashing(draw);
@@ -3317,6 +3425,7 @@ impl Play {
         for t in &self.field.towers {
             let s = self.to_screen(t.pos);
             if let Some(colors) = t.beam_colors() {
+                canvas.lighting(false);
                 // Tower::draw: the beam fan, turned to the locked aim.
                 let a = t.aim.y.atan2(t.aim.x) + std::f32::consts::FRAC_PI_2;
                 let (sn, cs) = a.sin_cos();
@@ -3331,11 +3440,12 @@ impl Play {
                 let indices: Vec<u16> = (1..9).flat_map(|i| [0, i, i + 1]).collect();
                 canvas.add_glow(verts.clone(), indices.clone(), None);
                 canvas.draw_triangles(verts, indices, None, false);
+                canvas.lighting(self.fx);
             }
             let a = t.angle.to_radians();
             let off = vec2(-a.sin(), a.cos()) * tower::SPRITE_OFFSET;
             let c = s + off;
-            let color = self.tint(c, t.alpha);
+            let color = self.sprite_tint(t.angle, SpriteMat::Craft, t.alpha, t.flash);
             let draw = || draw_sprite(&assets.tower, c.x, c.y, t.angle, self.z + t.z, color);
             if t.flash {
                 canvas.flashing(draw);
@@ -3346,7 +3456,7 @@ impl Play {
         let n = self.field.lobbers.len();
         for (i, l) in self.field.lobbers.iter().enumerate() {
             let s = self.at(&self.prev.lobbers, n, i, l.pos);
-            let color = self.tint(s, l.alpha);
+            let color = self.sprite_tint(l.angle, SpriteMat::Craft, l.alpha, l.flash);
             let draw = || draw_sprite(&assets.lobber, s.x, s.y, l.angle, self.z + l.z, color);
             if l.flash {
                 canvas.flashing(draw);
@@ -3354,7 +3464,7 @@ impl Play {
                 draw();
             }
             if let Some(b) = &l.ball {
-                let color = self.tint(s, b.alpha);
+                let color = self.sprite_tint(b.angle, SpriteMat::Core, b.alpha, b.flash);
                 let draw =
                     || draw_sprite(&assets.boss_piece, s.x, s.y, b.angle, self.z + b.z, color);
                 if b.flash {
@@ -3367,7 +3477,7 @@ impl Play {
         let n = self.field.seekers.len();
         for (i, k) in self.field.seekers.iter().enumerate() {
             let s = self.at(&self.prev.seekers, n, i, k.pos);
-            let color = self.tint(s, k.alpha);
+            let color = self.sprite_tint(k.angle, SpriteMat::Craft, k.alpha, k.flash);
             let draw = || draw_sprite(&assets.seeker, s.x, s.y, k.angle, self.z + k.z, color);
             if k.flash {
                 canvas.flashing(draw);
@@ -3378,7 +3488,7 @@ impl Play {
         let n = self.field.arrows.len();
         for (i, a) in self.field.arrows.iter().enumerate() {
             let s = self.at(&self.prev.arrows, n, i, a.pos);
-            let color = self.tint(s, a.alpha);
+            let color = self.sprite_tint(a.angle, SpriteMat::Craft, a.alpha, a.flash);
             let draw = || draw_sprite(&assets.arrow, s.x, s.y, a.angle, self.z + a.z, color);
             if a.flash {
                 canvas.flashing(draw);
@@ -3392,7 +3502,7 @@ impl Play {
         for (i, sn) in self.field.snakes.iter().enumerate() {
             for (j, seg) in sn.segments.iter().enumerate().rev() {
                 let s = self.at(&self.prev.segments, segs, first + j, seg.pos);
-                let color = self.tint(s, seg.alpha);
+                let color = self.sprite_tint(seg.angle, SpriteMat::Craft, seg.alpha, seg.flash);
                 let draw = || {
                     draw_sprite(
                         &assets.snake_body,
@@ -3411,7 +3521,7 @@ impl Play {
             }
             first += sn.segments.len();
             let s = self.at(&self.prev.snakes, n, i, sn.pos);
-            let color = self.tint(s, sn.alpha);
+            let color = self.sprite_tint(sn.angle, SpriteMat::Craft, sn.alpha, sn.flash);
             let draw = || draw_sprite(&assets.snake_head, s.x, s.y, sn.angle, self.z + sn.z, color);
             if sn.flash {
                 canvas.flashing(draw);
@@ -3420,9 +3530,10 @@ impl Play {
             }
         }
         let n = self.field.shy_guys.len();
+        canvas.set_sprite_atlas(4.0, 4.0);
         for (i, g) in self.field.shy_guys.iter().enumerate() {
             let s = self.at(&self.prev.shy_guys, n, i, g.pos);
-            let color = self.tint(s, g.alpha);
+            let color = self.sprite_tint(g.angle, SpriteMat::Craft, g.alpha, g.flash);
             let draw = || {
                 draw_atlas_sprite(
                     &assets.shy_guy,
@@ -3442,6 +3553,7 @@ impl Play {
                 draw();
             }
         }
+        canvas.set_sprite_atlas(1.0, 1.0);
         self.draw_boss(canvas, assets);
         canvas.lighting(false);
         if self.colour_assist {
@@ -3488,7 +3600,7 @@ impl Play {
             if self.fx {
                 self.draw_ship_fx(canvas, assets);
             }
-            self.draw_ship(assets);
+            self.draw_ship(canvas, assets);
             if self.fx {
                 self.draw_shield_rim(canvas, assets);
             }
@@ -3628,7 +3740,7 @@ impl Play {
         canvas.draw_triangles(verts, indices, Some(&assets.scorch), false);
     }
 
-    fn draw_ship(&self, assets: &PlayAssets) {
+    fn draw_ship(&self, canvas: &Canvas, assets: &PlayAssets) {
         let ship = &self.ship;
         if matches!(ship.life, Life::Dead(_)) {
             return;
@@ -3640,7 +3752,20 @@ impl Play {
             &assets.ship
         };
         let color = Color::new(1.0, 1.0, 1.0, ship.alpha);
-        draw_sprite(&frames[ship.frame], p.x, p.y, ship.angle, self.z, color);
+        if self.fx {
+            canvas.lighting(true);
+            draw_sprite(
+                &frames[ship.frame],
+                p.x,
+                p.y,
+                ship.angle,
+                self.z,
+                self.sprite_tint(ship.angle, SpriteMat::Craft, ship.alpha, false),
+            );
+            canvas.lighting(false);
+        } else {
+            draw_sprite(&frames[ship.frame], p.x, p.y, ship.angle, self.z, color);
+        }
         let shield = match ship.life {
             Life::Spawning(_) => ship.alpha,
             Life::Fading(_) if ship.shield => ship.alpha,
