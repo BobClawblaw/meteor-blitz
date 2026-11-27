@@ -3,21 +3,21 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Meteor Blitz v1.2.5 — 8× Graphics Overhaul Review</title>
-  <meta name="description" content="Line-by-line graphics post-mortem of Meteor Blitz v1.1.3 vs v1.2.5: 8× Real-ESRGAN art, per-pixel PBR sprite lighting, 5-mip ACES bloom, cloud shadows, and 512×512 GPU Gas Physics." />
+  <title>Meteor Blitz v1.2.7 — 8× Graphics Overhaul Review</title>
+  <meta name="description" content="Line-by-line graphics & engineering post-mortem of Meteor Blitz v1.1.3 vs v1.2.7: 8× Real-ESRGAN art, per-pixel PBR sprite lighting, 5-mip ACES bloom, 512×512 GPU Gas Physics, high-FPS input fixes, and macOS/Windows/Linux/Steam Deck builds." />
   <meta property="og:type" content="article" />
   <meta property="og:site_name" content="Meteor Blitz" />
   <meta property="og:url" content="https://bobclawblaw.github.io/meteor-blitz/review.html" />
-  <meta property="og:title" content="Meteor Blitz — 8× Graphics Overhaul Review (v1.1.3 vs v1.2.5)" />
-  <meta property="og:description" content="Interactive before/after comparisons and engineering post-mortem: Real-ESRGAN 8× art, per-pixel PBR lighting, 5-mip ACES bloom, and 512×512 GPU Gas Physics." />
+  <meta property="og:title" content="Meteor Blitz — 8× Graphics Overhaul Review (v1.1.3 vs v1.2.7)" />
+  <meta property="og:description" content="Interactive before/after comparisons and engineering post-mortem: Real-ESRGAN 8× art, per-pixel PBR lighting, 5-mip ACES bloom, 512×512 GPU Gas Physics, and cross-platform releases." />
   <meta property="og:image" content="https://bobclawblaw.github.io/meteor-blitz/docs/review/og-review.jpg" />
   <meta property="og:image:type" content="image/jpeg" />
   <meta property="og:image:width" content="1200" />
   <meta property="og:image:height" content="630" />
   <meta property="og:image:alt" content="Before and after comparison of Meteor Blitz v1.1.3 xBR vs v1.2 Real-ESRGAN and PBR lighting" />
   <meta name="twitter:card" content="summary_large_image" />
-  <meta name="twitter:title" content="Meteor Blitz — 8× Graphics Overhaul Review" />
-  <meta name="twitter:description" content="Interactive before/after comparisons: Real-ESRGAN 8× art, per-pixel PBR lighting, 5-mip ACES bloom, and 512×512 GPU Gas Physics." />
+  <meta name="twitter:title" content="Meteor Blitz — 8× Graphics Overhaul Review (v1.2.7)" />
+  <meta name="twitter:description" content="Interactive before/after comparisons: Real-ESRGAN 8× art, per-pixel PBR lighting, 5-mip ACES bloom, 512×512 GPU Gas Physics, and macOS/Windows/Linux/Steam Deck builds." />
   <meta name="twitter:image" content="https://bobclawblaw.github.io/meteor-blitz/docs/review/og-review.jpg" />
   <meta name="twitter:image:alt" content="Before and after comparison of Meteor Blitz v1.1.3 xBR vs v1.2 Real-ESRGAN and PBR lighting" />
   <link rel="icon" type="image/png" href="./assets/icon/icon-64.png" />
@@ -269,7 +269,7 @@
       <div class="brand">
         <img src="./assets/icon/icon-64.png" alt="Meteor Blitz icon" />
         <span>METEOR BLITZ</span>
-        <span class="badge">v1.2.5 Review</span>
+        <span class="badge">v1.2.7 Review</span>
       </div>
       <div class="nav-links">
         <a href="#comparisons">Before / After</a>
@@ -277,7 +277,7 @@
         <a href="#review">Engineering Review</a>
         <a href="#showcase">Showcase</a>
         <a href="#benchmarks">4K Perf</a>
-        <a class="btn btn-secondary" href="https://github.com/BobClawblaw/meteor-blitz/releases/tag/v1.2.5">Download v1.2.5</a>
+        <a class="btn btn-secondary" href="https://github.com/BobClawblaw/meteor-blitz/releases/tag/v1.2.7">Download v1.2.7</a>
         <a class="btn btn-primary" href="./index.html">Play in Browser →</a>
       </div>
     </div>
@@ -285,15 +285,15 @@
 
   <main>
     <header class="hero">
-      <span class="eyebrow">Graphics Architecture Post-Mortem · v1.1.3 vs v1.2.5</span>
+      <span class="eyebrow">Graphics &amp; Engineering Post-Mortem · v1.1.3 vs v1.2.7</span>
       <h1>Why the Original 8× Oversampling Looked Flat — And How We Rebuilt the Renderer</h1>
       <p class="lead">
-        The previous 8× port checked the resolution box on paper, yet still looked blurry, flat, and banded at 1080p and 4K.
-        Here is a line-by-line engineering review of every visual flaw in Claude's v1.1.3 graphics implementation — and the art, shader, lighting, post-processing, and optional GPU Gas Physics overhaul we built for v1.2.
+        The previous 8× port checked the resolution box on paper, yet still looked blurry, flat, and banded at 1080p and 4K — and silently dropped inputs above 60 fps.
+        Here is a line-by-line engineering review of every visual and gameplay defect in Claude's v1.1.3 build — and the 8× art, PBR shaders, 5-mip ACES bloom, optional 512×512 GPU Gas Physics, high-FPS input latching, and cross-platform CI releases we built for v1.2.7.
       </p>
       <div class="hero-actions">
-        <a class="btn btn-primary" href="./index.html">Play v1.2.5 in Browser</a>
-        <a class="btn btn-secondary" href="https://github.com/BobClawblaw/meteor-blitz/releases/tag/v1.2.5">macOS Universal DMG &amp; Release Notes</a>
+        <a class="btn btn-primary" href="./index.html">Play v1.2.7 in Browser</a>
+        <a class="btn btn-secondary" href="https://github.com/BobClawblaw/meteor-blitz/releases/tag/v1.2.7">Download macOS · Windows · Linux / Steam Deck</a>
         <a class="btn btn-secondary" href="https://github.com/BobClawblaw/meteor-blitz">View Source on GitHub</a>
       </div>
       <div class="stats">
@@ -467,7 +467,7 @@
     <section id="review">
       <h2>Detailed Engineering Review: What Claude Did Wrong vs. What We Fixed</h2>
       <p class="section-sub">
-        Even though v1.1.3 shipped 241 MB of "8× oversampled" assets, visual quality is only as strong as the weakest stage of the pipeline. Below are the six concrete defects we found by auditing the assets, shaders, and frame captures — and how each was fixed.
+        Even though v1.1.3 shipped 241 MB of "8× oversampled" assets, visual quality and playability are only as strong as the weakest stage of the pipeline. Below are the seven concrete defects we uncovered by auditing the assets, shaders, input loop, and live captures — and how each was fixed through v1.2.7.
       </p>
 
       <div class="issue-list">
@@ -477,7 +477,7 @@
               <span class="issue-num">Defect 01 · Asset Pipeline</span>
               <h3>Wrong Upscaler for 3D Art (xBR Chaining + Banded Alpha + No RGB Edge Bleed)</h3>
             </div>
-            <span class="commit-tag">commit 59fa68d</span>
+            <span class="commit-tag">commits 59fa68d · 8ae9bc8</span>
           </div>
           <div class="vs-grid">
             <div class="vs-box vs-bad">
@@ -490,11 +490,11 @@
               </ul>
             </div>
             <div class="vs-box vs-good">
-              <span class="vs-label">How v1.2.0 Fixed It</span>
+              <span class="vs-label">How v1.2 Fixed It</span>
               <ul>
-                <li>Rewrote <code>tools/upscale8x.py</code> to upscale directly from originals using <strong>16-pass RGB edge-bleeding</strong> (<code>bleed_rgb</code>) + 16 px edge-replicated padding.</li>
-                <li>Batch-processed all 3D sprites with two-pass <code>realesrgan-x4plus</code> → exact 8× Lanczos; UI art and font with <code>realesrgan-x4plus-anime</code> (crisp chrome/vector edges); SVG-direct 128×128 for <code>github.png</code>; clean Lanczos for <code>≤12 px</code> HUD icons (<code>shipCounter</code>, <code>bombCounter</code>).</li>
-                <li>Implemented <strong>hybrid alpha</strong>: computes each sprite's semi-transparent pixel fraction and blends sharp <code>realesrgan-x4plus-anime</code> silhouettes with smooth bicubic feathered glows — zero onion rings and zero stray noise.</li>
+                <li>Rewrote <code>tools/upscale8x.py</code> to upscale directly from originals using <strong>16-pass RGB edge-bleeding</strong> (<code>bleed_rgb</code>) + <strong>reflect-padded</strong> margins (preventing border smearing on world/stage cubes, labels, and buttons).</li>
+                <li>Batch-processed sprites and UI with <code>realesrgan-x4plus</code> → exact 8× Lanczos (with neutral monochrome chroma desat on chrome typography/icons), SVG-direct 128×128 for <code>github.png</code>, and row-masked smoothstepped bilinear on <code>ngage.png</code> / <code>captions.png</code> (<strong>0 / 38</strong> glyph row bleeds).</li>
+                <li>Replaced banded xBR alpha with smooth Bicubic / soft-feathered alpha — eliminating onion rings, stray halo noise, and mangled bevels across all 534 HD assets.</li>
               </ul>
             </div>
           </div>
@@ -616,26 +616,56 @@
         <article class="issue">
           <div class="issue-head">
             <div>
-              <span class="issue-num">Defect 06 · Combat VFX &amp; Fluid Gas Simulation</span>
-              <h3>Blurry Cotton-Ball Puffs, Primitive White-Triangle Gravity Gun &amp; Static Shield</h3>
+              <span class="issue-num">Defect 06 · Combat VFX, Scorch Splotches &amp; Fluid Gas</span>
+              <h3>15-Second Black Soot Splotches, Cotton-Ball Puffs &amp; Primitive Shield/Gravity FX</h3>
             </div>
-            <span class="commit-tag">commits 588236a · fluid gas</span>
+            <span class="commit-tag">commits 14027fb · 45f7629</span>
           </div>
           <div class="vs-grid">
             <div class="vs-box vs-bad">
               <span class="vs-label">What Claude's v1.1.3 Did Wrong</span>
               <ul>
-                <li>Claude's earlier attempts at gas particles were rejected as faint, grainy, or "pathetic puffs", falling back to overlapping circular Gaussian dots (<code>soft_dot</code>) that read as blurry orange cotton balls and ignored nearby explosion lights.</li>
-                <li>The gravity gun cone was one untextured flat white-to-transparent triangle; the shield rim just drew the static shield sprite scaled up slightly.</li>
-                <li>The ship's engine trail was a sparse sequence of square <code>spark</code> dots; weapons had no muzzle flash; fresh explosion scorches were flat dark stamps.</li>
+                <li>Commit <code>a3647de</code> added procedural 11-lobed black soot stamps (<code>scorch_texture</code>) wherever anything exploded — leaving ugly dark smudges floating over planet oceans and clouds for 15 seconds (never in the original game).</li>
+                <li>Claude's earlier attempts at gas particles fell back to overlapping circular Gaussian dots (<code>soft_dot</code>) that read as blurry cotton balls and ignored nearby explosion lights.</li>
+                <li>The gravity gun cone was one flat white triangle, the shield rim just scaled up the static shield sprite, the engine trail was square dots, and weapons had no muzzle flash.</li>
               </ul>
             </div>
             <div class="vs-box vs-good">
-              <span class="vs-label">How v1.2.4 Fixed It</span>
+              <span class="vs-label">How v1.2.7 Fixed It</span>
               <ul>
-                <li>Kept <strong>Classic</strong> and <strong>Physics</strong> modes crisp and clean, and added an optional 3rd particle mode: <strong>Gas Physics</strong> (<code>Options &gt; Particle style: Classic / Physics / Gas Physics</code>).</li>
-                <li>In <strong>Gas Physics</strong>, a full <strong>512×512 GPU Navier-Stokes fluid solver</strong> (<code>src/gpu_fluid.rs</code>, <code>src/gas.rs</code>) runs on <code>RGBA16F</code> toroidal targets with 2nd-order clamped MacCormack advection and strong vorticity confinement — replacing fire/smoke blobs with pure luminous curling plasma filaments, tail-nozzle thruster exhaust, flamethrower streams, bomb shock rings, and gravity-gun accretion vortices (with zero muddy grey splotches).</li>
-                <li>Wrote procedural GLSL shaders for the <strong>spherical rotating hexagonal Fresnel shield</strong> (<code>SHIELD_FRAGMENT</code>) and <strong>pulsing cyan-violet tractor beam</strong> (<code>GRAVITY_FRAGMENT</code>), replaced dotted engine trails with a continuous two-layer tapered plasma ribbon, and added directional weapon muzzle flashes.</li>
+                <li><strong>Completely removed explosion scorch decals</strong> (<code>scorch_texture</code> / <code>draw_scorches</code>) so planets and clouds stay clean while keeping all lighting, shockwaves, and drop shadows.</li>
+                <li>Kept <strong>Classic</strong> and <strong>Physics</strong> modes crisp and clean, and added an optional 3rd particle mode on desktop: <strong>Gas Physics</strong> (<code>Options &gt; Particle style: Classic / Physics / Gas Physics</code>; web cleanly stays on Classic/Physics).</li>
+                <li>In <strong>Gas Physics</strong>, a full <strong>512×512 GPU Navier-Stokes fluid solver</strong> (<code>src/gpu_fluid.rs</code>, <code>src/gas.rs</code>) runs on <code>RGBA16F</code> toroidal targets with clamped MacCormack advection and vorticity confinement — producing luminous curling plasma filaments, strictly tail-only thruster exhaust, flamethrower streams, and bomb shock rings alongside crisp <code>Ring</code>/<code>Line</code>/<code>Diamond</code> sparks (zero grey splotches).</li>
+                <li>Added procedural GLSL shaders for the <strong>spherical rotating hexagonal Fresnel shield</strong> (<code>SHIELD_FRAGMENT</code>) and <strong>pulsing cyan-violet tractor beam</strong> (<code>GRAVITY_FRAGMENT</code>), a two-layer tapered plasma engine ribbon, and directional muzzle flashes.</li>
+              </ul>
+            </div>
+          </div>
+        </article>
+
+        <article class="issue">
+          <div class="issue-head">
+            <div>
+              <span class="issue-num">Defect 07 · High-FPS Input, Multi-Monitor Display &amp; Survival</span>
+              <h3>Dropped Weapon Switches Above 60 FPS, macOS Multi-Display Overflow &amp; Dead Auto-Upgrade</h3>
+            </div>
+            <span class="commit-tag">commits eb17422 · a0446fd · c279ac0</span>
+          </div>
+          <div class="vs-grid">
+            <div class="vs-box vs-bad">
+              <span class="vs-label">What Was Broken</span>
+              <ul>
+                <li><code>Play::update</code> polled one-frame edge presses (<code>SwitchWeapon</code>, <code>Bomb</code>, <code>Boost</code>, <code>Gravity</code>, double-tap <code>Fire</code>) only inside its 60 Hz <code>while accumulator &gt;= STEP</code> loop. At 120–240 Hz or Unlimited FPS (<code>fps=0</code>, ~500–800 fps), <strong>50–93% of button presses were silently dropped</strong> (and slow frames running two steps double-fired a single press).</li>
+                <li>On macOS multi-monitor setups with a 4K preset saved, <code>set_window_resolution</code> never clamped to the active screen's <code>visibleFrame</code>, producing oversized, shifted, pillarboxed windows on 1080p displays.</li>
+                <li>Survival's Pause → Upgrade screen checked <code>self.world == 6</code> (always <code>0</code> on <code>Pause::menu()</code>) instead of <code>play.world == 6</code>, hiding the Auto-Upgrade toggle — and <code>settings.auto_upgrade</code> was never wired into <code>Play</code> at all.</li>
+              </ul>
+            </div>
+            <div class="vs-box vs-good">
+              <span class="vs-label">How v1.2.7 Fixed It</span>
+              <ul>
+                <li>Added per-frame <code>PendingInput</code> latching (<code>Play::poll_frame_inputs</code>) drained once on the next 60 Hz tick — 100% of weapon switches, bombs, boosts, and quick-tap gravity inputs register at any frame rate (60–800+ fps) with zero double-triggers.</li>
+                <li>Rewrote macOS <code>set_window_resolution</code> to query the window's active <code>NSScreen</code>, clamp uniformly to <code>visibleFrame</code> preserving aspect ratio, center without animation, and drive <code>Canvas::placement()</code> from live <code>miniquad::window::screen_size() / dpi_scale()</code>.</li>
+                <li>Fixed Survival's Auto-Upgrade visibility and wired <code>auto_buy_survival_upgrades</code> to automatically buy the cheapest affordable upgrades as rings arrive.</li>
+                <li>Added automated <strong>GitHub Actions release builds</strong> (<code>.github/workflows/release.yml</code>) shipping tested packages for <strong>macOS Universal</strong>, <strong>Windows x64</strong>, and <strong>Linux / Steam Deck (glibc 2.31)</strong> on every tag.</li>
               </ul>
             </div>
           </div>
@@ -644,7 +674,7 @@
     </section>
 
     <section id="showcase">
-      <h2>v1.2.0 Visual Showcase (1920×1080)</h2>
+      <h2>v1.2 Visual Showcase (1920×1080)</h2>
       <p class="section-sub">
         All shader upgrades run natively on macOS, Windows, Linux, and directly inside the browser WebGL build. Classic 480×320 emulator fidelity remains intact via <code>MB_WIDE=0 MB_HD=0 MB_RENDER_SCALE=1 MB_BLOOM=0 MB_FX_OFF=1</code>.
       </p>
@@ -704,7 +734,7 @@
           <tr>
             <th>Metric</th>
             <th>v1.1.3 Baseline</th>
-            <th>v1.2.2 Overhaul</th>
+            <th>v1.2.7 Overhaul</th>
             <th>Notes</th>
           </tr>
         </thead>
@@ -719,7 +749,7 @@
             <td>4K Uncapped Frame Rate</td>
             <td class="num">60 fps (capped)</td>
             <td class="num">521.4 fps</td>
-            <td><code>MB_RESOLUTION=3840x2160 MB_START=4.1 MB_ZOOM=1.5 MB_PHYSICS=1 MB_FPS=0</code></td>
+            <td><code>MB_RESOLUTION=3840x2160 MB_START=4.1 MB_ZOOM=1.5 MB_PHYSICS=1 MB_FPS=0</code> (zero dropped inputs)</td>
           </tr>
           <tr>
             <td>8× Art Verification</td>
@@ -728,10 +758,10 @@
             <td>Reflect-padded Real-ESRGAN x4plus, smooth Bicubic alpha, 0/38 font atlas bleeds</td>
           </tr>
           <tr>
-            <td>Unit &amp; Fidelity Suite</td>
+            <td>Unit &amp; Cross-Platform CI</td>
             <td class="num">38 / 38 pass</td>
-            <td class="num">38 / 38 pass (0 warnings)</td>
-            <td>Native + WASM32 release builds clean; Classic 480×320 retro mode preserved</td>
+            <td class="num">43 / 43 pass (0 warnings)</td>
+            <td>Automated builds on macOS Universal, Windows x64, Linux / Steam Deck (glibc 2.31), and Web/WASM</td>
           </tr>
         </tbody>
       </table>
@@ -739,11 +769,11 @@
   </main>
 
   <footer>
-    <div>Meteor Blitz v1.2.5 · Free non-commercial fan port of Alley Labs' 2009 iOS classic.</div>
+    <div>Meteor Blitz v1.2.7 · Free non-commercial fan port of Alley Labs' 2009 iOS classic.</div>
     <div>
       <a href="./index.html">Play in Browser</a> ·
       <a href="https://github.com/BobClawblaw/meteor-blitz">GitHub Repo</a> ·
-      <a href="https://github.com/BobClawblaw/meteor-blitz/releases/tag/v1.2.5">v1.2.5 Release</a>
+      <a href="https://github.com/BobClawblaw/meteor-blitz/releases/tag/v1.2.7">v1.2.7 Release</a>
     </div>
   </footer>
 
