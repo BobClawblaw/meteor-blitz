@@ -309,11 +309,22 @@ fn art_path(hd_rel: &str, original: &str) -> String {
     }
 }
 
+/// Multi-frame sprite atlases: kept un-mipmapped so adjacent frames never
+/// bleed across mip levels.
+const ATLAS_SPRITES: &[&str] = &["rock4A", "freeze4", "cinder4", "shyGuyFrames", "bigBonus"];
+
+fn hd_mipmaps() -> bool {
+    gfx::asset_scale() > 1.0 && !cfg!(target_arch = "wasm32")
+}
+
 async fn load_ui(name: &str) -> Texture2D {
     let path = art_path(&format!("ui/{}.png", name), &format!("assets/ui/{}.png", name));
-    let tex = load_texture(&path).await.unwrap();
-    tex.set_filter(FilterMode::Linear);
-    tex
+    load_mipmapped(
+        &path,
+        macroquad::miniquad::TextureWrap::Clamp,
+        name != "ngage" && hd_mipmaps(),
+    )
+    .await
 }
 
 async fn load_ui_set() -> Ui {
@@ -763,9 +774,12 @@ async fn load_sprite(name: &str) -> Texture2D {
         &format!("sprites/{}.png", name),
         &format!("original/sprites/{}.png", name),
     );
-    let tex = load_texture(&path).await.unwrap();
-    tex.set_filter(FilterMode::Linear);
-    tex
+    load_mipmapped(
+        &path,
+        macroquad::miniquad::TextureWrap::Clamp,
+        !ATLAS_SPRITES.contains(&name) && hd_mipmaps(),
+    )
+    .await
 }
 
 async fn load_texture_file(name: &str) -> Texture2D {
@@ -777,16 +791,17 @@ async fn load_texture_file(name: &str) -> Texture2D {
 }
 
 thread_local! {
-    /// Terrain textures already created, by path (see `load_terrain`).
-    static TERRAIN: std::cell::RefCell<HashMap<String, Texture2D>> = Default::default();
-    /// Terrain images `predecode_terrain` decoded ahead of `load_terrain`.
+    /// Textures already created, by path (avoids duplicate GPU uploads).
+    static TEX_CACHE: std::cell::RefCell<HashMap<String, Texture2D>> = Default::default();
+    /// Images `predecode_hd_assets` decoded ahead of GPU upload.
     static DECODED: std::cell::RefCell<HashMap<String, Image>> = Default::default();
 }
 
-/// Decodes the HD terrain PNGs on worker threads before the loaders ask for
-/// them: the 8x set's 4096x4096 textures took ~2 s to decode one by one.
+/// Decodes the HD terrain, normal, sprite and UI PNGs on worker threads
+/// before the loaders upload them: decoding hundreds of 8x PNGs one by one
+/// adds seconds to startup, while parallel decoding keeps it snappy.
 #[cfg(not(target_arch = "wasm32"))]
-fn predecode_terrain() {
+fn predecode_hd_assets() {
     if gfx::asset_scale() <= 1.0 {
         return;
     }
@@ -795,50 +810,81 @@ fn predecode_terrain() {
         "space4deep", "fogRed",
     ];
     let normals = ["blue", "fire", "green", "craters", "space4deep"];
-    let paths: Vec<String> = textures
+    let mut paths: Vec<String> = textures
         .iter()
         .map(|n| art_path(&format!("textures/{}.png", n), ""))
         .chain(normals.iter().map(|n| art_path(&format!("normals/{}.png", n), "")))
         .collect();
+    paths.push(art_path("ngage.png", ""));
+    for sub in ["sprites", "ui"] {
+        let dir = art_path(sub, "");
+        if let Ok(entries) = std::fs::read_dir(&dir) {
+            for entry in entries.flatten() {
+                let p = entry.path();
+                if p.extension().is_some_and(|e| e == "png") {
+                    if let Some(s) = p.to_str() {
+                        paths.push(s.to_owned());
+                    }
+                }
+            }
+        }
+    }
+    let workers = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4)
+        .min(paths.len().max(1));
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let paths_ref = &paths;
+    let next_ref = &next;
     let decoded: Vec<(String, Image)> = std::thread::scope(|s| {
-        let jobs: Vec<_> = paths
-            .into_iter()
-            .map(|path| {
+        let jobs: Vec<_> = (0..workers)
+            .map(|_| {
                 s.spawn(move || {
-                    let bytes = std::fs::read(&path).ok()?;
-                    let image = Image::from_file_with_format(&bytes, Some(ImageFormat::Png)).ok()?;
-                    Some((path, image))
+                    let mut out = Vec::new();
+                    loop {
+                        let i = next_ref.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        let Some(path) = paths_ref.get(i) else { break };
+                        if let Ok(bytes) = std::fs::read(path) {
+                            if let Ok(image) = Image::from_file_with_format(&bytes, Some(ImageFormat::Png)) {
+                                out.push((path.clone(), image));
+                            }
+                        }
+                    }
+                    out
                 })
             })
             .collect();
-        jobs.into_iter().filter_map(|job| job.join().ok().flatten()).collect()
+        jobs.into_iter()
+            .flat_map(|job| job.join().unwrap_or_default())
+            .collect()
     });
     DECODED.with(|m| m.borrow_mut().extend(decoded));
 }
 
-/// A backdrop texture or normal map: repeating, as the backdrop shader
-/// tiles it. The HD terrain (4096x4096 in the 8x set, 1024 in the 4x set) is
-/// about 1:1 near the screen's centre at 4K and minified toward the planet's
-/// limb; without mipmaps the minified part aliases into bands and thrashes
-/// the texture cache, so the HD sets get trilinear mipmaps. It is created
-/// through miniquad because macroquad allocates no mipmap levels
-/// (generating them into its textures left the backdrop black). The
-/// original art keeps plain linear filtering, for emulator comparisons.
-/// Each file is loaded once: the worlds and the menu share bases and decals,
-/// and at 4096x4096 a duplicate costs ~90 MB.
-async fn load_terrain(path: &str) -> Texture2D {
+/// Drops any leftover pre-decoded CPU images once GPU uploads finish.
+fn clear_predecoded() {
+    DECODED.with(|m| m.borrow_mut().clear());
+}
+
+/// Uploads a PNG through miniquad with explicit wrap mode and optional
+/// trilinear mipmaps. Macroquad's `load_texture` allocates no mip levels, so
+/// HD terrain and sprites minified at 1080p/720p or zoomed-out views alias
+/// and shimmer without this. Each file is uploaded once and shared.
+async fn load_mipmapped(
+    path: &str,
+    wrap: macroquad::miniquad::TextureWrap,
+    mipmaps: bool,
+) -> Texture2D {
     use macroquad::miniquad::{
         MipmapFilterMode, TextureAccess, TextureFormat, TextureKind, TextureParams, TextureSource,
-        TextureWrap,
     };
-    if let Some(tex) = TERRAIN.with(|m| m.borrow().get(path).cloned()) {
+    if let Some(tex) = TEX_CACHE.with(|m| m.borrow().get(path).cloned()) {
         return tex;
     }
     let image = match DECODED.with(|m| m.borrow_mut().remove(path)) {
         Some(image) => image,
         None => load_image(path).await.unwrap(),
     };
-    let mipmaps = gfx::asset_scale() > 1.0;
     let gl = unsafe { get_internal_gl() };
     let id = gl.quad_context.new_texture(
         TextureAccess::Static,
@@ -846,7 +892,7 @@ async fn load_terrain(path: &str) -> Texture2D {
         TextureParams {
             kind: TextureKind::Texture2D,
             format: TextureFormat::RGBA8,
-            wrap: TextureWrap::Repeat,
+            wrap,
             min_filter: FilterMode::Linear,
             mag_filter: FilterMode::Linear,
             mipmap_filter: if mipmaps { MipmapFilterMode::Linear } else { MipmapFilterMode::None },
@@ -860,8 +906,14 @@ async fn load_terrain(path: &str) -> Texture2D {
         gl.quad_context.texture_generate_mipmaps(id);
     }
     let tex = Texture2D::from_miniquad_texture(id);
-    TERRAIN.with(|m| m.borrow_mut().insert(path.to_owned(), tex.clone()));
+    TEX_CACHE.with(|m| m.borrow_mut().insert(path.to_owned(), tex.clone()));
     tex
+}
+
+/// A backdrop texture or normal map: repeating, with trilinear mipmaps for
+/// the HD sets.
+async fn load_terrain(path: &str) -> Texture2D {
+    load_mipmapped(path, macroquad::miniquad::TextureWrap::Repeat, hd_mipmaps()).await
 }
 
 /// GameScreen::loadTextures: each element's small-rock atlas and the medium,
@@ -926,9 +978,10 @@ async fn load_play_assets() -> PlayAssets {
         let path = art_path(&format!("normals/{}.png", base), &format!("assets/normals/{}.png", base));
         normals.push(load_terrain(&path).await);
     }
+    let font_png = art_path("ngage.png", "assets/ui/ngage.png");
     let font_dat = art_path("ngage.dat", "original/app/ngage.dat");
     let font = Font::new(
-        load_ui("ngage").await,
+        load_mipmapped(&font_png, macroquad::miniquad::TextureWrap::Clamp, false).await,
         &load_file(&font_dat).await.unwrap(),
         gfx::asset_scale(),
     );
@@ -992,13 +1045,14 @@ async fn load_play_assets() -> PlayAssets {
 }
 
 async fn load_pause_assets() -> PauseAssets {
-    // The popup text uses the original 1x atlas with linear filtering: the
-    // engine rasterised each label into a low-resolution texture, so the
-    // glyphs are blurred rather than the HUD's crisp quads.
+    // Use the crisp HD font when running with HD assets; keep the 1x linear
+    // atlas when MB_HD=0 for original emulator comparisons.
+    let font_png = art_path("ngage.png", "assets/ui/ngage.png");
+    let font_dat = art_path("ngage.dat", "original/app/ngage.dat");
     let label_font = Font::new(
-        load_texture("assets/ui/ngage.png").await.unwrap(),
-        &load_file("original/app/ngage.dat").await.unwrap(),
-        1.0,
+        load_mipmapped(&font_png, macroquad::miniquad::TextureWrap::Clamp, false).await,
+        &load_file(&font_dat).await.unwrap(),
+        gfx::asset_scale(),
     );
     label_font.set_filter(FilterMode::Linear);
     PauseAssets {
@@ -1087,11 +1141,12 @@ async fn main() {
         std::process::exit(0);
     }
     #[cfg(not(target_arch = "wasm32"))]
-    predecode_terrain();
+    predecode_hd_assets();
     let ui = load_ui_set().await;
     let menu_assets = load_menu_assets().await;
     let play_assets = load_play_assets().await;
     let pause_assets = load_pause_assets().await;
+    clear_predecoded();
     let link_font = load_ttf_font_from_bytes(include_bytes!("../assets/fonts/Rajdhani-Bold.ttf"))
         .expect("Rajdhani-Bold.ttf");
     let music = load_sound(&sound_path("music")).await.unwrap();

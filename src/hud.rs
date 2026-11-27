@@ -49,10 +49,12 @@ const ICON_GAP: f32 = 2.0;
 
 impl Font {
     pub fn new(texture: Texture2D, dat: &[u8], atlas_scale: f32) -> Font {
-        // The glyph atlas is pixel art; nearest keeps it crisp when the
-        // canvas is rendered above 480x320. MB_FONT_FILTER=linear opts out.
+        // Original 1x glyph atlas stays nearest so pixel art stays crisp; the
+        // Real-ESRGAN HD atlas defaults to linear for smooth typography.
         let filter = match std::env::var("MB_FONT_FILTER").as_deref() {
             Ok("linear") => FilterMode::Linear,
+            Ok("nearest") => FilterMode::Nearest,
+            _ if atlas_scale > 1.0 => FilterMode::Linear,
             _ => FilterMode::Nearest,
         };
         texture.set_filter(filter);

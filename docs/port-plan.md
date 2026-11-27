@@ -46,6 +46,16 @@ In order, one commit each. Out of scope (decided 2026-11-03): macOS notarization
 8. Touch controls for the web build (twin sticks, bomb, boost). Done: floating sticks on the original wheel art, bomb and boost buttons placed by the original Boost/Bomb settings.
 9. Linux package (and Steam Deck check). Done: `tools/package-linux.sh` (Debian 11 container, glibc 2.30), Steam Deck defaults; checked under Xvfb at 1280x800, not yet on a Deck.
 
+## Graphics quality overhaul (2026-11-27)
+
+Full visual upgrade on top of the faithful simulation core (keeping `MB_WIDE=0 MB_HD=0 MB_RENDER_SCALE=1 MB_BLOOM=0 MB_FX_OFF=1` intact as the classic reference):
+
+1. **8x Art Overhaul & Mipmaps:** Replace xBR 4x+2x on `assets/8x/` sprites, UI, and font with edge-inpainted Real-ESRGAN + smooth alpha upscaling (eliminating onion-ring halos and painterly smearing); add trilinear mipmaps and parallel predecoding for HD sprites/UI; smooth filtered HD font rendering.
+2. **Pyramid Bloom & ACES Post-FX:** 5-level progressive downsample/upsample bloom pyramid, shockwave-distorted bloom composition, calibrated ACES filmic tone mapping, and 1-LSB gradient dithering.
+3. **Planet Surface & Atmosphere:** Cloud drop shadows on terrain, dynamic light illumination on clouds, world-specific materials (ocean specular glint, pulsing molten lava glow, crater relief, atmospheric Fresnel limb haze), and a crisp procedural multi-layer twinkling parallax starfield for space worlds and menus.
+4. **3D Depth & Per-Pixel Sprite Lighting:** Parallax-offset ground drop shadows on planet worlds, plus per-pixel bump+dome normal sprite lighting with 12 dynamic point lights, material-aware specular/Fresnel rim highlights, and emissive self-illumination on fire rocks, cores, and engines.
+5. **Procedural Energy Shaders & Lit Particles:** Animated hexagonal Fresnel shield shader, pulsing tractor-beam gravity gun shader, tapered afterburner engine ribbon, muzzle flashes, cooling molten-ember scorch marks, and explosion-illuminated smoke in `src/bursts.rs`.
+
 ## Performance
 
 - The loop is paced at 60 Hz (the original's simulation rate); `MB_FPS=0` disables the cap for benchmarks, `MB_PROF`/`MB_PROF_FRAMES` report update/draw CPU (see `AGENTS.md`).
