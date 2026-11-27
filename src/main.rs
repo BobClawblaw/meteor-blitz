@@ -1582,7 +1582,8 @@ async fn main() {
                     g.hud_scale = settings.hud_scale;
                     g.reduce_flashes = settings.reduce_flashes;
                     g.colour_assist = settings.colour_assist;
-                    g.particles = if std::env::var_os("MB_GAS").is_some() {
+                    g.auto_upgrade = settings.auto_upgrade;
+                    let desired_particles = if std::env::var_os("MB_GAS").is_some() {
                         pause::ParticleStyle::GasPhysics
                     } else if std::env::var_os("MB_PHYSICS").is_some() {
                         pause::ParticleStyle::Physics
@@ -1591,6 +1592,18 @@ async fn main() {
                     } else {
                         settings.particles
                     };
+                    #[cfg(target_arch = "wasm32")]
+                    let desired_particles = if desired_particles == pause::ParticleStyle::GasPhysics {
+                        pause::ParticleStyle::Physics
+                    } else {
+                        desired_particles
+                    };
+                    if g.particles == pause::ParticleStyle::GasPhysics
+                        && desired_particles != pause::ParticleStyle::GasPhysics
+                    {
+                        g.fluid.clear();
+                    }
+                    g.particles = desired_particles;
                     g.update(dt);
                     for id in g.sounds.drain(..) {
                         play_effect(id, settings.effects);

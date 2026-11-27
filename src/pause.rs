@@ -73,6 +73,15 @@ pub enum ParticleStyle {
 
 impl ParticleStyle {
     pub fn cycle(self, forward: bool) -> ParticleStyle {
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = forward;
+            return match self {
+                ParticleStyle::Classic => ParticleStyle::Physics,
+                ParticleStyle::Physics | ParticleStyle::GasPhysics => ParticleStyle::Classic,
+            };
+        }
+        #[cfg(not(target_arch = "wasm32"))]
         match (self, forward) {
             (ParticleStyle::Classic, true) | (ParticleStyle::GasPhysics, false) => ParticleStyle::Physics,
             (ParticleStyle::Physics, true) | (ParticleStyle::Classic, false) => ParticleStyle::GasPhysics,
@@ -371,7 +380,6 @@ pub struct Pause {
     bonus_max: f32,
     bonus_applied: bool,
     stage_time: f32,
-    world: usize,
     stage: usize,
     score: u64,
     multiplier: u32,
@@ -432,7 +440,6 @@ impl Pause {
             bonus_max: 0.0,
             bonus_applied: false,
             stage_time: 0.0,
-            world: 0,
             stage: 1,
             score: 0,
             multiplier: 1,
@@ -449,7 +456,7 @@ impl Pause {
 
     pub fn results(
         cleared: bool,
-        world: usize,
+        _world: usize,
         stage: usize,
         score: u64,
         multiplier: u32,
@@ -465,7 +472,6 @@ impl Pause {
             bonus_max,
             bonus_applied: false,
             stage_time,
-            world,
             stage,
             score,
             multiplier,
@@ -734,7 +740,7 @@ impl Pause {
                         enabled: play.can_buy(*upgrade),
                     })
                     .collect();
-                if self.world == 6 {
+                if play.world == 6 {
                     items.push(button(
                         15.0,
                         231.0,
@@ -1002,7 +1008,7 @@ impl Pause {
                 max,
             );
         }
-        if self.world == 6 {
+        if play.world == 6 {
             quad(
                 canvas,
                 assets,

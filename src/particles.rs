@@ -341,12 +341,16 @@ impl Effects {
     /// rings. `to_screen` maps world positions to the canvas.
     /// `soft` (port addition, with Lighting and effects): a round glow
     /// that points and lines are drawn with instead of hard squares.
+    /// `skip_clouds`: when true (`Gas Physics`), skips the legacy `Point` and
+    /// `Sprite` dot-cloud bursts while preserving crisp `Diamond` shards,
+    /// `Line` ricochet/split rays, and `Ring` shockwaves.
     pub fn draw(
         &self,
         canvas: &crate::gfx::Canvas,
         sprite: &Texture2D,
         soft: Option<&Texture2D>,
         z: f32,
+        skip_clouds: bool,
         to_screen: impl Fn(Vec2) -> Vec2,
     ) {
         for kind in [
@@ -356,6 +360,9 @@ impl Effects {
             Kind::Line,
             Kind::Ring,
         ] {
+            if skip_clouds && matches!(kind, Kind::Point | Kind::Sprite) {
+                continue;
+            }
             let m = Effects::manager(kind);
             let texture = match kind {
                 Kind::Sprite => Some(sprite),

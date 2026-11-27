@@ -712,7 +712,7 @@ impl Lead {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Upgrade {
     Cannon,
     Fire,
@@ -893,6 +893,9 @@ pub struct Play {
     pub reduce_flashes: bool,
     /// Options > Colour assist (port addition).
     pub colour_assist: bool,
+    /// Pause > Upgrade > Auto Upgrade (Survival mode): automatically spends
+    /// collected rings on the cheapest affordable upgrade.
+    pub auto_upgrade: bool,
     /// Options > Particle style (`Classic`, `Physics`, or `Gas Physics`).
     pub particles: ParticleStyle,
     /// Physics-style explosions and impacts (full in `Physics`, crisp
@@ -1281,6 +1284,7 @@ impl Play {
             hud_scale: 1.0,
             reduce_flashes: false,
             colour_assist: false,
+            auto_upgrade: false,
             particles: ParticleStyle::Physics,
             tally: Tally { games: 1, ..Tally::default() },
             stage_deaths: 0,
@@ -2295,6 +2299,21 @@ impl Play {
                 Some(power) => self.collect_power(pos, power),
             }
         }
+        if self.world == SURVIVAL && self.auto_upgrade {
+            self.auto_buy_survival_upgrades();
+        }
+    }
+
+    /// Survival Auto-Upgrade: spends collected upgrade points on the cheapest
+    /// affordable upgrade (preferring weapon/utility upgrades in `UPGRADES`
+    /// order on ties) so Survival players never need to pause to upgrade.
+    fn auto_buy_survival_upgrades(&mut self) {
+        while let Some(next) = pick_auto_upgrade(&self.upgrades, self.upgrade_points) {
+            if !self.buy_upgrade(next) {
+                break;
+            }
+            self.sounds.push(SOUND_POWER);
+        }
     }
 
     /// BigBonus::setState(0).
@@ -2915,8 +2934,9 @@ impl Play {
                 self.activate_gun();
             }
             // Letting go of fire throws what the gun holds; holding the
-            // gravity binding keeps the grip.
-            if !bindings::down(Action::Gravity) {
+            // gravity binding keeps the grip. Do not cancel a quick tap on
+            // the same tick it activated.
+            if !input.gravity && !bindings::down(Action::Gravity) {
                 self.release_gun();
             }
         }
@@ -3736,11 +3756,10 @@ impl Play {
             let lights = self.frame_lights.borrow();
             self.gas.draw(canvas, self.z, |p| self.to_screen(p), &assets.soft_dot, pixel, &lights);
         }
-        if self.particles != ParticleStyle::GasPhysics {
-            let soft = self.fx.then_some(&assets.soft_dot);
-            self.effects
-                .draw(canvas, &assets.spark, soft, self.z, |p| self.to_screen(p));
-        }
+        let soft = self.fx.then_some(&assets.soft_dot);
+        let skip_clouds = self.particles == ParticleStyle::GasPhysics;
+        self.effects
+            .draw(canvas, &assets.spark, soft, self.z, skip_clouds, |p| self.to_screen(p));
     }
 
     /// Port addition: tapered plasma engine ribbon, weapon muzzle flashes,
@@ -3984,9 +4003,34 @@ impl Play {
     }
 }
 
+/// Picks the cheapest affordable upgrade for Survival's Auto-Upgrade toggle.
+fn pick_auto_upgrade(levels: &[usize; 6], points: u32) -> Option<Upgrade> {
+    UPGRADES
+        .iter()
+        .copied()
+        .filter_map(|u| {
+            let cost = UPGRADE_COSTS[u as usize][levels[u as usize]];
+            (cost >= 0 && cost as u32 <= points).then_some((u, cost as u32))
+        })
+        .min_by_key(|&(_, cost)| cost)
+        .map(|(u, _)| u)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn survival_auto_upgrade_picks_cheapest_affordable() {
+        let mut levels = [1, 1, 1, 0, 0, 0];
+        // At level 1 weapons cost 150, Speed/Boost cost 200, Gravity costs 300.
+        assert_eq!(pick_auto_upgrade(&levels, 100), None);
+        let first = pick_auto_upgrade(&levels, 150).expect("first upgrade");
+        assert_eq!(first, Upgrade::Cannon);
+        levels[first as usize] += 1;
+        // Next cheapest at 150 points is Fire.
+        assert_eq!(pick_auto_upgrade(&levels, 150), Some(Upgrade::Fire));
+    }
 
     #[test]
     fn frames_between_steps_blend_across_the_wrap() {
