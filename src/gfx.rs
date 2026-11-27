@@ -221,29 +221,71 @@ void main() {
     gl_FragColor = vec4(min(t.rgb + color.rgb, vec3(1.0)), t.a * color.a);
 }"#;
 
-/// Bloom's separable Gaussian, nine taps along Dir (in texels).
-const BLUR_FRAGMENT: &str = r#"#version 100
+/// 13-tap energy-preserving downsample (Jim Jimenez / COD) for the bloom
+/// pyramid: suppresses single-pixel fireflies while staying smooth.
+const BLOOM_DOWN_FRAGMENT: &str = r#"#version 100
 precision mediump float;
 varying lowp vec2 uv;
 uniform sampler2D Texture;
-uniform vec2 Dir;
+uniform vec2 Texel;
 void main() {
-    vec3 c = texture2D(Texture, uv).rgb * 0.227027;
-    c += texture2D(Texture, uv + Dir * 1.0).rgb * 0.1945946;
-    c += texture2D(Texture, uv - Dir * 1.0).rgb * 0.1945946;
-    c += texture2D(Texture, uv + Dir * 2.0).rgb * 0.1216216;
-    c += texture2D(Texture, uv - Dir * 2.0).rgb * 0.1216216;
-    c += texture2D(Texture, uv + Dir * 3.0).rgb * 0.054054;
-    c += texture2D(Texture, uv - Dir * 3.0).rgb * 0.054054;
-    c += texture2D(Texture, uv + Dir * 4.0).rgb * 0.016216;
-    c += texture2D(Texture, uv - Dir * 4.0).rgb * 0.016216;
-    gl_FragColor = vec4(c, 1.0);
+    vec2 t = Texel;
+    vec3 a = texture2D(Texture, uv + vec2(-2.0, -2.0) * t).rgb;
+    vec3 b = texture2D(Texture, uv + vec2( 0.0, -2.0) * t).rgb;
+    vec3 c = texture2D(Texture, uv + vec2( 2.0, -2.0) * t).rgb;
+    vec3 d = texture2D(Texture, uv + vec2(-2.0,  0.0) * t).rgb;
+    vec3 e = texture2D(Texture, uv).rgb;
+    vec3 f = texture2D(Texture, uv + vec2( 2.0,  0.0) * t).rgb;
+    vec3 g = texture2D(Texture, uv + vec2(-2.0,  2.0) * t).rgb;
+    vec3 h = texture2D(Texture, uv + vec2( 0.0,  2.0) * t).rgb;
+    vec3 i = texture2D(Texture, uv + vec2( 2.0,  2.0) * t).rgb;
+    vec3 j = texture2D(Texture, uv + vec2(-1.0, -1.0) * t).rgb;
+    vec3 k = texture2D(Texture, uv + vec2( 1.0, -1.0) * t).rgb;
+    vec3 l = texture2D(Texture, uv + vec2(-1.0,  1.0) * t).rgb;
+    vec3 m = texture2D(Texture, uv + vec2( 1.0,  1.0) * t).rgb;
+    vec3 col = e * 0.125;
+    col += (j + k + l + m) * 0.125;
+    col += (b + d + f + h) * 0.0625;
+    col += (a + c + g + i) * 0.03125;
+    gl_FragColor = vec4(col, 1.0);
 }"#;
 
-/// Bloom: how strongly the glow is added, and the glow buffers' size
-/// relative to the canvas.
-const BLOOM_STRENGTH: f32 = 1.25;
-const BLOOM_DOWNSAMPLE: u32 = 4;
+/// 9-tap tent-filter upsample, additively blended onto the next larger mip
+/// in the bloom pyramid to build a tight core plus wide velvety halo.
+const BLOOM_UP_FRAGMENT: &str = r#"#version 100
+precision mediump float;
+varying lowp vec2 uv;
+uniform sampler2D Texture;
+uniform vec2 Texel;
+uniform float Weight;
+void main() {
+    vec2 t = Texel * 1.25;
+    vec3 c = texture2D(Texture, uv).rgb * 4.0;
+    c += (texture2D(Texture, uv + vec2(-t.x, 0.0)).rgb
+        + texture2D(Texture, uv + vec2( t.x, 0.0)).rgb
+        + texture2D(Texture, uv + vec2(0.0, -t.y)).rgb
+        + texture2D(Texture, uv + vec2(0.0,  t.y)).rgb) * 2.0;
+    c +=  texture2D(Texture, uv + vec2(-t.x, -t.y)).rgb
+        + texture2D(Texture, uv + vec2( t.x, -t.y)).rgb
+        + texture2D(Texture, uv + vec2(-t.x,  t.y)).rgb
+        + texture2D(Texture, uv + vec2( t.x,  t.y)).rgb;
+    gl_FragColor = vec4((c / 16.0) * Weight, 1.0);
+}"#;
+
+/// Plain additive bloom composite for screens without post-processing.
+const BLOOM_ADD_FRAGMENT: &str = r#"#version 100
+precision mediump float;
+varying lowp vec2 uv;
+uniform sampler2D Texture;
+uniform float Strength;
+void main() {
+    gl_FragColor = vec4(texture2D(Texture, uv).rgb * Strength, 1.0);
+}"#;
+
+/// Bloom pyramid configuration: 5 mips from half-res down to 1/32-res.
+const BLOOM_MIPS: usize = 5;
+const BLOOM_STRENGTH: f32 = 0.65;
+const BLOOM_UP_WEIGHT: f32 = 0.68;
 
 /// The affine map from clip space back to the landscape canvas on the play
 /// plane (z = 0), as rows of a 2x2 matrix and an offset.
@@ -311,37 +353,79 @@ fn pass(target: &RenderTarget, tex: &Texture2D, material: &Material) {
 
 /// Glow from emitters (port addition): what the world pass drew additively
 /// (shots, flames, sparks, explosions), plus laser bolts and tower beams,
-/// redrawn at a quarter of the canvas resolution, blurred, and added over
-/// the frame at the blit. Clouds and the HUD never glow, however bright.
+/// rendered into a half-resolution target and filtered through a 5-level
+/// progressive downsample/upsample pyramid (1/2 .. 1/32) for both a crisp
+/// hot core and a wide velvety atmospheric halo. Clouds and HUD never glow.
 struct Bloom {
-    a: RenderTarget,
-    b: RenderTarget,
-    size: (u32, u32),
-    blur: Material,
+    mips: Vec<(RenderTarget, (u32, u32))>,
+    down: Material,
+    up: Material,
+    add: Material,
 }
 
 impl Bloom {
     fn new(canvas: (u32, u32)) -> Bloom {
-        let size = ((canvas.0 / BLOOM_DOWNSAMPLE).max(1), (canvas.1 / BLOOM_DOWNSAMPLE).max(1));
-        let material = |fragment: &str, uniforms: Vec<UniformDesc>| {
-            load_material(
-                ShaderSource::Glsl { vertex: DEFAULT_VERTEX, fragment },
-                MaterialParams { uniforms, ..Default::default() },
-            )
-            .expect("bloom shader")
-        };
-        Bloom {
-            a: new_target(size),
-            b: new_target(size),
-            size,
-            blur: material(BLUR_FRAGMENT, vec![UniformDesc::new("Dir", UniformType::Float2)]),
+        let mut mips = Vec::with_capacity(BLOOM_MIPS);
+        let (mut w, mut h) = ((canvas.0 / 2).max(1), (canvas.1 / 2).max(1));
+        for _ in 0..BLOOM_MIPS {
+            mips.push((new_target((w, h)), (w, h)));
+            w = (w / 2).max(1);
+            h = (h / 2).max(1);
         }
+        let add_blend = BlendState::new(
+            Equation::Add,
+            BlendFactor::One,
+            BlendFactor::One,
+        );
+        let add_pipe = PipelineParams {
+            color_blend: Some(add_blend),
+            alpha_blend: Some(add_blend),
+            cull_face: CullFace::Nothing,
+            depth_test: Comparison::Always,
+            depth_write: false,
+            ..Default::default()
+        };
+        let down = load_material(
+            ShaderSource::Glsl { vertex: DEFAULT_VERTEX, fragment: BLOOM_DOWN_FRAGMENT },
+            MaterialParams {
+                uniforms: vec![UniformDesc::new("Texel", UniformType::Float2)],
+                ..Default::default()
+            },
+        )
+        .expect("bloom down shader");
+        let up = load_material(
+            ShaderSource::Glsl { vertex: DEFAULT_VERTEX, fragment: BLOOM_UP_FRAGMENT },
+            MaterialParams {
+                pipeline_params: add_pipe,
+                uniforms: vec![
+                    UniformDesc::new("Texel", UniformType::Float2),
+                    UniformDesc::new("Weight", UniformType::Float1),
+                ],
+                ..Default::default()
+            },
+        )
+        .expect("bloom up shader");
+        let add = load_material(
+            ShaderSource::Glsl { vertex: DEFAULT_VERTEX, fragment: BLOOM_ADD_FRAGMENT },
+            MaterialParams {
+                pipeline_params: add_pipe,
+                uniforms: vec![UniformDesc::new("Strength", UniformType::Float1)],
+                ..Default::default()
+            },
+        )
+        .expect("bloom add shader");
+        Bloom { mips, down, up, add }
     }
 
-    /// Redraws the emitters into `a` through the canvas camera, then blurs.
+    fn texture(&self) -> Texture2D {
+        self.mips[0].0.texture.clone()
+    }
+
+    /// Redraws the emitters into mip 0, downsamples through the pyramid,
+    /// then tent-upsamples additively back to mip 0.
     fn render(&self, emitters: &[Mesh], view_w: f32, zoom: f32, additive: &Material) {
         set_camera(&OriginalCamera {
-            render_pass: self.a.render_pass.clone(),
+            render_pass: self.mips[0].0.render_pass.clone(),
             view_w,
             zoom,
             shift: Vec2::ZERO,
@@ -352,13 +436,20 @@ impl Bloom {
             draw_mesh(m);
         }
         gl_use_default_material();
-        let texel = vec2(1.0 / self.size.0 as f32, 1.0 / self.size.1 as f32);
-        // Two blur rounds, the second twice as wide, for a soft falloff.
-        for spread in [1.0, 2.0] {
-            self.blur.set_uniform("Dir", vec2(texel.x * spread, 0.0));
-            pass(&self.b, &self.a.texture, &self.blur);
-            self.blur.set_uniform("Dir", vec2(0.0, texel.y * spread));
-            pass(&self.a, &self.b.texture, &self.blur);
+        // Progressive 13-tap downsample.
+        for i in 0..self.mips.len() - 1 {
+            let (src, (sw, sh)) = &self.mips[i];
+            let (dst, _) = &self.mips[i + 1];
+            self.down.set_uniform("Texel", vec2(1.0 / *sw as f32, 1.0 / *sh as f32));
+            pass(dst, &src.texture, &self.down);
+        }
+        // Progressive 9-tap tent upsample, accumulating onto each larger mip.
+        self.up.set_uniform("Weight", BLOOM_UP_WEIGHT);
+        for i in (1..self.mips.len()).rev() {
+            let (src, (sw, sh)) = &self.mips[i];
+            let (dst, _) = &self.mips[i - 1];
+            self.up.set_uniform("Texel", vec2(1.0 / *sw as f32, 1.0 / *sh as f32));
+            pass(dst, &src.texture, &self.up);
         }
     }
 }
@@ -447,14 +538,16 @@ void main() {
 }"#;
 
 /// The final blit with post effects (port addition): shockwave rings that
-/// bend the image (with a slight colour split at the ring), then colour
-/// grading and a vignette. `uv` is the portrait target's; Canvas maps it
-/// to the landscape canvas.
+/// bend both the scene and bloom (with a slight colour split at the ring),
+/// linear-space bloom addition with calibrated ACES filmic tone mapping,
+/// per-world colour grading, vignette, and 1-LSB dithering against banding.
 const POST_FRAGMENT: &str = r#"#version 100
 precision highp float;
 varying lowp vec4 color;
 varying highp vec2 uv;
 uniform sampler2D Texture;
+uniform sampler2D Bloom;
+uniform float BloomStrength;
 uniform vec2 View;
 uniform vec4 Waves[4];
 uniform vec3 Lift;
@@ -467,6 +560,9 @@ vec2 to_canvas(vec2 t) {
 vec2 to_uv(vec2 c) {
     return vec2(1.0 - c.y / 320.0, 1.0 - (c.x + View.y) / View.x);
 }
+vec3 aces_filmic(vec3 x) {
+    return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0);
+}
 void main() {
     vec2 c = to_canvas(uv);
     vec2 shift = vec2(0.0);
@@ -476,18 +572,38 @@ void main() {
         float band = (dist - Waves[i].z) / 14.0;
         shift += d / max(dist, 1.0) * Waves[i].w * exp(-band * band);
     }
-    float split = length(shift) * 0.25;
-    vec2 dir = shift / max(length(shift), 0.001);
+    float mag = length(shift);
+    float split = mag * 0.28;
+    vec2 dir = shift / max(mag, 0.001);
+    vec2 uv_r = to_uv(c - shift - dir * split);
+    vec2 uv_g = to_uv(c - shift);
+    vec2 uv_b = to_uv(c - shift + dir * split);
     vec3 rgb = vec3(
-        texture2D(Texture, to_uv(c - shift - dir * split)).r,
-        texture2D(Texture, to_uv(c - shift)).g,
-        texture2D(Texture, to_uv(c - shift + dir * split)).b);
+        texture2D(Texture, uv_r).r,
+        texture2D(Texture, uv_g).g,
+        texture2D(Texture, uv_b).b);
+    vec3 lin = pow(max(rgb, vec3(0.0)), vec3(2.2));
+    if (BloomStrength > 0.0) {
+        vec3 glow = vec3(
+            texture2D(Bloom, uv_r).r,
+            texture2D(Bloom, uv_g).g,
+            texture2D(Bloom, uv_b).b);
+        // Add both linear energy and a soft screen-like halo so hot emitters
+        // stay saturated instead of hard-clipping to flat white.
+        lin += pow(max(glow, vec3(0.0)), vec3(1.6)) * BloomStrength;
+    }
+    // Calibrated ACES rolloff: preserves punchy midtones and deep blacks while
+    // turning blazing explosions and lasers into silky incandescent cores.
+    rgb = pow(aces_filmic(lin * 1.08), vec3(1.0 / 2.2));
     float luma = dot(rgb, vec3(0.299, 0.587, 0.114));
     rgb = mix(vec3(luma), rgb, Saturation);
     rgb = Lift + rgb * Gain;
     vec2 v = (c - vec2(240.0, 160.0)) / vec2(View.x * 0.5, 160.0);
-    rgb *= 1.0 - Vignette * dot(v, v) * 0.5;
-    gl_FragColor = vec4(rgb, 1.0) * color;
+    rgb *= 1.0 - Vignette * dot(v, v) * 0.48;
+    // 1-LSB triangular-like dither removes dark space and vignette banding.
+    float n = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
+    rgb += (n - 0.5) / 255.0;
+    gl_FragColor = vec4(clamp(rgb, 0.0, 1.0), 1.0) * color;
 }"#;
 
 /// A shockwave ring on the canvas: centre, radius and how far it pushes.
@@ -660,6 +776,7 @@ pub struct Canvas {
     /// Whether `end` adds the glow (Settings::bloom; MB_BLOOM=0 forces off).
     bloom_on: Cell<bool>,
     white: Texture2D,
+    black: Texture2D,
     menu_backdrop: RefCell<Mesh>,
     game_backdrop: RefCell<Mesh>,
     backdrop_material: Material,
@@ -757,7 +874,9 @@ impl Canvas {
         let post = load_material(
             ShaderSource::Glsl { vertex: DEFAULT_VERTEX, fragment: POST_FRAGMENT },
             MaterialParams {
+                textures: vec!["Bloom".to_owned()],
                 uniforms: vec![
+                    UniformDesc::new("BloomStrength", UniformType::Float1),
                     UniformDesc::new("View", UniformType::Float2),
                     UniformDesc::new("Waves", UniformType::Float4).array(MAX_WAVES),
                     UniformDesc::new("Lift", UniformType::Float3),
@@ -792,6 +911,7 @@ impl Canvas {
         )
         .expect("flash shader");
         let white = Texture2D::from_rgba8(1, 1, &[255, 255, 255, 255]);
+        let black = Texture2D::from_rgba8(1, 1, &[0, 0, 0, 255]);
         Canvas {
             target: RefCell::new(target),
             target_size: Cell::new(size),
@@ -800,6 +920,7 @@ impl Canvas {
             glowing: Cell::new(false),
             bloom_on: Cell::new(false),
             white,
+            black,
             menu_backdrop: RefCell::new(backdrop_mesh(true, view_w / CANVAS_W, 1.0)),
             game_backdrop: RefCell::new(backdrop_mesh(false, view_w / CANVAS_W, 1.0)),
             backdrop_material,
@@ -1007,6 +1128,9 @@ impl Canvas {
             for (i, wave) in waves.iter().enumerate() {
                 w[i] = vec4(wave.pos.x, wave.pos.y, wave.radius, wave.strength);
             }
+            let bloom_tex = if bloom { self.bloom.borrow().texture() } else { self.black.clone() };
+            self.post.set_texture("Bloom", bloom_tex);
+            self.post.set_uniform("BloomStrength", if bloom { BLOOM_STRENGTH } else { 0.0 });
             self.post.set_uniform("View", vec2(view_w, edge()));
             self.post.set_uniform_array("Waves", &w);
             self.post.set_uniform("Lift", grade.lift);
@@ -1018,20 +1142,18 @@ impl Canvas {
             gl_use_default_material();
         } else {
             draw_mesh(&quad);
-        }
-        if bloom {
-            let glow = Mesh {
-                vertices: quad
-                    .vertices
-                    .iter()
-                    .map(|v| Vertex { color: [255, 255, 255, (BLOOM_STRENGTH * 255.0) as u8], ..*v })
-                    .collect(),
-                indices: quad.indices.clone(),
-                texture: Some(self.bloom.borrow().a.texture.clone()),
-            };
-            gl_use_material(&self.additive);
-            draw_mesh(&glow);
-            gl_use_default_material();
+            if bloom {
+                let b = self.bloom.borrow();
+                let glow = Mesh {
+                    vertices: quad.vertices.clone(),
+                    indices: quad.indices.clone(),
+                    texture: Some(b.texture()),
+                };
+                b.add.set_uniform("Strength", BLOOM_STRENGTH);
+                gl_use_material(&b.add);
+                draw_mesh(&glow);
+                gl_use_default_material();
+            }
         }
     }
 
@@ -1288,11 +1410,6 @@ pub fn draw_atlas_sprite(
 #[cfg(test)]
 mod backdrop_tests {
     use super::*;
-
-    /// On-screen length of a 1-unit step at depth `z` near the canvas centre.
-    fn step(z: f32) -> f32 {
-        step_in(z, CANVAS_W)
-    }
 
     fn step_in(z: f32, view_w: f32) -> f32 {
         let m = camera_matrix(view_w);
