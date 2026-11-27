@@ -3199,6 +3199,7 @@ impl Play {
         let lights = if self.fx { self.collect_lights() } else { Vec::new() };
         let normal = assets.normals.get(self.world.min(assets.normals.len().saturating_sub(1)));
         canvas.set_ground_lighting(normal.filter(|_| self.fx), &lights);
+        canvas.set_backdrop_style(self.world.min(5) as f32, self.elapsed);
         *self.frame_lights.borrow_mut() = lights;
         if self.fx {
             let waves = if self.reduce_flashes { Vec::new() } else { self.waves() };

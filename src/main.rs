@@ -1746,6 +1746,9 @@ async fn main() {
         canvas.begin();
         // The glow comes from the world's emitters; a popup hides them.
         canvas.set_bloom(settings.bloom && pause.is_none());
+        let fx_on = settings.visual_fx && std::env::var_os("MB_FX_OFF").is_none();
+        canvas.set_menu_fx(fx_on);
+        canvas.set_backdrop_style(6.0, get_time() as f32);
         match screen {
             Screen::Menu(kind) => {
                 menu_screen.draw(&canvas, &menu_assets, &backdrop);

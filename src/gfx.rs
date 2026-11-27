@@ -457,62 +457,195 @@ impl Bloom {
 /// Texture unit 1 was GL_DECAL: the decal layer over the base by the
 /// decal's alpha, alpha from the base. Both layers repeat and scroll.
 ///
-/// Port addition: with Lit on, the ground takes relief from its normal map
-/// under a fixed key light, and up to MAX_LIGHTS point lights (explosions,
-/// shots, the ship) light it. `canvas` is the fragment's position on the
-/// landscape canvas, from the vertex shader.
+/// Port addition: with Lit on, the planet surface gets normal-mapped relief,
+/// cloud drop shadows, world-specific materials (ocean specular, pulsing
+/// molten lava, crater rim lighting, atmospheric Fresnel limb haze), a
+/// multi-layer twinkling parallax starfield in space/menus, and up to
+/// MAX_LIGHTS dynamic point lights illuminating both terrain and clouds.
 const BACKDROP_FRAGMENT: &str = r#"#version 100
-precision mediump float;
+precision highp float;
 varying lowp vec4 color;
-varying lowp vec2 uv;
+varying highp vec2 uv;
 varying highp vec2 canvas;
+varying highp vec2 view_ndc;
 uniform sampler2D Texture;
 uniform sampler2D Decal;
 uniform sampler2D Normal;
 uniform vec2 Scroll0;
 uniform vec2 Scroll1;
 uniform float Lit;
+uniform float Time;
+uniform float WorldStyle;
 uniform vec3 LightPos[12];
 uniform vec3 LightColor[12];
+
+float hash21(vec2 p) {
+    p = fract(p * vec2(234.34, 435.345));
+    p += dot(p, p + 34.23);
+    return fract(p.x * p.y);
+}
+
+vec3 star_layer(vec2 p, float scale, float seed, float t) {
+    vec2 g = p * scale;
+    vec2 id = floor(g);
+    vec2 f = fract(g) - 0.5;
+    float h = hash21(id + seed);
+    if (h < 0.87) {
+        return vec3(0.0);
+    }
+    float hx = hash21(id * 1.37 + seed + 19.1) - 0.5;
+    float hy = hash21(id * 2.13 + seed + 47.7) - 0.5;
+    vec2 d = f - vec2(hx, hy) * 0.68;
+    float dist = length(d);
+    float bright = smoothstep(0.87, 1.0, h);
+    float size = mix(0.045, 0.11, bright);
+    float core = exp(-dist * dist / (size * size * 0.18));
+    // Subtle diffraction cross on the brightest stars.
+    float cross_glint = bright * bright
+        * exp(-abs(d.x) * 42.0) * exp(-abs(d.y) * 9.0)
+        + bright * bright * exp(-abs(d.y) * 42.0) * exp(-abs(d.x) * 9.0);
+    float twinkle = 0.72 + 0.28 * sin(t * (1.8 + 4.2 * bright) + h * 90.0);
+    float temp = hash21(id * 3.11 + seed + 7.3);
+    vec3 tint = mix(vec3(0.68, 0.84, 1.0), vec3(1.0, 0.88, 0.72), temp);
+    tint = mix(tint, vec3(1.0), 0.35);
+    return tint * (core * (0.45 + 0.95 * bright) + cross_glint * 0.45) * twinkle;
+}
+
 void main() {
     // The textures repeat (main.rs `load_terrain`); a fract() wrap here
     // would select the smallest mipmap along the seam.
-    vec4 base = texture2D(Texture, uv + Scroll0);
-    vec4 decal = texture2D(Decal, uv + Scroll1);
+    vec2 uv0 = uv + Scroll0;
+    vec2 uv1 = uv + Scroll1;
+    vec4 base = texture2D(Texture, uv0);
+    vec4 decal = texture2D(Decal, uv1);
     vec3 surface = mix(base.rgb, decal.rgb, decal.a);
     if (Lit > 0.5) {
+        // World 6 = menu space backdrop: starfield + nebula depth without ground lights.
+        if (WorldStyle > 5.5) {
+            vec3 stars = vec3(0.0);
+            stars += star_layer(uv + Scroll0 * 0.35, 22.0, 1.3, Time) * 0.65;
+            stars += star_layer(uv + Scroll0 * 0.70, 14.0, 17.9, Time) * 0.95;
+            stars += star_layer(uv + Scroll0 * 1.15,  9.0, 41.2, Time) * 1.25;
+            surface += stars * (1.0 - decal.a * 0.45);
+            gl_FragColor = vec4(surface * color.rgb, base.a * color.a);
+            return;
+        }
         // Texture u runs with canvas x and v against canvas y.
-        vec3 t = texture2D(Normal, uv + Scroll0).xyz * 2.0 - 1.0;
+        vec3 t = texture2D(Normal, uv0).xyz * 2.0 - 1.0;
         vec3 n = normalize(vec3(t.x, -t.y, t.z));
         // The key light, from the upper left; flat ground stays as drawn.
         vec3 key = normalize(vec3(-0.45, -0.55, 0.7));
-        float relief = clamp(dot(n, key) / key.z, 0.55, 1.45);
-        // Clouds float above the relief.
-        relief = mix(relief, 1.0, decal.a * 0.8);
-        vec3 light = vec3(0.0);
+        vec3 view_dir = vec3(0.0, 0.0, 1.0);
+        vec3 half_key = normalize(key + view_dir);
+        float limb = clamp(length(view_ndc), 0.0, 1.0);
+        float fresnel = pow(limb, 2.8);
+
+        // Per-world terrain base preparation.
+        vec3 ground = base.rgb;
+        vec3 cloud = decal.rgb;
+        float cloud_a = decal.a;
+        float spec_mask = 0.0;
+        float spec_power = 24.0;
+        vec3 emissive = vec3(0.0);
+        vec3 atmo = vec3(0.0);
+
+        if (WorldStyle < 0.5) {
+            // World 1 (Blue Earth): cloud drop shadows + ocean specular glint + sapphire limb haze.
+            float shadow_a = texture2D(Decal, uv1 + vec2(0.011, -0.013)).a;
+            ground *= 1.0 - shadow_a * 0.44;
+            spec_mask = smoothstep(0.04, 0.20, base.b - max(base.r, base.g));
+            spec_power = 28.0;
+            atmo = vec3(0.20, 0.46, 0.98) * fresnel * 0.30;
+        } else if (WorldStyle < 1.5) {
+            // World 2 (Lava / Crust): animated glowing molten fissures + obsidian crust sheen.
+            float lava_open = 1.0 - cloud_a;
+            float wave = sin(Time * 2.1 + uv0.x * 28.0 + sin(uv0.y * 22.0 - Time * 1.4));
+            float pulse = 0.86 + 0.22 * wave;
+            float heat = smoothstep(0.18, 0.82, base.r) * lava_open;
+            vec3 magma = mix(vec3(0.95, 0.16, 0.02), vec3(1.55, 0.90, 0.26), clamp(heat * pulse, 0.0, 1.0));
+            emissive = magma * heat * 0.85;
+            // Dark basalt crust gets crisp subtle specular catch.
+            spec_mask = cloud_a * 0.35;
+            spec_power = 20.0;
+            atmo = vec3(0.75, 0.20, 0.05) * fresnel * 0.24;
+        } else if (WorldStyle < 2.5) {
+            // World 3 (Green Planet): cloud drop shadows + water glint + emerald-teal limb haze.
+            float shadow_a = texture2D(Decal, uv1 + vec2(0.011, -0.013)).a;
+            ground *= 1.0 - shadow_a * 0.42;
+            spec_mask = smoothstep(0.02, 0.16, base.b - base.r) * (1.0 - smoothstep(0.32, 0.58, base.g));
+            spec_power = 26.0;
+            atmo = vec3(0.16, 0.68, 0.54) * fresnel * 0.26;
+        } else if (WorldStyle < 3.5) {
+            // World 4 (Red Craters): dramatic crater relief + dusty specular + crimson limb haze.
+            spec_mask = 0.12;
+            spec_power = 18.0;
+            atmo = vec3(0.68, 0.14, 0.16) * fresnel * 0.25;
+        } else if (WorldStyle < 4.5) {
+            // World 5 (Green Craters): alien craters + emerald atmospheric rim.
+            spec_mask = 0.14;
+            spec_power = 18.0;
+            atmo = vec3(0.14, 0.62, 0.32) * fresnel * 0.25;
+        } else {
+            // World 6 & Survival (Deep Space): multi-layer twinkling parallax starfield.
+            vec3 stars = vec3(0.0);
+            stars += star_layer(uv + Scroll0 * 0.35, 22.0, 1.3, Time) * 0.65;
+            stars += star_layer(uv + Scroll0 * 0.70, 14.0, 17.9, Time) * 0.95;
+            stars += star_layer(uv + Scroll0 * 1.15,  9.0, 41.2, Time) * 1.25;
+            emissive = stars * (1.0 - cloud_a * 0.40);
+        }
+
+        // Relief lighting on the planet surface (clouds float above the relief).
+        float relief_lo = (WorldStyle > 2.5 && WorldStyle < 4.5) ? 0.46 : 0.55;
+        float relief_hi = (WorldStyle > 2.5 && WorldStyle < 4.5) ? 1.54 : 1.45;
+        float relief = clamp(dot(n, key) / key.z, relief_lo, relief_hi);
+        // Subtle key-light specular glint on water and rocky rims.
+        float key_spec = pow(max(dot(n, half_key), 0.0), spec_power) * spec_mask * (1.0 - cloud_a * 0.85);
+
+        vec3 light_ground = vec3(0.0);
+        vec3 light_cloud = vec3(0.0);
+        vec3 light_spec = vec3(0.0);
         for (int i = 0; i < 12; i++) {
             vec2 d = LightPos[i].xy - canvas;
             float r = LightPos[i].z;
             float fall = clamp(1.0 - length(d) / max(r, 1.0), 0.0, 1.0);
-            vec3 l = normalize(vec3(d, 24.0));
-            light += LightColor[i] * fall * fall * (0.35 + 0.65 * max(dot(n, l), 0.0));
+            float att = fall * fall;
+            vec3 l = normalize(vec3(d, 26.0));
+            float ndl = max(dot(n, l), 0.0);
+            light_ground += LightColor[i] * att * (0.32 + 0.68 * ndl);
+            light_cloud += LightColor[i] * att * 0.85;
+            if (spec_mask > 0.01) {
+                vec3 h = normalize(l + view_dir);
+                light_spec += LightColor[i] * att * pow(max(dot(n, h), 0.0), spec_power);
+            }
         }
         // Overlapping lights saturate softly instead of washing out.
-        light = light / (1.0 + light);
-        surface = surface * relief + surface * light * 3.0 + light * 0.2;
+        light_ground = light_ground / (1.0 + light_ground);
+        light_cloud = light_cloud / (1.0 + light_cloud);
+        light_spec = light_spec / (1.0 + light_spec);
+
+        vec3 lit_ground = ground * relief
+            + ground * light_ground * 2.8
+            + light_ground * 0.16
+            + vec3(0.95, 0.98, 1.0) * key_spec * 0.48
+            + light_spec * spec_mask * 0.9;
+        // Clouds/fog catch a softer upward/overhead illumination from explosions.
+        vec3 lit_cloud = cloud * (0.94 + 0.14 * relief) + cloud * light_cloud * 1.45 + light_cloud * 0.14;
+        surface = mix(lit_ground, lit_cloud, cloud_a) + emissive + atmo;
     }
     gl_FragColor = vec4(surface * color.rgb, base.a * color.a);
 }"#;
 
 /// The backdrop's vertex shader: the default one, plus the vertex's place
-/// on the landscape canvas (NdcToCanvas maps clip space back to it).
+/// on the landscape canvas (NdcToCanvas maps clip space back to it) and
+/// normalised screen coords for atmospheric Fresnel limb glow.
 const BACKDROP_VERTEX: &str = r#"#version 100
 attribute vec3 position;
 attribute vec2 texcoord;
 attribute vec4 color0;
-varying lowp vec2 uv;
+varying highp vec2 uv;
 varying lowp vec4 color;
 varying highp vec2 canvas;
+varying highp vec2 view_ndc;
 uniform mat4 Model;
 uniform mat4 Projection;
 uniform vec4 NdcToCanvas;
@@ -521,6 +654,7 @@ void main() {
     gl_Position = Projection * Model * vec4(position, 1);
     vec2 ndc = gl_Position.xy / gl_Position.w;
     canvas = vec2(dot(NdcToCanvas.xy, ndc), dot(NdcToCanvas.zw, ndc)) + NdcOffset;
+    view_ndc = ndc;
     color = color0 / 255.0;
     uv = texcoord;
 }"#;
@@ -788,10 +922,13 @@ pub struct Canvas {
     post_fx: RefCell<Option<(Vec<Wave>, Grade)>>,
     /// Sprites are drawn with `lit` (Canvas::lighting).
     lighting_on: Cell<bool>,
-    /// The ground's lights and normal map for the next `draw_backdrop`.
+    /// The ground's lights, normal map, world style and time for `draw_backdrop`.
     lights: RefCell<Vec<Light>>,
     normal: RefCell<Option<Texture2D>>,
     flat_normal: Texture2D,
+    world_style: Cell<f32>,
+    time: Cell<f32>,
+    menu_fx: Cell<bool>,
     /// The play plane's zoom this frame (`set_zoom`; 1 outside the game),
     /// and the world copy being drawn (`set_shift`).
     zoom: Cell<f32>,
@@ -852,6 +989,8 @@ impl Canvas {
                     UniformDesc::new("Scroll0", UniformType::Float2),
                     UniformDesc::new("Scroll1", UniformType::Float2),
                     UniformDesc::new("Lit", UniformType::Float1),
+                    UniformDesc::new("Time", UniformType::Float1),
+                    UniformDesc::new("WorldStyle", UniformType::Float1),
                     UniformDesc::new("NdcToCanvas", UniformType::Float4),
                     UniformDesc::new("NdcOffset", UniformType::Float2),
                     UniformDesc::new("LightPos", UniformType::Float3).array(MAX_LIGHTS),
@@ -933,6 +1072,9 @@ impl Canvas {
             lights: RefCell::new(Vec::new()),
             normal: RefCell::new(None),
             flat_normal: Texture2D::from_rgba8(1, 1, &[128, 128, 255, 255]),
+            world_style: Cell::new(0.0),
+            time: Cell::new(0.0),
+            menu_fx: Cell::new(false),
             zoom: Cell::new(1.0),
             shift: Cell::new(Vec2::ZERO),
             backdrop_zoom: Cell::new(1.0),
@@ -985,6 +1127,19 @@ impl Canvas {
     pub fn set_ground_lighting(&self, normal: Option<&Texture2D>, lights: &[Light]) {
         *self.normal.borrow_mut() = normal.cloned();
         *self.lights.borrow_mut() = lights.iter().take(MAX_LIGHTS).copied().collect();
+    }
+
+    /// World visual style (0..5 for worlds, 6 for menu space) and animation
+    /// clock for the backdrop shader.
+    pub fn set_backdrop_style(&self, world_style: f32, time: f32) {
+        self.world_style.set(world_style);
+        self.time.set(time);
+    }
+
+    /// Whether menu backdrops enable the procedural parallax starfield
+    /// (follows Options > Lighting and effects).
+    pub fn set_menu_fx(&self, on: bool) {
+        self.menu_fx.set(on);
     }
 
     /// Where the landscape view lands in the window: the largest fit,
@@ -1202,9 +1357,13 @@ impl Canvas {
             texture: Some(base.clone()),
         };
         self.backdrop_material.set_texture("Decal", decal.clone());
-        // Port addition: ground lighting for the play plane.
+        // Port addition: ground lighting and world-specific surface effects.
         let normal = if menu { None } else { self.normal.borrow().clone() };
-        self.backdrop_material.set_uniform("Lit", if normal.is_some() { 1.0f32 } else { 0.0 });
+        let lit = if menu { self.menu_fx.get() } else { normal.is_some() };
+        let style = if menu { 6.0f32 } else { self.world_style.get() };
+        self.backdrop_material.set_uniform("Lit", if lit { 1.0f32 } else { 0.0 });
+        self.backdrop_material.set_uniform("Time", self.time.get());
+        self.backdrop_material.set_uniform("WorldStyle", style);
         self.backdrop_material
             .set_texture("Normal", normal.unwrap_or_else(|| self.flat_normal.clone()));
         let (m, offset) = ndc_to_canvas(view_w(), self.zoom.get());
