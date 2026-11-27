@@ -193,26 +193,52 @@ impl GasQueue {
         }
     }
 
-    /// Continuous interpolated flame stream for the flamethrower weapon.
+    /// Subtle curling heat-wisp stream for the flamethrower weapon. Because
+    /// 20-40 flame projectiles are in flight every tick, we sample a fraction
+    /// per tick with low dye intensity so the gas complements the flame
+    /// sprites instead of overwhelming the screen.
     pub fn flame_stream(&mut self, prev: Vec2, pos: Vec2, vel: Vec2) {
-        let delta = wrap_delta_world(prev, pos);
-        let steps = if delta.length() > 7.0 { 2 } else { 1 };
-        let force = vel.clamp_length_max(640.0) * 0.65;
-        for i in 0..steps {
-            let t = (i as f32 + 0.5) / steps as f32;
-            let p = prev + delta * t;
-            let sign = if self.rand() < 0.5 { 1.0 } else { -1.0 };
-            let swirl = sign * self.range(0.65, 1.25);
-            let col = vec3(1.15, self.range(0.35, 0.58), 0.08) * (1.0 / steps as f32);
-            self.push(FluidSplat {
-                pos: to_uv(p),
-                radius: 4.4 * INV_WORLD,
-                force: force * INV_WORLD,
-                swirl,
-                color: col,
-                energy: 0.65 / steps as f32,
-            });
+        if self.rand() > 0.28 {
+            return;
         }
+        let delta = wrap_delta_world(prev, pos);
+        let p = prev + delta * self.rand();
+        let force = vel.clamp_length_max(520.0) * 0.36;
+        let sign = if self.rand() < 0.5 { 1.0 } else { -1.0 };
+        let swirl = sign * self.range(0.35, 0.72);
+        let col = vec3(0.24, self.range(0.075, 0.13), 0.016);
+        self.push(FluidSplat {
+            pos: to_uv(p),
+            radius: 3.1 * INV_WORLD,
+            force: force * INV_WORLD,
+            swirl,
+            color: col,
+            energy: 0.20,
+        });
+    }
+
+    /// Subtle impact lick for flamethrower hits (50-100 hits/s on a rock, so
+    /// kept far lighter than single-shot cannon/laser impacts).
+    pub fn flame_impact(&mut self, pos: Vec2, shot_vel: Vec2, tint: Vec3, tint_amount: f32) {
+        if self.rand() > 0.35 {
+            return;
+        }
+        let speed = shot_vel.length().max(160.0);
+        let dir = if speed > 1.0 { shot_vel / speed } else { vec2(0.0, -1.0) };
+        let fire = vec3(0.34, 0.13, 0.03);
+        let col = fire.lerp(tint * 0.36, (tint_amount * 0.85).clamp(0.0, 0.9));
+        let spread = self.range(-0.35, 0.35);
+        let v = Vec2::from_angle(spread).rotate(dir) * speed.min(480.0) * 0.55;
+        let sign = if self.rand() < 0.5 { 1.0 } else { -1.0 };
+        let swirl = sign * self.range(0.45, 0.90);
+        self.push(FluidSplat {
+            pos: to_uv(pos + dir * 2.0),
+            radius: 3.2 * INV_WORLD,
+            force: v * INV_WORLD,
+            swirl,
+            color: col,
+            energy: 0.24,
+        });
     }
 
     /// Pure velocity-only supersonic wake for fast cannon/laser shots: slices

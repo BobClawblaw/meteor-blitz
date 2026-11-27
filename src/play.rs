@@ -2066,7 +2066,11 @@ impl Play {
                     Some(surface) => {
                         let look = impact_look(b.weapon, surface);
                         gas.impact_sparks(b.pos, b.vel, look);
-                        fluid.impact(b.pos, b.vel, look.tint, look.tint_amount, look.heat);
+                        if b.weapon == Weapon::Fire {
+                            fluid.flame_impact(b.pos, b.vel, look.tint, look.tint_amount);
+                        } else {
+                            fluid.impact(b.pos, b.vel, look.tint, look.tint_amount, look.heat);
+                        }
                         hits.push((b.pos, b.vel, b.weapon));
                     }
                     None => match b.weapon {
