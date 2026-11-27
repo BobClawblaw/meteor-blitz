@@ -141,7 +141,7 @@ impl Default for Settings {
             hud_scale: 1.0,
             reduce_flashes: false,
             colour_assist: false,
-            physics_particles: false,
+            physics_particles: true,
             button_icons: crate::icons::AUTO,
             rumble: true,
         }

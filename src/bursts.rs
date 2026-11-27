@@ -239,51 +239,52 @@ impl Bursts {
     pub fn blast(&mut self, pos: Vec2, shot: Vec2, radius: f32, life: f32, look: Look) {
         let r = radius;
         let heat = look.heat;
-        // Fire: a cluster of puffs thrown out a little and swelling.
-        for _ in 0..(3.0 + (4.0 + r / 5.0) * heat) as usize {
+        // Tight hot flash wisps (the swirling fireball & smoke volume now come
+        // from the real-time toroidal fluid `GasField`, avoiding round blobs).
+        for _ in 0..(2.0 + (2.0 + r / 14.0) * heat) as usize {
             let d = self.dir();
-            let vel = d * self.range(0.6, 2.2) * r + capped(shot * CARRY_FIRE, MAX_CARRY);
-            let start = pos + d * self.range(0.0, 0.25) * r;
-            let size = (self.range(0.15, 0.3) * r, self.range(0.45, 0.75) * r);
-            let life = self.range(0.35, 0.6) * (0.8 + r / 150.0);
+            let vel = d * self.range(0.8, 2.6) * r + capped(shot * CARRY_FIRE, MAX_CARRY);
+            let start = pos + d * self.range(0.0, 0.18) * r;
+            let size = (self.range(0.08, 0.16) * r, self.range(0.22, 0.42) * r);
+            let life = self.range(0.18, 0.34) * (0.8 + r / 180.0);
             let mut p = Self::particle(Kind::Fire, start, vel, life, size, &look);
-            p.alpha = self.range(0.6, 1.0);
+            p.alpha = self.range(0.45, 0.78);
             self.push(p);
         }
-        // Sparks: fast, flying on with the shot.
-        for _ in 0..(10.0 + (12.0 + r * 0.9) * heat) as usize {
+        // Sparks: fast white-hot streaks advected by the fluid's eddies.
+        for _ in 0..(14.0 + (16.0 + r * 1.1) * heat) as usize {
             let d = self.dir();
-            let vel = d * self.range(3.0, 9.0) * (25.0 + r) + capped(shot * CARRY_SPARK, MAX_CARRY);
-            let life = self.range(0.25, 0.7);
-            let mut p = Self::particle(Kind::Spark, pos, vel, life, (self.range(0.6, 1.3), 0.0), &look);
-            p.alpha = self.range(0.6, 1.0);
+            let vel = d * self.range(3.2, 9.5) * (25.0 + r) + capped(shot * CARRY_SPARK, MAX_CARRY);
+            let life = self.range(0.28, 0.78);
+            let mut p = Self::particle(Kind::Spark, pos, vel, life, (self.range(0.6, 1.35), 0.0), &look);
+            p.alpha = self.range(0.65, 1.0);
             self.push(p);
         }
-        // Debris: tumbling chips.
+        // Debris: tumbling chips swept by blast & fluid vortices.
         if let Some(colour) = look.debris {
-            for _ in 0..(4.0 + r / 4.0) as usize {
+            for _ in 0..(5.0 + r / 3.5) as usize {
                 let d = self.dir();
-                let vel = d * self.range(1.0, 4.5) * (20.0 + r) + capped(shot * CARRY_DEBRIS, MAX_CARRY);
-                let half = self.range(0.7, 1.4) * (1.0 + r / 60.0);
-                let life = self.range(0.7, 1.4);
+                let vel = d * self.range(1.1, 4.8) * (20.0 + r) + capped(shot * CARRY_DEBRIS, MAX_CARRY);
+                let half = self.range(0.7, 1.45) * (1.0 + r / 60.0);
+                let life = self.range(0.75, 1.45);
                 let mut p = Self::particle(Kind::Debris, pos + d * r * 0.2, vel, life, (half, half * self.range(0.5, 0.9)), &look);
                 p.angle = self.rand() * std::f32::consts::TAU;
-                p.spin = self.range(-14.0, 14.0);
-                p.colour = colour * self.range(0.5, 0.85);
+                p.spin = self.range(-15.0, 15.0);
+                p.colour = colour * self.range(0.55, 0.9);
                 self.push(p);
             }
         }
-        // Smoke: rising out of the fire as it dies, swelling and lingering.
+        // Light accent smoke wisps (subtle detail on top of the fluid smoke).
         if look.opacity > 0.0 {
-            for _ in 0..(8.0 + r * 0.5) as usize {
+            for _ in 0..(2.0 + r * 0.08) as usize {
                 let d = self.dir();
-                let vel = d * self.range(0.3, 1.6) * r + capped(shot * CARRY_SMOKE, MAX_CARRY);
-                let start = pos + d * self.range(0.0, 0.35) * r;
-                let size = (self.range(0.15, 0.25) * r, self.range(0.5, 0.9) * r);
-                let mut p = Self::particle(Kind::Smoke, start, vel, life * self.range(1.2, 2.0), size, &look);
-                p.age = -self.range(0.04, 0.16);
+                let vel = d * self.range(0.4, 1.6) * r + capped(shot * CARRY_SMOKE, MAX_CARRY);
+                let start = pos + d * self.range(0.0, 0.3) * r;
+                let size = (self.range(0.10, 0.18) * r, self.range(0.28, 0.48) * r);
+                let mut p = Self::particle(Kind::Smoke, start, vel, life * self.range(0.9, 1.5), size, &look);
+                p.age = -self.range(0.04, 0.14);
                 p.colour = look.smoke * self.range(0.8, 1.1);
-                p.alpha = look.opacity * self.range(0.5, 1.0);
+                p.alpha = look.opacity * self.range(0.25, 0.45);
                 self.push(p);
             }
         }
@@ -352,7 +353,14 @@ impl Bursts {
         }
     }
 
+    #[allow(dead_code)]
     pub fn update(&mut self, dt: f32) {
+        self.update_with_flow(dt, |_| Vec2::ZERO);
+    }
+
+    /// Advances particles, coupling sparks, wisps, and debris to the live
+    /// Eulerian fluid velocity field so they swirl inside explosion eddies.
+    pub fn update_with_flow(&mut self, dt: f32, flow: impl Fn(Vec2) -> Vec2) {
         self.time += dt;
         let (a, b) = (self.time * 0.37, -self.time * 0.23);
         // The curl of a stream function sin x sin y, its phase drifting so
@@ -368,11 +376,24 @@ impl Bursts {
             if p.age < 0.0 {
                 continue;
             }
+            let fluid_v = flow(p.pos);
             let mut v = p.vel;
             match p.kind {
-                Kind::Smoke => v += (curl(p.pos, EDDY_SMALL, a, b) + 0.7 * curl(p.pos, EDDY_LARGE, b, a)) * EDDY_SPEED,
-                Kind::Fire => v += curl(p.pos, EDDY_SMALL, a, b) * EDDY_SPEED * 0.4,
-                _ => {}
+                Kind::Smoke => {
+                    v += fluid_v * 0.85
+                        + (curl(p.pos, EDDY_SMALL, a, b) + 0.7 * curl(p.pos, EDDY_LARGE, b, a)) * EDDY_SPEED;
+                }
+                Kind::Fire => {
+                    v += fluid_v * 0.75 + curl(p.pos, EDDY_SMALL, a, b) * EDDY_SPEED * 0.4;
+                }
+                Kind::Spark => {
+                    p.vel += fluid_v * (2.2 * dt);
+                    v = p.vel;
+                }
+                Kind::Debris => {
+                    p.vel += fluid_v * (0.9 * dt);
+                    v = p.vel;
+                }
             }
             p.pos += v * dt;
             p.vel *= keep[p.kind as usize];

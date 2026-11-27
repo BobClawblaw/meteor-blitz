@@ -19,6 +19,7 @@ use crate::boss::{self, BossState, Piece};
 use crate::depot::{self, Depot};
 use crate::enemies::{wrap_near, Element, Event, Field, Rock, Script, Surface, Weapon};
 use crate::bursts::{Bursts, Look};
+use crate::gas::GasField;
 use crate::stats::Tally;
 use crate::gfx::{
     draw_atlas_sprite, draw_quad, draw_sprite, lit_color, tex_size, Canvas, Grade, Light,
@@ -885,6 +886,8 @@ pub struct Play {
     pub physics_particles: bool,
     /// Physics-style explosions and impacts.
     gas: Bursts,
+    /// Real-time 2D toroidal Eulerian fluid gas simulation.
+    fluid: GasField,
     /// What this game did since the main loop last took it, for the
     /// lifetime stats (port addition).
     pub tally: Tally,
@@ -1295,10 +1298,11 @@ impl Play {
             hud_scale: 1.0,
             reduce_flashes: false,
             colour_assist: false,
-            physics_particles: false,
+            physics_particles: true,
             tally: Tally { games: 1, ..Tally::default() },
             stage_deaths: 0,
             gas: Bursts::new(),
+            fluid: GasField::new(),
             hits: Vec::new(),
             glows: Vec::new(),
             shocks: Vec::new(),
@@ -1459,6 +1463,7 @@ impl Play {
         self.script = Script::arcade(world, stage);
         self.pickups = Rings::default();
         self.gas.clear();
+        self.fluid.clear();
         self.magnet = 0.0;
         self.since_press = 1.0;
         self.time = TimeScale::default();
@@ -1791,10 +1796,18 @@ impl Play {
         let rock = Surface::Rock(Element::Normal);
         let fire = Surface::Rock(Element::Fire);
         let ice = Surface::Rock(Element::Ice);
-        self.gas.blast(c + vec2(-130.0, 40.0), shot, 62.0, 1.0, blast_look(rock, Some(Weapon::Cannon)));
-        self.gas.blast(c + vec2(130.0, 40.0), shot, 49.0, 0.9, blast_look(Surface::Craft, Some(Weapon::Cannon)));
-        self.gas.impact(c + vec2(-40.0, 100.0), shot, impact_look(Weapon::Cannon, fire));
-        self.gas.impact(c + vec2(40.0, 100.0), laser, impact_look(Weapon::Laser, ice));
+        let l1 = blast_look(rock, Some(Weapon::Cannon));
+        let l2 = blast_look(Surface::Craft, Some(Weapon::Cannon));
+        let l3 = impact_look(Weapon::Cannon, fire);
+        let l4 = impact_look(Weapon::Laser, ice);
+        self.gas.blast(c + vec2(-130.0, 40.0), shot, 62.0, 1.0, l1);
+        self.gas.blast(c + vec2(130.0, 40.0), shot, 49.0, 0.9, l2);
+        self.gas.impact(c + vec2(-40.0, 100.0), shot, l3);
+        self.gas.impact(c + vec2(40.0, 100.0), laser, l4);
+        self.fluid.blast(c + vec2(-130.0, 40.0), shot, 62.0, l1.smoke, l1.opacity * 1.4, l1.tint, l1.tint_amount, l1.heat);
+        self.fluid.blast(c + vec2(130.0, 40.0), shot, 49.0, l2.smoke, l2.opacity * 1.4, l2.tint, l2.tint_amount, l2.heat);
+        self.fluid.jet(c + vec2(-40.0, 100.0), shot * 0.55, 22.0, l3.smoke, l3.opacity * 0.9, l3.tint, l3.tint_amount, l3.heat * 0.9);
+        self.fluid.jet(c + vec2(40.0, 100.0), laser * 0.55, 22.0, l4.smoke, l4.opacity * 0.9, l4.tint, l4.tint_amount, l4.heat * 0.9);
     }
 
     pub fn update_visuals(&mut self, dt: f32) {
@@ -1808,7 +1821,13 @@ impl Play {
     /// One step of the purely visual timers.
     fn age_visuals(&mut self, dt: f32) {
         self.effects.update(dt);
-        self.gas.update(dt);
+        if self.physics_particles {
+            self.fluid.update(dt);
+            let fluid = &self.fluid;
+            self.gas.update_with_flow(dt, |p| fluid.sample_velocity(p));
+        } else {
+            self.gas.update(dt);
+        }
         self.glows.retain_mut(|g| {
             g.life -= dt;
             g.life > 0.0
@@ -1892,8 +1911,35 @@ impl Play {
         if matches!(self.ship.life, Life::Dead(_)) {
             self.trail.clear();
         } else {
-            self.trail.push_front((self.ship.pos, total.length()));
+            let speed = total.length();
+            self.trail.push_front((self.ship.pos, speed));
             self.trail.truncate(TRAIL_POINTS);
+            // Ship thruster injects swirling emerald-cyan plasma exhaust and
+            // its hull physically parts & swirls lingering smoke clouds.
+            if self.physics_particles && speed > 18.0 {
+                let fwd = total / speed;
+                let back = -fwd;
+                let nozzle = self.ship.pos + back * 11.0;
+                let boost = self.ship.invincible > 0.0;
+                let jet_speed = if boost { 380.0 } else { (speed * 0.72).min(240.0) };
+                let (rad, dens, heat) = if boost { (22.0, 0.36, 0.95) } else { (14.0, 0.14, 0.34) };
+                self.fluid.jet(
+                    nozzle,
+                    back * jet_speed,
+                    rad,
+                    vec3(0.20, 0.55, 0.38),
+                    dens * (speed / TRAIL_FULL_SPEED).min(1.0),
+                    SHIP_LIGHT,
+                    0.82,
+                    heat * (speed / TRAIL_FULL_SPEED).min(1.0),
+                );
+                self.fluid.wake(self.ship.pos, total, 24.0, 0.35);
+            }
+            // Gravity gun pulls and swirls nearby gas toward the ship.
+            if self.physics_particles && (self.field.gun.active || self.field.gripped().is_some()) {
+                let target = self.field.gripped().unwrap_or(self.ship.pos + self.ship.aim_dir * 75.0);
+                self.fluid.vortex(target, self.ship.pos, 58.0, 260.0);
+            }
         }
         self.camera.update(dt, total * CAMERA_LEAD);
 
@@ -1963,6 +2009,7 @@ impl Play {
         let field = &mut self.field;
         let effects = &mut self.effects;
         let gas = &mut self.gas;
+        let fluid = &mut self.fluid;
         let physics = self.physics_particles;
         let hits = &mut self.hits;
         hits.clear();
@@ -1980,17 +2027,40 @@ impl Play {
             let surface = field.bullet(b.prev, b.pos, radius, b.weapon, damage, mass, b.vel);
             let hit = surface.is_some();
             if physics {
-                // Physics style: shots also trail gas and spray it where
-                // they hit, carried on with their momentum, looking like
-                // what they hit and what they are.
+                // Physics style: shots inject fluid gas plumes on impact,
+                // flamethrower emits roaring turbulent fire, and fast bolts
+                // slice wakes through lingering smoke.
                 match surface {
                     Some(surface) => {
-                        gas.impact(b.pos, b.vel, impact_look(b.weapon, surface));
+                        let look = impact_look(b.weapon, surface);
+                        gas.impact(b.pos, b.vel, look);
+                        fluid.jet(
+                            b.pos,
+                            b.vel * 0.45,
+                            20.0,
+                            look.smoke,
+                            look.opacity * 0.65,
+                            look.tint,
+                            look.tint_amount,
+                            look.heat * 0.75,
+                        );
                         hits.push((b.pos, b.vel, b.weapon));
                     }
                     None => {
                         if let Some(look) = trail_look(b.weapon) {
                             gas.trail(b.prev, b.pos, b.vel, look);
+                            fluid.jet(
+                                b.pos,
+                                b.vel * 0.42,
+                                15.0,
+                                look.smoke,
+                                0.14,
+                                look.tint,
+                                0.1,
+                                0.36,
+                            );
+                        } else {
+                            fluid.wake(b.pos, b.vel, 12.0, 0.10);
                         }
                     }
                 }
@@ -2166,6 +2236,7 @@ impl Play {
         self.effects.flash(Color::new(0.8, 0.8, 0.8, 1.0));
         if self.physics_particles {
             self.gas.blast(p, Vec2::ZERO, SHIP_GAS.0, SHIP_GAS.1, SHIP_LOOK);
+            self.fluid.blast(p, Vec2::ZERO, SHIP_GAS.0, SHIP_LOOK.smoke, SHIP_LOOK.opacity * 1.4, SHIP_LOOK.tint, SHIP_LOOK.tint_amount, SHIP_LOOK.heat);
         }
         self.effects.start(Kind::Ring, 1, p, 0.0, false);
         self.effects.start(Kind::Line, 3, p, 0.0, false);
@@ -2301,6 +2372,7 @@ impl Play {
         let p = self.ship.pos;
         if self.physics_particles {
             self.gas.blast(p, Vec2::ZERO, BOMB_GAS.0, BOMB_GAS.1, BOMB_LOOK);
+            self.fluid.blast(p, Vec2::ZERO, BOMB_GAS.0, BOMB_LOOK.smoke, BOMB_LOOK.opacity * 1.3, BOMB_LOOK.tint, BOMB_LOOK.tint_amount, BOMB_LOOK.heat * 1.2);
         }
         self.effects.start(Kind::Ring, 5, p, 0.0, false);
         self.effects.start(Kind::Sprite, 8, p, 0.0, false);
@@ -2316,6 +2388,7 @@ impl Play {
         let p = self.ship.pos;
         if self.physics_particles {
             self.gas.blast(p, Vec2::ZERO, SHIELD_GAS.0, SHIELD_GAS.1, SHIELD_LOOK);
+            self.fluid.blast(p, Vec2::ZERO, SHIELD_GAS.0, vec3(0.3, 0.7, 0.85), 0.55, SHIELD_LOOK.tint, SHIELD_LOOK.tint_amount, SHIELD_LOOK.heat);
         }
         self.effects.start(Kind::Ring, 8, p, 0.0, false);
         for _ in 0..3 {
@@ -2384,6 +2457,7 @@ impl Play {
                     let vel = shot.map_or(Vec2::ZERO, |&(_, v, _)| v);
                     let look = blast_look(event_surface(&event), shot.map(|&(_, _, w)| w));
                     self.gas.blast(pos, vel, radius, life, look);
+                    self.fluid.blast(pos, vel, radius, look.smoke, look.opacity * 1.35, look.tint, look.tint_amount, look.heat);
                 }
             }
             if let Some((pos, size)) = event_scorch(&event) {
@@ -3325,6 +3399,20 @@ impl Play {
             self.draw_world(canvas, assets, shift == Vec2::ZERO);
         }
         canvas.set_shift(Vec2::ZERO);
+        // Real-time toroidal fluid gas spans all wrapping world copies in one
+        // repeating shader pass (drawn over entities/shots, under indicators/HUD).
+        if self.physics_particles && self.fx {
+            canvas.set_glowing(true);
+            canvas.draw_gas_field(
+                &self.fluid,
+                self.view_ship(),
+                self.view_cam(),
+                self.view_half(),
+                self.z,
+                self.elapsed,
+            );
+            canvas.set_glowing(false);
+        }
         self.draw_indicators(assets);
         canvas.screen_space();
         self.effects.draw_flashes(canvas, if self.reduce_flashes { REDUCED_FLASH } else { 1.0 });

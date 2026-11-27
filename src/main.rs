@@ -10,6 +10,7 @@ mod boss;
 mod bursts;
 mod depot;
 mod enemies;
+mod gas;
 mod gfx;
 mod gravity;
 mod hud;
